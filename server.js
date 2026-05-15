@@ -1,4 +1,7 @@
 const express = require("express");
+
+console.log("NEW WEBRTC SERVER ACTIVE");
+
 const http = require("http");
 const WebSocket = require("ws");
 
