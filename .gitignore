@@ -1,0 +1,4 @@
+# Exclude my personal notes
+
+# Exclude an entire notes folder
+gitignore/
