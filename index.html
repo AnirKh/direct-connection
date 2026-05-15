@@ -8,34 +8,107 @@
 </head>
 <body>
 
-  <div id="background" class="background-content">
-    <h1>Direct Connection</h1>
-
-    <div class="card">
-      <input id="sessionId" type="text" placeholder="Enter Session ID">
-
-      <div class="buttons">
-        <button id="createBtn">Create Session</button>
-        <button id="joinBtn">Join Session</button>
-      </div>
-
-      <div id="status"></div>
+  <!-- Approval Modal -->
+  <div id="overlay" class="overlay">
+    <div class="modal">
+      <div class="modal-icon">🔒</div>
+      <h2>Secure Direct Connection</h2>
+      <p>This app establishes a direct encrypted peer-to-peer connection. After connection, your communication does not pass through any third-party servers.</p>
+      <button id="approveBtn">Approve &amp; Continue</button>
     </div>
   </div>
 
-  <!-- Modal Overlay -->
-  <div id="overlay" class="overlay">
-    <div class="modal">
-      <h2>Secure Direct Connection</h2>
+  <!-- LOBBY SCREEN -->
+  <div id="lobbyScreen" class="screen">
+    <div class="lobby-wrap">
+      <h1 class="lobby-title">Direct Connection</h1>
 
-      <p>
-        This site will attempt to establish a direct encrypted peer-to-peer
-        connection to Anir's device. After connection establishment,
-        communication will not pass through third-party companies.
-      </p>
+      <div class="card">
+        <p class="card-label">Create Session</p>
+        <input id="sessionId" type="text" placeholder="Session name (e.g. myroom)">
+        <button id="createBtn">Create Session</button>
+        <div id="createInfo" class="create-info"></div>
+      </div>
 
-      <button id="approveBtn">Approve</button>
+      <div class="card">
+        <p class="card-label">Available Sessions <button id="refreshBtn" class="refresh-btn">↻ Refresh</button></p>
+        <div id="sessionsList"><div class="empty-state">No active sessions</div></div>
+      </div>
     </div>
+  </div>
+
+  <!-- JOIN PIN MODAL -->
+  <div id="pinOverlay" class="overlay hidden">
+    <div class="modal">
+      <h2>Enter Session PIN</h2>
+      <p id="pinSessionLabel" style="color:#7dd3fc;margin:0 0 16px"></p>
+      <input id="pinInput" type="text" maxlength="6" placeholder="6-digit PIN" style="text-align:center;font-size:24px;letter-spacing:8px">
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button id="pinCancelBtn" style="background:#374151">Cancel</button>
+        <button id="pinJoinBtn">Join</button>
+      </div>
+      <div id="pinError" style="color:#f87171;margin-top:10px;min-height:20px"></div>
+    </div>
+  </div>
+
+  <!-- CHAT SCREEN -->
+  <div id="chatScreen" class="screen hidden">
+
+    <!-- Call overlay -->
+    <div id="callOverlay" class="call-overlay hidden">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <video id="localVideo"  autoplay playsinline muted></video>
+      <div id="callStatusLabel" class="call-status-label"></div>
+      <div class="call-controls">
+        <button id="toggleMuteBtn"  class="call-btn" title="Mute">🎙️</button>
+        <button id="toggleCamBtn"   class="call-btn" title="Camera">📷</button>
+        <button id="endCallBtn"     class="call-btn end-call" title="End call">📵</button>
+      </div>
+    </div>
+
+    <!-- Header -->
+    <header class="chat-header">
+      <button id="leaveBtn" class="icon-btn" title="Leave">&#8592;</button>
+      <div class="chat-header-center">
+        <div id="chatSessionLabel" class="chat-session-name"></div>
+        <div id="connectionQuality" class="quality-label">⬤ Connecting…</div>
+      </div>
+      <div class="chat-header-actions">
+        <button id="voiceCallBtn" class="icon-btn" title="Voice call">📞</button>
+        <button id="videoCallBtn" class="icon-btn" title="Video call">📹</button>
+      </div>
+    </header>
+
+    <!-- Stats bar -->
+    <div id="statsBar" class="stats-bar"></div>
+
+    <!-- Messages -->
+    <div id="chatMessages" class="chat-messages"></div>
+
+    <!-- Typing indicator -->
+    <div id="typingIndicator" class="typing-indicator hidden">Peer is typing…</div>
+
+    <!-- Input area -->
+    <div class="input-area">
+      <div id="attachMenu" class="attach-menu hidden">
+        <button id="sendImageBtn">🖼️ Photo / Image</button>
+        <button id="sendFileBtn">📄 File</button>
+        <button id="voiceNoteHintBtn">🎤 Hold mic button to record</button>
+      </div>
+
+      <input type="file" id="imageInput" accept="image/*" class="hidden">
+      <input type="file" id="fileInput" class="hidden">
+
+      <button id="attachBtn" class="icon-btn" title="Attach">📎</button>
+
+      <div class="textarea-wrap">
+        <textarea id="messageInput" placeholder="Message…" rows="1"></textarea>
+      </div>
+
+      <button id="voiceRecordBtn" class="icon-btn mic-btn" title="Hold to record voice">🎤</button>
+      <button id="sendBtn" class="send-btn" title="Send">&#9658;</button>
+    </div>
+
   </div>
 
   <script src="app.js"></script>
