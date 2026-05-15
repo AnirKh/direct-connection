@@ -1041,11 +1041,95 @@ function scrollBottom() {
 }
 
 /* ══════════════════════════════════════════════
+   LEAVE A MESSAGE (SMTP via server HTTP endpoint)
+══════════════════════════════════════════════ */
+
+const SERVER_URL = "https://direct-connection.onrender.com";
+
+const senderName    = document.getElementById("senderName");
+const leaveMessage  = document.getElementById("leaveMessage");
+const leaveFileBtn  = document.getElementById("leaveFileBtn");
+const leaveFile     = document.getElementById("leaveFile");
+const leaveFileName = document.getElementById("leaveFileName");
+const leaveSendBtn  = document.getElementById("leaveSendBtn");
+const leaveStatus   = document.getElementById("leaveStatus");
+
+/* File picker */
+leaveFileBtn.onclick = () => leaveFile.click();
+
+leaveFile.onchange = () => {
+  const file = leaveFile.files[0];
+  if (file) {
+    leaveFileName.textContent = `${file.name} (${formatLeaveBytes(file.size)})`;
+    leaveFileBtn.textContent = "📎 Change file";
+  } else {
+    leaveFileName.textContent = "";
+    leaveFileBtn.textContent = "📎 Attach file";
+  }
+};
+
+/* Send */
+leaveSendBtn.onclick = async () => {
+  const msg = leaveMessage.value.trim();
+  if (!msg) {
+    setLeaveStatus("Please write a message first.", "err");
+    return;
+  }
+
+  leaveSendBtn.disabled = true;
+  setLeaveStatus("Sending…", "sending");
+
+  const formData = new FormData();
+  formData.append("message", msg);
+  formData.append("name", senderName.value.trim());
+
+  const file = leaveFile.files[0];
+  if (file) formData.append("file", file);
+
+  try {
+    const res = await fetch(`${SERVER_URL}/api/send-message`, {
+      method: "POST",
+      body: formData
+    });
+
+    const json = await res.json();
+
+    if (res.ok && json.ok) {
+      setLeaveStatus("✓ Message sent successfully!", "ok");
+      leaveMessage.value = "";
+      senderName.value = "";
+      leaveFile.value = "";
+      leaveFileName.textContent = "";
+      leaveFileBtn.textContent = "📎 Attach file";
+    } else {
+      setLeaveStatus(json.error || "Failed to send. Try again.", "err");
+    }
+
+  } catch (e) {
+    setLeaveStatus("Network error. Check connection.", "err");
+  } finally {
+    leaveSendBtn.disabled = false;
+  }
+};
+
+function setLeaveStatus(text, type) {
+  leaveStatus.textContent = text;
+  leaveStatus.className = "leave-status " + type;
+}
+
+function formatLeaveBytes(b) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1048576).toFixed(1)} MB`;
+}
+
+
+/* ══════════════════════════════════════════════
    DataChannel helper
 ══════════════════════════════════════════════ */
 
 function dcSend(obj) {
-  if (dataChannel && dataChannel.readyState === "open") {
+  if (dataChannel && dataChannel.readyState === 'open') {
     dataChannel.send(JSON.stringify(obj));
   }
 }

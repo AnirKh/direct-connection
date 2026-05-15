@@ -34,6 +34,25 @@
         <p class="card-label">Available Sessions <button id="refreshBtn" class="refresh-btn">↻ Refresh</button></p>
         <div id="sessionsList"><div class="empty-state">No active sessions</div></div>
       </div>
+
+      <!-- Leave a Message -->
+      <div class="card">
+        <p class="card-label">Leave a Message</p>
+        <p class="leave-msg-hint">Not around? Send a message or file directly to Anir's email.</p>
+
+        <input id="senderName" type="text" placeholder="Your name (optional)">
+
+        <textarea id="leaveMessage" placeholder="Write your message…" rows="4" style="margin-top:10px;border-radius:10px;resize:vertical;min-height:90px"></textarea>
+
+        <div id="leaveFileRow" class="leave-file-row">
+          <input type="file" id="leaveFile" class="hidden">
+          <button id="leaveFileBtn" class="leave-attach-btn" type="button">📎 Attach file</button>
+          <span id="leaveFileName" class="leave-file-name"></span>
+        </div>
+
+        <button id="leaveSendBtn">Send Message</button>
+        <div id="leaveStatus" class="leave-status"></div>
+      </div>
     </div>
   </div>
 
