@@ -1,4 +1,4 @@
 # Exclude my personal notes
-
+.gitignore
 # Exclude an entire notes folder
 gitignore/
