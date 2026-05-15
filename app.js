@@ -14,7 +14,7 @@ const statusBox = document.getElementById("status");
   Connect to signaling server
 */
 
-const ws = new WebSocket("wss://tun3l.onrender.com");
+const ws = new WebSocket("wss://direct-connection.onrender.com");
 
 ws.onopen = () => {
   console.log("Connected to signaling server");
