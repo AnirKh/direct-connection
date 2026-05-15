@@ -37,7 +37,7 @@ body {
 /* Card */
 
 .card {
-  width: 400px;
+  width: 420px;
   background: #1b1f27;
   padding: 30px;
   border-radius: 14px;
@@ -53,6 +53,18 @@ input {
 
   background: #2a2f3a;
   color: white;
+
+  outline: none;
+  transition: background 0.2s;
+}
+
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input:focus {
+  background: #333a47;
 }
 
 .buttons {
@@ -72,15 +84,49 @@ button {
   color: white;
 
   cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   background: #1d4ed8;
 }
 
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 #status {
-  margin-top: 20px;
+  margin-top: 16px;
+  font-size: 14px;
   color: #7dd3fc;
+  min-height: 20px;
+  transition: color 0.3s;
+}
+
+/* Chat box */
+
+#chatBox {
+  margin-top: 20px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 10px;
+  background: #12151c;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#chatBox:empty {
+  display: none;
+}
+
+/* Message input row */
+
+#messageInput {
+  width: 70%;
+  margin-top: 10px;
+  display: inline-block;
 }
 
 /* Overlay */
@@ -93,7 +139,7 @@ button:hover {
   justify-content: center;
   align-items: center;
 
-  background: rgba(0,0,0,0.55);
+  background: rgba(0, 0, 0, 0.55);
 
   z-index: 999;
 }
@@ -111,7 +157,7 @@ button:hover {
 
   text-align: center;
 
-  box-shadow: 0 0 40px rgba(0,0,0,0.5);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
 }
 
 .modal p {
