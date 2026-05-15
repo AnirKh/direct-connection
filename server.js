@@ -44,6 +44,9 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS
+  },
+  tls: {
+    rejectUnauthorized: false
   }
 });
 
@@ -121,8 +124,8 @@ app.post("/api/send-message", upload.single("file"), async (req, res) => {
     console.log(`Email sent from ${senderLabel}`);
     res.json({ ok: true });
   } catch (err) {
-    console.error("SMTP error:", err.message);
-    res.status(500).json({ error: "Failed to send email" });
+    console.error("SMTP error:", err.message, "| code:", err.code, "| response:", err.response);
+    res.status(500).json({ error: "Failed to send email", detail: err.message });
   }
 });
 
