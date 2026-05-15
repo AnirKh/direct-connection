@@ -8,21 +8,7 @@
 </head>
 <body>
 
-  <div id="popup" class="popup">
-    <div class="popup-box">
-      <h2>Direct Peer Connection</h2>
-
-      <p>
-        This website will attempt to create a direct encrypted peer-to-peer
-        connection to Anir's device without routing your communication
-        through third-party companies after connection establishment.
-      </p>
-
-      <button id="approveBtn">Approve</button>
-    </div>
-  </div>
-
-  <div id="main" class="hidden">
+  <div id="background" class="background-content">
     <h1>Direct Connection</h1>
 
     <div class="card">
@@ -34,6 +20,21 @@
       </div>
 
       <div id="status"></div>
+    </div>
+  </div>
+
+  <!-- Modal Overlay -->
+  <div id="overlay" class="overlay">
+    <div class="modal">
+      <h2>Secure Direct Connection</h2>
+
+      <p>
+        This site will attempt to establish a direct encrypted peer-to-peer
+        connection to Anir's device. After connection establishment,
+        communication will not pass through third-party companies.
+      </p>
+
+      <button id="approveBtn">Approve</button>
     </div>
   </div>
 

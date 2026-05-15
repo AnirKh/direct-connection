@@ -1,5 +1,6 @@
-const popup = document.getElementById("popup");
-const main = document.getElementById("main");
+const overlay = document.getElementById("overlay");
+const background = document.getElementById("background");
+
 const approveBtn = document.getElementById("approveBtn");
 
 const createBtn = document.getElementById("createBtn");
@@ -8,7 +9,10 @@ const joinBtn = document.getElementById("joinBtn");
 const sessionInput = document.getElementById("sessionId");
 const statusBox = document.getElementById("status");
 
-// Wake signaling server immediately
+/*
+  Wake Render signaling server immediately
+*/
+
 const ws = new WebSocket("wss://tun3l.onrender.com");
 
 ws.onopen = () => {
@@ -19,10 +23,24 @@ ws.onerror = (err) => {
   console.error("WebSocket error:", err);
 };
 
+/*
+  Blur background while modal active
+*/
+
+background.classList.add("blur");
+
+/*
+  Approve modal
+*/
+
 approveBtn.onclick = () => {
-  popup.style.display = "none";
-  main.classList.remove("hidden");
+  overlay.style.display = "none";
+  background.classList.remove("blur");
 };
+
+/*
+  Create Session
+*/
 
 createBtn.onclick = () => {
   const sessionId = sessionInput.value.trim();
@@ -39,6 +57,10 @@ createBtn.onclick = () => {
     sessionId
   }));
 };
+
+/*
+  Join Session
+*/
 
 joinBtn.onclick = () => {
   const sessionId = sessionInput.value.trim();

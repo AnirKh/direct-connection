@@ -1,71 +1,56 @@
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   padding: 0;
   background: #0f1115;
   color: white;
   font-family: Arial, sans-serif;
-  display: flex;
-  justify-content: center;
-  align-items: center;
   height: 100vh;
+  overflow: hidden;
 }
 
-.hidden {
-  display: none;
-}
+/* Background Content */
 
-.popup {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.7);
+.background-content {
+  width: 100%;
+  height: 100vh;
+
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
+
+  transition: filter 0.3s ease;
 }
 
-.popup-box {
-  width: 400px;
-  background: #1b1f27;
-  padding: 30px;
-  border-radius: 12px;
-  text-align: center;
+/* Blur when modal active */
+
+.background-content.blur {
+  filter: blur(8px);
 }
 
-.popup-box p {
-  color: #cfcfcf;
-  line-height: 1.5;
-}
-
-button {
-  padding: 12px 20px;
-  border: none;
-  background: #2563eb;
-  color: white;
-  border-radius: 8px;
-  cursor: pointer;
-  margin-top: 15px;
-}
-
-button:hover {
-  background: #1d4ed8;
-}
+/* Card */
 
 .card {
+  width: 400px;
   background: #1b1f27;
   padding: 30px;
-  border-radius: 12px;
-  width: 400px;
-  text-align: center;
+  border-radius: 14px;
+  margin-top: 20px;
 }
 
 input {
   width: 100%;
-  padding: 12px;
-  margin-top: 15px;
-  border-radius: 8px;
+  padding: 14px;
   border: none;
   outline: none;
-  box-sizing: border-box;
+  border-radius: 8px;
+  margin-top: 10px;
+  background: #2a2f3a;
+  color: white;
 }
 
 .buttons {
@@ -74,11 +59,59 @@ input {
   margin-top: 15px;
 }
 
-.buttons button {
+button {
   flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+button:hover {
+  background: #1d4ed8;
 }
 
 #status {
   margin-top: 20px;
   color: #7dd3fc;
+}
+
+/* Overlay */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  background: rgba(0,0,0,0.45);
+
+  backdrop-filter: blur(10px);
+}
+
+/* Modal */
+
+.modal {
+  width: 420px;
+  background: #1b1f27;
+  padding: 30px;
+  border-radius: 16px;
+  text-align: center;
+
+  box-shadow: 0 0 40px rgba(0,0,0,0.5);
+}
+
+.modal h2 {
+  margin-top: 0;
+}
+
+.modal p {
+  color: #cfcfcf;
+  line-height: 1.6;
+  margin-top: 15px;
 }
