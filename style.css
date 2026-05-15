@@ -1,0 +1,84 @@
+body {
+  margin: 0;
+  padding: 0;
+  background: #0f1115;
+  color: white;
+  font-family: Arial, sans-serif;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+}
+
+.hidden {
+  display: none;
+}
+
+.popup {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.popup-box {
+  width: 400px;
+  background: #1b1f27;
+  padding: 30px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.popup-box p {
+  color: #cfcfcf;
+  line-height: 1.5;
+}
+
+button {
+  padding: 12px 20px;
+  border: none;
+  background: #2563eb;
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 15px;
+}
+
+button:hover {
+  background: #1d4ed8;
+}
+
+.card {
+  background: #1b1f27;
+  padding: 30px;
+  border-radius: 12px;
+  width: 400px;
+  text-align: center;
+}
+
+input {
+  width: 100%;
+  padding: 12px;
+  margin-top: 15px;
+  border-radius: 8px;
+  border: none;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+.buttons button {
+  flex: 1;
+}
+
+#status {
+  margin-top: 20px;
+  color: #7dd3fc;
+}

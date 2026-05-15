@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Direct Connection</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="popup" class="popup">
+    <div class="popup-box">
+      <h2>Direct Peer Connection</h2>
+
+      <p>
+        This website will attempt to create a direct encrypted peer-to-peer
+        connection to Anir's device without routing your communication
+        through third-party companies after connection establishment.
+      </p>
+
+      <button id="approveBtn">Approve</button>
+    </div>
+  </div>
+
+  <div id="main" class="hidden">
+    <h1>Direct Connection</h1>
+
+    <div class="card">
+      <input id="sessionId" type="text" placeholder="Enter Session ID">
+
+      <div class="buttons">
+        <button id="createBtn">Create Session</button>
+        <button id="joinBtn">Join Session</button>
+      </div>
+
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
