@@ -7,10 +7,11 @@ const createBtn = document.getElementById("createBtn");
 const joinBtn = document.getElementById("joinBtn");
 
 const sessionInput = document.getElementById("sessionId");
+
 const statusBox = document.getElementById("status");
 
 /*
-  Wake Render signaling server immediately
+  Connect to signaling server
 */
 
 const ws = new WebSocket("wss://tun3l.onrender.com");
@@ -19,18 +20,10 @@ ws.onopen = () => {
   console.log("Connected to signaling server");
 };
 
-ws.onerror = (err) => {
-  console.error("WebSocket error:", err);
-};
-
-/*
-  Blur background while modal active
-*/
-
 background.classList.add("blur");
 
 /*
-  Approve modal
+  Approve
 */
 
 approveBtn.onclick = () => {
@@ -43,14 +36,13 @@ approveBtn.onclick = () => {
 */
 
 createBtn.onclick = () => {
+
   const sessionId = sessionInput.value.trim();
 
   if (!sessionId) {
     alert("Enter session ID");
     return;
   }
-
-  statusBox.innerText = `Session created: ${sessionId}`;
 
   ws.send(JSON.stringify({
     type: "create-session",
@@ -63,6 +55,7 @@ createBtn.onclick = () => {
 */
 
 joinBtn.onclick = () => {
+
   const sessionId = sessionInput.value.trim();
 
   if (!sessionId) {
@@ -70,14 +63,46 @@ joinBtn.onclick = () => {
     return;
   }
 
-  statusBox.innerText = `Joining session: ${sessionId}`;
-
   ws.send(JSON.stringify({
     type: "join-session",
     sessionId
   }));
 };
 
+/*
+  Receive server messages
+*/
+
 ws.onmessage = (event) => {
-  console.log("Server:", event.data);
+
+  const data = JSON.parse(event.data);
+
+  if (data.type === "session-created") {
+
+    statusBox.innerText =
+      `Session created: ${data.sessionId}`;
+
+  }
+
+  if (data.type === "session-joined") {
+
+    statusBox.innerText =
+      `Joined session: ${data.sessionId}`;
+
+  }
+
+  if (data.type === "peer-connected") {
+
+    statusBox.innerText =
+      `Peer connected successfully`;
+
+  }
+
+  if (data.type === "error") {
+
+    statusBox.innerText =
+      data.message;
+
+  }
+
 };
