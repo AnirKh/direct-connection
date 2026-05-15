@@ -12,7 +12,7 @@ body {
   overflow: hidden;
 }
 
-/* Background Content */
+/* Main Content */
 
 .background-content {
   width: 100%;
@@ -23,13 +23,15 @@ body {
   justify-content: center;
   align-items: center;
 
-  transition: filter 0.3s ease;
+  transition: 0.3s;
 }
 
-/* Blur when modal active */
+/* Blur + disable */
 
 .background-content.blur {
   filter: blur(8px);
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Card */
@@ -39,16 +41,16 @@ body {
   background: #1b1f27;
   padding: 30px;
   border-radius: 14px;
-  margin-top: 20px;
 }
 
 input {
   width: 100%;
   padding: 14px;
+  margin-top: 12px;
+
   border: none;
-  outline: none;
   border-radius: 8px;
-  margin-top: 10px;
+
   background: #2a2f3a;
   color: white;
 }
@@ -62,12 +64,14 @@ input {
 button {
   flex: 1;
   padding: 12px;
+
   border: none;
   border-radius: 8px;
+
   background: #2563eb;
   color: white;
+
   cursor: pointer;
-  transition: 0.2s;
 }
 
 button:hover {
@@ -89,29 +93,28 @@ button:hover {
   justify-content: center;
   align-items: center;
 
-  background: rgba(0,0,0,0.45);
+  background: rgba(0,0,0,0.55);
 
-  backdrop-filter: blur(10px);
+  z-index: 999;
 }
 
 /* Modal */
 
 .modal {
   width: 420px;
+
   background: #1b1f27;
+
   padding: 30px;
+
   border-radius: 16px;
+
   text-align: center;
 
   box-shadow: 0 0 40px rgba(0,0,0,0.5);
 }
 
-.modal h2 {
-  margin-top: 0;
-}
-
 .modal p {
-  color: #cfcfcf;
   line-height: 1.6;
-  margin-top: 15px;
+  color: #cfcfcf;
 }
