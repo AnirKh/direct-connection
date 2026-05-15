@@ -1,7 +1,4 @@
 const express = require("express");
-
-console.log("NEW WEBRTC SERVER ACTIVE");
-
 const http = require("http");
 const WebSocket = require("ws");
 
@@ -11,15 +8,9 @@ const server = http.createServer(app);
 
 const wss = new WebSocket.Server({ server });
 
-/*
-  Session storage
-*/
+console.log("NEW WEBRTC SERVER ACTIVE");
 
 const sessions = {};
-
-/*
-  WebSocket connection
-*/
 
 wss.on("connection", (ws) => {
 
@@ -34,21 +25,16 @@ wss.on("connection", (ws) => {
       console.log("Received:", data.type);
 
       /*
-        Create session
+        CREATE SESSION
       */
 
       if (data.type === "create-session") {
 
         sessions[data.sessionId] = {
           host: ws,
-          guest: null
+          guest: null,
+          offer: data.offer
         };
-
-        /*
-          Store offer temporarily
-        */
-
-        sessions[data.sessionId].offer = data.offer;
 
         ws.send(JSON.stringify({
           type: "session-created",
@@ -58,10 +44,10 @@ wss.on("connection", (ws) => {
       }
 
       /*
-        Join session
+        JOIN SESSION
       */
 
-      if (data.type === "join-session") {
+      else if (data.type === "join-session") {
 
         const session = sessions[data.sessionId];
 
@@ -79,7 +65,17 @@ wss.on("connection", (ws) => {
         session.guest = ws;
 
         /*
-          Send offer to guest
+          IMPORTANT:
+          Send session joined FIRST
+        */
+
+        ws.send(JSON.stringify({
+          type: "session-joined",
+          sessionId: data.sessionId
+        }));
+
+        /*
+          THEN send offer
         */
 
         ws.send(JSON.stringify({
@@ -87,22 +83,17 @@ wss.on("connection", (ws) => {
           offer: session.offer
         }));
 
-        ws.send(JSON.stringify({
-          type: "session-joined",
-          sessionId: data.sessionId
-        }));
-
       }
 
       /*
-        Receive answer from guest
+        ANSWER
       */
 
-      if (data.type === "answer") {
+      else if (data.type === "answer") {
 
         const session = sessions[data.sessionId];
 
-        if (!session) return;
+        if (!session || !session.host) return;
 
         session.host.send(JSON.stringify({
           type: "answer",
@@ -112,18 +103,14 @@ wss.on("connection", (ws) => {
       }
 
       /*
-        ICE candidate relay
+        ICE CANDIDATES
       */
 
-      if (data.type === "ice-candidate") {
+      else if (data.type === "ice-candidate") {
 
         const session = sessions[data.sessionId];
 
         if (!session) return;
-
-        /*
-          Send candidate to opposite peer
-        */
 
         if (ws === session.host && session.guest) {
 
@@ -152,12 +139,6 @@ wss.on("connection", (ws) => {
       console.error(err);
 
     }
-
-  });
-
-  ws.on("close", () => {
-
-    console.log("Client disconnected");
 
   });
 
