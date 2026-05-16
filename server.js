@@ -139,6 +139,15 @@ function generatePin() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function generateToken() {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let token = "";
+  for (let i = 0; i < 12; i++) {
+    token += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return token;
+}
+
 function broadcastSessionList() {
   const list = Object.entries(sessions)
     .filter(([, s]) => !s.guest)
@@ -196,9 +205,10 @@ wss.on("connection", (ws) => {
 
       case "create-session": {
         if (sessions[data.sessionId]) delete sessions[data.sessionId];
-        const pin = generatePin();
-        sessions[data.sessionId] = { host: ws, guest: null, offer: null, pin, createdAt: Date.now() };
-        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin }));
+        const pin   = generatePin();
+        const token = generateToken();
+        sessions[data.sessionId] = { host: ws, guest: null, offer: null, pin, token, createdAt: Date.now() };
+        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token }));
         broadcastSessionList();
         console.log(`Session "${data.sessionId}" created | PIN: ${pin}`);
         break;
@@ -208,7 +218,9 @@ wss.on("connection", (ws) => {
         const session = sessions[data.sessionId];
         if (!session) { ws.send(JSON.stringify({ type: "pin-error", message: "Session not found" })); break; }
         if (session.guest) { ws.send(JSON.stringify({ type: "pin-error", message: "Session is full" })); break; }
-        if (session.pin !== data.pin) { ws.send(JSON.stringify({ type: "pin-error", message: "Wrong PIN" })); break; }
+        const pinOk   = data.pin   && session.pin   === data.pin;
+        const tokenOk = data.token && session.token === data.token;
+        if (!pinOk && !tokenOk) { ws.send(JSON.stringify({ type: "pin-error", message: "Wrong PIN or invalid link" })); break; }
 
         session.guest = ws;
         ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId }));

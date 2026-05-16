@@ -123,6 +123,31 @@ approveBtn.onclick = () => {
   connectWebSocket();
 };
 
+/* Auto-join from shared URL — runs after WS connects */
+function checkAutoJoin() {
+  const params = new URLSearchParams(location.search);
+  const sessionId = params.get("session");
+  const token     = params.get("token");
+
+  if (!sessionId || !token) return;
+
+  // Clean URL without reloading
+  history.replaceState({}, "", location.pathname);
+
+  // Wait briefly for WS to be ready then auto-join
+  const tryJoin = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      isConnecting = true;
+      setButtonsDisabled(true);
+      createPeerConnection();
+      wsSend({ type: "join-session", sessionId, token });
+    } else {
+      setTimeout(tryJoin, 200);
+    }
+  };
+  tryJoin();
+}
+
 /* ══════════════════════════════════════════════
    WEBSOCKET — auto-reconnect
 ══════════════════════════════════════════════ */
@@ -133,6 +158,7 @@ function connectWebSocket() {
   ws.onopen = () => {
     console.log("WS connected");
     requestSessionList();
+    checkAutoJoin();
   };
 
   ws.onclose = () => {
@@ -386,15 +412,37 @@ async function handleSignaling(data) {
       renderSessionList(data.sessions);
       break;
 
-    /* Host: session created — show PIN */
+    /* Host: session created — show PIN + shareable link */
     case "session-created":
       isHost = true;
-      currentSession = { sessionId: data.sessionId };
+      currentSession = { sessionId: data.sessionId, token: data.token };
+
+      const shareUrl = `${location.origin}${location.pathname}?session=${encodeURIComponent(data.sessionId)}&token=${data.token}`;
+
       createInfo.innerHTML = `
         Session ready!<br>
         PIN: <strong style="font-size:22px;letter-spacing:6px">${data.pin}</strong><br>
-        <span style="font-size:12px;color:#9ca3af">Share this PIN with your peer</span>
+        <span style="font-size:12px;color:#9ca3af">Share PIN manually, or send the link below:</span><br><br>
+        <div style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap">
+          <input id="shareUrlInput" type="text" value="${shareUrl}"
+            style="font-size:11px;padding:6px 10px;border-radius:8px;flex:1;min-width:0;text-align:left;cursor:text"
+            readonly>
+          <button id="copyLinkBtn" style="width:auto;margin:0;padding:7px 14px;font-size:13px;border-radius:8px;flex-shrink:0">
+            Copy
+          </button>
+        </div>
       `;
+
+      document.getElementById("copyLinkBtn").onclick = () => {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          document.getElementById("copyLinkBtn").textContent = "Copied!";
+          setTimeout(() => {
+            const btn = document.getElementById("copyLinkBtn");
+            if (btn) btn.textContent = "Copy";
+          }, 2000);
+        });
+      };
+
       createBtn.disabled = false;
       isConnecting = false;
       requestSessionList();
