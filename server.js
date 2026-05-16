@@ -25,30 +25,19 @@
 
 "use strict";
 
-const express    = require("express");
-const http       = require("http");
-const WebSocket  = require("ws");
-const multer     = require("multer");
-const nodemailer = require("nodemailer");
+const express   = require("express");
+const http      = require("http");
+const WebSocket = require("ws");
+const multer    = require("multer");
+const { Resend } = require("resend");
 
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
 
-/* ── SMTP transporter ──────────────────────── */
+/* ── Resend client ─────────────────────────── */
 
-const transporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST,
-  port:   parseInt(process.env.SMTP_PORT || "465"),
-  secure: process.env.SMTP_SECURE === "true",
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  },
-  tls: {
-    rejectUnauthorized: false
-  }
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 /* ── Multer — store file in memory (max 10MB) ── */
 
@@ -89,42 +78,44 @@ app.post("/api/send-message", upload.single("file"), async (req, res) => {
   const senderLabel = name && name.trim() ? name.trim() : "Anonymous";
   const sentAt = new Date().toLocaleString("en-US", { timeZone: "UTC" }) + " UTC";
 
-  const mailOptions = {
-    from: `"Direct Connection" <${process.env.SMTP_USER}>`,
-    to:   process.env.MAIL_TO,
-    subject: `📩 New message from ${senderLabel}`,
-    text: `From: ${senderLabel}\nSent: ${sentAt}\n\n${message.trim()}`,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;background:#1b1f27;color:#fff;border-radius:12px;overflow:hidden">
-        <div style="background:#2563eb;padding:20px 24px">
-          <h2 style="margin:0;font-size:18px">📩 New message via Direct Connection</h2>
-        </div>
-        <div style="padding:24px">
-          <p style="color:#9ca3af;font-size:13px;margin:0 0 4px">From</p>
-          <p style="font-size:16px;font-weight:600;margin:0 0 16px">${senderLabel}</p>
-          <p style="color:#9ca3af;font-size:13px;margin:0 0 4px">Message</p>
-          <div style="background:#2a2f3a;padding:14px 16px;border-radius:8px;font-size:15px;line-height:1.6;white-space:pre-wrap">${escapeHtml(message.trim())}</div>
-          <p style="color:#9ca3af;font-size:12px;margin:16px 0 0">Sent: ${sentAt}</p>
-        </div>
+  const htmlBody = `
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;background:#1b1f27;color:#fff;border-radius:12px;overflow:hidden">
+      <div style="background:#2563eb;padding:20px 24px">
+        <h2 style="margin:0;font-size:18px">📩 New message via Direct Connection</h2>
       </div>
-    `
+      <div style="padding:24px">
+        <p style="color:#9ca3af;font-size:13px;margin:0 0 4px">From</p>
+        <p style="font-size:16px;font-weight:600;margin:0 0 16px">${senderLabel}</p>
+        <p style="color:#9ca3af;font-size:13px;margin:0 0 4px">Message</p>
+        <div style="background:#2a2f3a;padding:14px 16px;border-radius:8px;font-size:15px;line-height:1.6;white-space:pre-wrap">${escapeHtml(message.trim())}</div>
+        <p style="color:#9ca3af;font-size:12px;margin:16px 0 0">Sent: ${sentAt}</p>
+      </div>
+    </div>
+  `;
+
+  const mailOptions = {
+    from:    "Direct Connection <onboarding@resend.dev>",
+    to:      process.env.MAIL_TO,
+    subject: `📩 New message from ${senderLabel}`,
+    text:    `From: ${senderLabel}\nSent: ${sentAt}\n\n${message.trim()}`,
+    html:    htmlBody
   };
 
   /* Attach file if provided */
   if (req.file) {
     mailOptions.attachments = [{
-      filename:    req.file.originalname,
-      content:     req.file.buffer,
-      contentType: req.file.mimetype
+      filename: req.file.originalname,
+      content:  req.file.buffer
     }];
   }
 
   try {
-    await transporter.sendMail(mailOptions);
+    const { error } = await resend.emails.send(mailOptions);
+    if (error) throw new Error(error.message);
     console.log(`Email sent from ${senderLabel}`);
     res.json({ ok: true });
   } catch (err) {
-    console.error("SMTP error:", err.message, "| code:", err.code, "| response:", err.response);
+    console.error("Resend error:", err.message);
     res.status(500).json({ error: "Failed to send email", detail: err.message });
   }
 });
