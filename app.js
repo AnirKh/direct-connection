@@ -149,6 +149,14 @@ approveBtn.onclick = () => {
   connectWebSocket();
 };
 
+/* Disable/enable lobby buttons during connecting state */
+function setButtonsDisabled(disabled) {
+  createBtn.disabled      = disabled;
+  joinBtn.disabled        = disabled;
+  sessionIdInput.disabled = disabled;
+  refreshBtn.disabled     = disabled;
+}
+
 /* Auto-join — called from ws.onopen using pre-captured params */
 function checkAutoJoin() {
   console.log("[AutoJoin] _isAutoJoin:", _isAutoJoin, "| session:", _autoSessionId, "| token:", _autoToken);
