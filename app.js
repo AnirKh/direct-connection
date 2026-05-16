@@ -413,21 +413,30 @@ async function handleSignaling(data) {
       break;
 
     /* Host: session created — show PIN + shareable link */
-    case "session-created":
+    case "session-created": {
       isHost = true;
       currentSession = { sessionId: data.sessionId, token: data.token };
 
       const shareUrl = `${location.origin}${location.pathname}?session=${encodeURIComponent(data.sessionId)}&token=${data.token}`;
 
+      createInfo.style.textAlign = "left";
       createInfo.innerHTML = `
-        Session ready!<br>
-        PIN: <strong style="font-size:22px;letter-spacing:6px">${data.pin}</strong><br>
-        <span style="font-size:12px;color:#9ca3af">Share PIN manually, or send the link below:</span><br><br>
-        <div style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap">
-          <input id="shareUrlInput" type="text" value="${shareUrl}"
-            style="font-size:11px;padding:6px 10px;border-radius:8px;flex:1;min-width:0;text-align:left;cursor:text"
+        <div style="text-align:center;margin-bottom:14px">
+          ✅ Session ready!
+        </div>
+        <div style="background:#12151c;border-radius:10px;padding:14px;margin-bottom:10px;text-align:center">
+          <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">PIN</div>
+          <div style="font-size:28px;font-weight:700;letter-spacing:10px;color:#fff">${data.pin}</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Share manually with your peer</div>
+        </div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">Or share this link (no PIN needed):</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="shareUrlInput" type="text"
+            value="${shareUrl}"
+            style="font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a;cursor:text"
             readonly>
-          <button id="copyLinkBtn" style="width:auto;margin:0;padding:7px 14px;font-size:13px;border-radius:8px;flex-shrink:0">
+          <button id="copyLinkBtn"
+            style="width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0;background:#2563eb">
             Copy
           </button>
         </div>
@@ -435,11 +444,17 @@ async function handleSignaling(data) {
 
       document.getElementById("copyLinkBtn").onclick = () => {
         navigator.clipboard.writeText(shareUrl).then(() => {
-          document.getElementById("copyLinkBtn").textContent = "Copied!";
+          document.getElementById("copyLinkBtn").textContent = "✓ Copied!";
           setTimeout(() => {
             const btn = document.getElementById("copyLinkBtn");
             if (btn) btn.textContent = "Copy";
           }, 2000);
+        }).catch(() => {
+          /* Fallback for browsers that block clipboard */
+          const input = document.getElementById("shareUrlInput");
+          input.select();
+          document.execCommand("copy");
+          document.getElementById("copyLinkBtn").textContent = "✓ Copied!";
         });
       };
 
@@ -447,6 +462,7 @@ async function handleSignaling(data) {
       isConnecting = false;
       requestSessionList();
       break;
+    }
 
     /* Guest: joined — prepare to receive offer */
     case "session-joined":

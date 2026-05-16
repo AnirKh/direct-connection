@@ -162,7 +162,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .create-info {
   margin-top: 14px; font-size: 13px; color: var(--blue-light);
-  min-height: 20px; text-align: center; line-height: 1.6;
+  line-height: 1.6;
 }
 
 .refresh-btn {
