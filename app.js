@@ -151,13 +151,14 @@ approveBtn.onclick = () => {
 
 /* Auto-join — called from ws.onopen using pre-captured params */
 function checkAutoJoin() {
+  console.log("[AutoJoin] _isAutoJoin:", _isAutoJoin, "| session:", _autoSessionId, "| token:", _autoToken);
   if (!_isAutoJoin) return;
 
   isConnecting = true;
   setButtonsDisabled(true);
-  createInfo.textContent = `Connecting to session "${_autoSessionId}"…`;
+  createInfo.innerHTML = `<span style="color:#7dd3fc">⏳ Joining session "<strong>${_autoSessionId}</strong>"…</span>`;
 
-  /* WS is already open when this is called from ws.onopen */
+  console.log("[AutoJoin] Sending join-session to server");
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
 }
 
@@ -169,7 +170,7 @@ function connectWebSocket() {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    console.log("WS connected");
+    console.log("WS connected | readyState:", ws.readyState);
     requestSessionList();
     checkAutoJoin();
   };
@@ -479,6 +480,7 @@ async function handleSignaling(data) {
 
     /* Guest: joined — prepare to receive offer */
     case "session-joined":
+      console.log("[AutoJoin] session-joined received:", data.sessionId);
       isHost = false;
       currentSession = { sessionId: data.sessionId };
       pinOverlay.classList.add("hidden");
@@ -554,15 +556,30 @@ async function handleSignaling(data) {
 
     /* Errors */
     case "error":
-      alert(data.message);
-      createBtn.disabled = false;
-      pinJoinBtn.disabled = false;
-      isConnecting = false;
+      console.error("[Server error]", data.message);
+      if (_isAutoJoin && isConnecting) {
+        createInfo.innerHTML = `<span style="color:#f87171">❌ Error: ${data.message}</span>`;
+        setButtonsDisabled(false);
+        isConnecting = false;
+      } else {
+        alert(data.message);
+        createBtn.disabled = false;
+        pinJoinBtn.disabled = false;
+        isConnecting = false;
+      }
       break;
 
     case "pin-error":
-      pinError.textContent = data.message;
-      pinJoinBtn.disabled = false;
+      if (_isAutoJoin) {
+        /* Auto-join failed — show in lobby */
+        createInfo.innerHTML = `<span style="color:#f87171">❌ Could not join: ${data.message}<br>
+          <span style="font-size:12px;color:#9ca3af">The session may have expired. Ask the host to create a new one.</span></span>`;
+        setButtonsDisabled(false);
+        isConnecting = false;
+      } else {
+        pinError.textContent = data.message;
+        pinJoinBtn.disabled = false;
+      }
       break;
   }
 }

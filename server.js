@@ -215,11 +215,19 @@ wss.on("connection", (ws) => {
       }
 
       case "join-session": {
+        console.log(`Join attempt → sessionId:"${data.sessionId}" pin:${!!data.pin} token:${!!data.token}`);
+        console.log(`Active sessions: [${Object.keys(sessions).join(", ")}]`);
+
         const session = sessions[data.sessionId];
-        if (!session) { ws.send(JSON.stringify({ type: "pin-error", message: "Session not found" })); break; }
+        if (!session) {
+          console.log(`Session "${data.sessionId}" not found`);
+          ws.send(JSON.stringify({ type: "pin-error", message: "Session not found — it may have expired. Ask the host to create a new session." }));
+          break;
+        }
         if (session.guest) { ws.send(JSON.stringify({ type: "pin-error", message: "Session is full" })); break; }
         const pinOk   = data.pin   && session.pin   === data.pin;
         const tokenOk = data.token && session.token === data.token;
+        console.log(`Auth → pinOk:${pinOk} tokenOk:${tokenOk} | stored token:"${session.token}" | received token:"${data.token}"`);
         if (!pinOk && !tokenOk) { ws.send(JSON.stringify({ type: "pin-error", message: "Wrong PIN or invalid link" })); break; }
 
         session.guest = ws;
