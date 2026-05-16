@@ -23,6 +23,18 @@
 
 "use strict";
 
+/* ── Read URL params immediately on load ─────── */
+/* Must happen before anything else — before WS, before approval */
+const _urlParams     = new URLSearchParams(location.search);
+const _autoSessionId = _urlParams.get("session");
+const _autoToken     = _urlParams.get("token");
+const _isAutoJoin    = Boolean(_autoSessionId && _autoToken);
+
+/* Clean URL immediately so params don't persist or confuse */
+if (_isAutoJoin) {
+  history.replaceState({}, "", location.pathname);
+}
+
 /* ── DOM ──────────────────────────────────────── */
 
 const overlay         = document.getElementById("overlay");
@@ -118,34 +130,35 @@ const FILE_CHUNK_SIZE = 16384; // 16 KB
    APPROVAL
 ══════════════════════════════════════════════ */
 
+/* Update approval modal if this is an auto-join link */
+if (_isAutoJoin) {
+  document.querySelector(".modal h2").textContent  = "Join Session";
+  document.querySelector(".modal p").textContent   =
+    `You've been invited to join session "${_autoSessionId}". ` +
+    "This will establish a direct encrypted peer-to-peer connection.";
+  approveBtn.textContent = "Approve & Join";
+}
+
 approveBtn.onclick = () => {
   overlay.classList.add("hidden");
+  if (_isAutoJoin) {
+    /* Show joining state in lobby before WS connects */
+    createInfo.textContent = `Joining session "${_autoSessionId}"…`;
+    setButtonsDisabled(true);
+  }
   connectWebSocket();
 };
 
-/* Auto-join from shared URL — runs after WS connects */
+/* Auto-join — called from ws.onopen using pre-captured params */
 function checkAutoJoin() {
-  const params = new URLSearchParams(location.search);
-  const sessionId = params.get("session");
-  const token     = params.get("token");
+  if (!_isAutoJoin) return;
 
-  if (!sessionId || !token) return;
+  isConnecting = true;
+  setButtonsDisabled(true);
+  createInfo.textContent = `Connecting to session "${_autoSessionId}"…`;
 
-  // Clean URL without reloading
-  history.replaceState({}, "", location.pathname);
-
-  // Wait briefly for WS to be ready then auto-join
-  const tryJoin = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      isConnecting = true;
-      setButtonsDisabled(true);
-      createPeerConnection();
-      wsSend({ type: "join-session", sessionId, token });
-    } else {
-      setTimeout(tryJoin, 200);
-    }
-  };
-  tryJoin();
+  /* WS is already open when this is called from ws.onopen */
+  wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
 }
 
 /* ══════════════════════════════════════════════
