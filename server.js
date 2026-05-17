@@ -255,6 +255,7 @@ wss.on("connection", (ws) => {
       case "renegotiate-answer": relayToOther(ws, data.sessionId, { type: "renegotiate-answer", answer:   data.answer });   break;
       case "call-offer":         relayToOther(ws, data.sessionId, { type: "call-offer",         offer:    data.offer,  withVideo: data.withVideo }); break;
       case "call-answer":        relayToOther(ws, data.sessionId, { type: "call-answer",        answer:   data.answer }); break;
+      case "call-ice":           relayToOther(ws, data.sessionId, { type: "call-ice",           candidate: data.candidate }); break;
 
       case "leave-session": cleanupClient(ws); break;
 
