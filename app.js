@@ -884,14 +884,14 @@ toggleMuteBtn.onclick = () => {
   if (!localStream) return;
   isMuted = !isMuted;
   localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
-  toggleMuteBtn.textContent = isMuted ? "🔇" : "🎙️";
+  toggleMuteBtn.innerHTML = isMuted ? '<i class="ti ti-microphone-off" aria-hidden="true"></i>' : '<i class="ti ti-microphone" aria-hidden="true"></i>';
 };
 
 toggleCamBtn.onclick = () => {
   if (!localStream) return;
   isCamOff = !isCamOff;
   localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
-  toggleCamBtn.textContent = isCamOff ? "🚫" : "📷";
+  toggleCamBtn.innerHTML = isCamOff ? '<i class="ti ti-camera-off" aria-hidden="true"></i>' : '<i class="ti ti-camera" aria-hidden="true"></i>';
 };
 
 endCallBtn.onclick = () => endCall(true);
@@ -904,8 +904,8 @@ function endCall(notify = true) {
   localVideo.classList.remove("hidden");
   callOverlay.classList.add("hidden");
   isMuted = false; isCamOff = false;
-  toggleMuteBtn.textContent = "🎙️";
-  toggleCamBtn.textContent  = "📷";
+  toggleMuteBtn.innerHTML = '<i class="ti ti-microphone" aria-hidden="true"></i>';
+  toggleCamBtn.innerHTML  = '<i class="ti ti-camera" aria-hidden="true"></i>';
   closeCallPc();
 }
 
@@ -926,11 +926,12 @@ function appendBubble(who, text) {
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   bubble.textContent = text;
+  row.appendChild(bubble);
+  /* Timestamp outside bubble */
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
-  bubble.appendChild(meta);
-  row.appendChild(bubble);
+  row.appendChild(meta);
   chatMessages.appendChild(row);
   scrollBottom();
   return row;
@@ -946,11 +947,11 @@ function resolveImageNow(who, url, name) {
   img.src = url; img.alt = name;
   img.onclick = () => window.open(url, "_blank");
   bubble.appendChild(img);
+  row.appendChild(bubble);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
-  bubble.appendChild(meta);
-  row.appendChild(bubble);
+  row.appendChild(meta);
   chatMessages.appendChild(row);
   scrollBottom();
 }
@@ -962,16 +963,16 @@ function resolveVoiceNow(who, url) {
   bubble.className = "bubble";
   const wrap = document.createElement("div");
   wrap.className = "voice-bubble";
-  wrap.innerHTML = "<span>🎤</span>";
+  wrap.innerHTML = '<i class="ti ti-microphone" style="font-size:18px;color:#06b6d4"></i>';
   const audio = document.createElement("audio");
   audio.src = url; audio.controls = true;
   wrap.appendChild(audio);
   bubble.appendChild(wrap);
+  row.appendChild(bubble);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
-  bubble.appendChild(meta);
-  row.appendChild(bubble);
+  row.appendChild(meta);
   chatMessages.appendChild(row);
   scrollBottom();
 }
@@ -1001,10 +1002,10 @@ function resolveImagePlaceholder(id, url, name) {
   img.onclick = () => window.open(url, "_blank");
   bubble.innerHTML = "";
   bubble.appendChild(img);
-  const meta = document.createElement("div");
-  meta.className = "bubble-meta";
+  /* meta outside bubble */
+  let meta = row.querySelector(".bubble-meta");
+  if (!meta) { meta = document.createElement("div"); meta.className = "bubble-meta"; row.appendChild(meta); }
   meta.textContent = now();
-  bubble.appendChild(meta);
   scrollBottom();
 }
 
@@ -1016,20 +1017,20 @@ function appendFileBubble(who, url, name, size, id) {
   bubble.className = "bubble";
   bubble.innerHTML = `
     <div class="file-bubble">
-      <div class="file-icon">📄</div>
+      <div class="file-icon"><i class="ti ti-file" style="font-size:22px"></i></div>
       <div>
         <div class="file-name">${name}</div>
         <div class="file-size">${fmtBytes(size)}</div>
         ${url
           ? `<a href="${url}" download="${name}">Download</a>`
-          : `<span style="color:#9ca3af;font-size:12px" class="file-pending">Receiving…</span>`}
+          : `<span style="color:#94a3b8;font-size:12px" class="file-pending">Receiving…</span>`}
       </div>
     </div>`;
+  row.appendChild(bubble);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
-  bubble.appendChild(meta);
-  row.appendChild(bubble);
+  row.appendChild(meta);
   chatMessages.appendChild(row);
   scrollBottom();
 }
@@ -1078,7 +1079,13 @@ function appendSys(text) {
 }
 
 function addAckTick(row, msgId) {
-  const meta = row.querySelector(".bubble-meta");
+  /* meta is now a direct child of row, outside bubble */
+  let meta = row.querySelector(".bubble-meta");
+  if (!meta) {
+    meta = document.createElement("div");
+    meta.className = "bubble-meta";
+    row.appendChild(meta);
+  }
   const tick = document.createElement("span");
   tick.className = "ack-tick sent";
   tick.textContent = "✓";

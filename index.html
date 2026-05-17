@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Direct Connection</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -31,7 +32,12 @@
       </div>
 
       <div class="card">
-        <p class="card-label">Available Sessions <button id="refreshBtn" class="refresh-btn">↻ Refresh</button></p>
+        <p class="card-label">
+          Available Sessions
+          <button id="refreshBtn" class="refresh-btn">
+            <i class="ti ti-refresh" aria-hidden="true"></i> Refresh
+          </button>
+        </p>
         <div id="sessionsList"><div class="empty-state">No active sessions</div></div>
       </div>
 
@@ -39,18 +45,19 @@
       <div class="card">
         <p class="card-label">Leave a Message</p>
         <p class="leave-msg-hint">Not around? Send a message or file directly to Anir's email.</p>
-
         <input id="senderName" type="text" placeholder="Your name (optional)">
-
-        <textarea id="leaveMessage" placeholder="Write your message…" rows="4" style="margin-top:10px;border-radius:10px;resize:vertical;min-height:90px"></textarea>
-
+        <textarea id="leaveMessage" placeholder="Write your message…" rows="4"
+          style="margin-top:10px;border-radius:10px;resize:vertical;min-height:90px"></textarea>
         <div id="leaveFileRow" class="leave-file-row">
           <input type="file" id="leaveFile" class="hidden">
-          <button id="leaveFileBtn" class="leave-attach-btn" type="button">📎 Attach file</button>
+          <button id="leaveFileBtn" class="leave-attach-btn" type="button">
+            <i class="ti ti-paperclip" aria-hidden="true"></i> Attach file
+          </button>
           <span id="leaveFileName" class="leave-file-name"></span>
         </div>
-
-        <button id="leaveSendBtn">Send Message</button>
+        <button id="leaveSendBtn">
+          <i class="ti ti-send" aria-hidden="true"></i> Send Message
+        </button>
         <div id="leaveStatus" class="leave-status"></div>
       </div>
     </div>
@@ -60,13 +67,13 @@
   <div id="pinOverlay" class="overlay hidden">
     <div class="modal">
       <h2>Enter Session PIN</h2>
-      <p id="pinSessionLabel" style="color:#7dd3fc;margin:0 0 16px"></p>
-      <input id="pinInput" type="text" maxlength="6" placeholder="6-digit PIN" style="text-align:center;font-size:24px;letter-spacing:8px">
+      <p id="pinSessionLabel" style="color:#06b6d4;margin:0 0 16px"></p>
+      <input id="pinInput" type="text" maxlength="6" placeholder="6-digit PIN">
       <div style="display:flex;gap:10px;margin-top:12px">
-        <button id="pinCancelBtn" style="background:#374151">Cancel</button>
+        <button id="pinCancelBtn" style="background:#334155;color:#e2e8f0">Cancel</button>
         <button id="pinJoinBtn">Join</button>
       </div>
-      <div id="pinError" style="color:#f87171;margin-top:10px;min-height:20px"></div>
+      <div id="pinError" style="color:#ef4444;margin-top:10px;min-height:20px;font-size:13px"></div>
     </div>
   </div>
 
@@ -79,22 +86,34 @@
       <video id="localVideo"  autoplay playsinline muted></video>
       <div id="callStatusLabel" class="call-status-label"></div>
       <div class="call-controls">
-        <button id="toggleMuteBtn"  class="call-btn" title="Mute">🎙️</button>
-        <button id="toggleCamBtn"   class="call-btn" title="Camera">📷</button>
-        <button id="endCallBtn"     class="call-btn end-call" title="End call">📵</button>
+        <button id="toggleMuteBtn" class="call-btn" aria-label="Mute">
+          <i class="ti ti-microphone" aria-hidden="true"></i>
+        </button>
+        <button id="toggleCamBtn" class="call-btn" aria-label="Camera">
+          <i class="ti ti-camera" aria-hidden="true"></i>
+        </button>
+        <button id="endCallBtn" class="call-btn end-call" aria-label="End call">
+          <i class="ti ti-phone-off" aria-hidden="true"></i>
+        </button>
       </div>
     </div>
 
     <!-- Header -->
     <header class="chat-header">
-      <button id="leaveBtn" class="icon-btn" title="Leave">&#8592;</button>
+      <button id="leaveBtn" class="icon-btn" aria-label="Leave">
+        <i class="ti ti-arrow-left" aria-hidden="true"></i>
+      </button>
       <div class="chat-header-center">
         <div id="chatSessionLabel" class="chat-session-name"></div>
         <div id="connectionQuality" class="quality-label">⬤ Connecting…</div>
       </div>
       <div class="chat-header-actions">
-        <button id="voiceCallBtn" class="icon-btn" title="Voice call">📞</button>
-        <button id="videoCallBtn" class="icon-btn" title="Video call">📹</button>
+        <button id="voiceCallBtn" class="icon-btn" aria-label="Voice call" disabled>
+          <i class="ti ti-phone" aria-hidden="true"></i>
+        </button>
+        <button id="videoCallBtn" class="icon-btn" aria-label="Video call" disabled>
+          <i class="ti ti-video" aria-hidden="true"></i>
+        </button>
       </div>
     </header>
 
@@ -109,27 +128,42 @@
 
     <!-- Input area -->
     <div class="input-area">
+
+      <!-- Attach menu -->
       <div id="attachMenu" class="attach-menu hidden">
-        <button id="sendImageBtn">🖼️ Photo / Image</button>
-        <button id="sendFileBtn">📄 File</button>
-        <button id="voiceNoteHintBtn">🎤 Hold mic button to record</button>
+        <button id="sendImageBtn">
+          <i class="ti ti-photo" aria-hidden="true"></i> Photo / Image
+        </button>
+        <button id="sendFileBtn">
+          <i class="ti ti-file-upload" aria-hidden="true"></i> File
+        </button>
+        <button id="voiceNoteHintBtn">
+          <i class="ti ti-microphone" aria-hidden="true"></i> Tap mic to record voice
+        </button>
       </div>
 
       <input type="file" id="imageInput" accept="image/*" class="hidden">
       <input type="file" id="fileInput" class="hidden">
 
-      <button id="attachBtn" class="icon-btn" title="Attach">📎</button>
+      <button id="attachBtn" class="icon-btn" aria-label="Attach">
+        <i class="ti ti-paperclip" aria-hidden="true"></i>
+      </button>
 
       <div class="textarea-wrap">
         <textarea id="messageInput" placeholder="Message…" rows="1"></textarea>
       </div>
 
-      <button id="voiceRecordBtn" class="icon-btn mic-btn" title="Hold to record voice">🎤</button>
-      <button id="sendBtn" class="send-btn" title="Send">&#9658;</button>
-    </div>
+      <button id="voiceRecordBtn" class="icon-btn mic-btn" aria-label="Record voice" title="Tap to record voice">
+        <i class="ti ti-microphone" aria-hidden="true"></i>
+      </button>
 
+      <button id="sendBtn" class="send-btn" aria-label="Send" disabled>
+        <i class="ti ti-send" aria-hidden="true"></i>
+      </button>
+
+    </div>
   </div>
 
-  <script src="app.js?v=202605171224"></script>
+  <script src="app.js?v=202605171300"></script>
 </body>
 </html>
