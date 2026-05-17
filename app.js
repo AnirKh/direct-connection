@@ -92,6 +92,7 @@ let dataChannel    = null;
 let currentSession = null;   // { sessionId, role: "host"|"guest" }
 let isConnecting   = false;
 let isHost         = false;
+let iceQueue       = [];     // holds candidates that arrive before remote description
 
 let localStream    = null;   // for calls
 let isMuted        = false;
@@ -291,6 +292,7 @@ function attemptJoin() {
 ══════════════════════════════════════════════ */
 
 function closePeerConnection() {
+  iceQueue = [];
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (pc) {
     pc.onicecandidate          = null;
@@ -494,6 +496,11 @@ async function handleSignaling(data) {
     /* Guest: receives offer */
     case "offer":
       await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      /* Flush any queued ICE candidates now that remote desc is set */
+      while (iceQueue.length) {
+        const c = iceQueue.shift();
+        try { await pc.addIceCandidate(c); } catch (e) { console.error("Queued ICE error:", e); }
+      }
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       await waitForICEGathering(pc);
@@ -503,12 +510,24 @@ async function handleSignaling(data) {
     /* Host: receives answer */
     case "answer":
       await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      /* Flush queued ICE candidates */
+      while (iceQueue.length) {
+        const c = iceQueue.shift();
+        try { await pc.addIceCandidate(c); } catch (e) { console.error("Queued ICE error:", e); }
+      }
       break;
 
     /* Both: trickle ICE candidate */
     case "ice-candidate":
       if (pc) {
-        try { await pc.addIceCandidate(data.candidate); } catch (e) { console.error(e); }
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          /* Remote description set — apply immediately */
+          try { await pc.addIceCandidate(data.candidate); } catch (e) { console.error("ICE add error:", e); }
+        } else {
+          /* Remote description not set yet — queue for later */
+          console.log("ICE candidate queued (no remote desc yet)");
+          iceQueue.push(data.candidate);
+        }
       }
       break;
 
