@@ -255,11 +255,11 @@ function createPeerConnection() {
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
     console.log("ICE:", s);
-    if (s === "checking")                   setQuality("⬤ Connecting…", "");
-    if (s === "connected" || s === "completed") { setQuality("⬤ Connected", "connected"); startStatsPolling(); }
-    if (s === "disconnected")               { setQuality("⬤ Reconnecting…", "poor"); pc.restartIce(); }
-    if (s === "failed")                     { setQuality("⬤ Failed — retrying…", "failed"); handleFullRenegotiation(); }
-    if (s === "closed")                     setQuality("⬤ Disconnected", "failed");
+    if (s === "checking")                   setQuality("⬤ Холбогдож байна…", "");
+    if (s === "connected" || s === "completed") { setQuality("⬤ Холбогдсон", "connected"); startStatsPolling(); }
+    if (s === "disconnected")               { setQuality("⬤ Ахин холбогдож байна…", "сул"); pc.restartIce(); }
+    if (s === "failed")                     { setQuality("⬤ Бүтсэнгүй — ахин оролдож байна…", "Бүтсэнгүй"); handleFullRenegotiation(); }
+    if (s === "closed")                     setQuality("⬤ Холбоо тасарсан", "Бүтсэнгүй");
   };
 
   // ontrack here handles remote media from callPc — set on callPc below
@@ -292,12 +292,12 @@ function setupDataChannel() {
     sendBtn.disabled = false;
     voiceCallBtn.disabled = false;
     videoCallBtn.disabled = false;
-    appendSys("Peer-to-peer connection established 🔒");
+    appendSys("Харилцагчдын хооронд шууд холбоос тогтлоо 🔒");
   };
 
   dataChannel.onclose = () => {
     sendBtn.disabled = true;
-    appendSys("Connection closed");
+    appendSys("Холбоос хаагдлаа");
   };
 
   dataChannel.onerror = e => console.error("DC error", e);
@@ -446,7 +446,7 @@ async function handleSignaling(data) {
       break;
 
     case "peer-disconnected":
-      appendSys("Peer disconnected");
+      appendSys("Харилцагч гарлаа");
       endCall(false);
       closePeerConnection();
       break;
