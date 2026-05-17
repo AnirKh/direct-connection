@@ -169,7 +169,7 @@ refreshBtn.onclick = requestSessionList;
 
 function renderSessionList(sessions) {
   if (!sessions || !sessions.length) {
-    sessionsList.innerHTML = '<div class="empty-state">No active sessions</div>';
+    sessionsList.innerHTML = '<div class="empty-state">Одоогоор идэвхтэй өрөө байхгүй</div>';
     return;
   }
   sessionsList.innerHTML = "";
