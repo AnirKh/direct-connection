@@ -25,28 +25,28 @@
       <h1 class="lobby-title">Direct Connection</h1>
 
       <div class="card">
-        <p class="card-label">Create Session</p>
-        <input id="sessionId" type="text" placeholder="Session name (e.g. myroom)">
-        <button id="createBtn">Create Session</button>
+        <p class="card-label">Шинээр өрөө үүсгэх</p>
+        <input id="sessionId" type="text" placeholder="Өрөөний нэр оруулах">
+        <button id="createBtn">Өрөөг үүсгэх</button>
         <div id="createInfo" class="create-info"></div>
       </div>
 
       <div class="card">
         <p class="card-label">
-          Available Sessions
+          Идэвхтэй байгаа өрөөнүүд
           <button id="refreshBtn" class="refresh-btn">
-            <i class="ti ti-refresh" aria-hidden="true"></i> Refresh
+            <i class="ti ti-refresh" aria-hidden="true"></i> Ахин хайх
           </button>
         </p>
-        <div id="sessionsList"><div class="empty-state">No active sessions</div></div>
+        <div id="sessionsList"><div class="empty-state">Идэвхтэй өрөө байхгүй</div></div>
       </div>
 
       <!-- Leave a Message -->
       <div class="card">
-        <p class="card-label">Leave a Message</p>
-        <p class="leave-msg-hint">Not around? Send a message or file directly to Anir's email.</p>
-        <input id="senderName" type="text" placeholder="Your name (optional)">
-        <textarea id="leaveMessage" placeholder="Write your message…" rows="4"
+        <p class="card-label">Захиа шууд и-мэйлрүү явуулах</p>
+        <p class="leave-msg-hint">Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно.</p>
+        <input id="senderName" type="text" placeholder="Таны нэр (эсвэл холбогдох агуулга)">
+        <textarea id="leaveMessage" placeholder="Энд явуулах мэдээллээ бичнэ үү?" rows="4"
           style="margin-top:10px;border-radius:10px;resize:vertical;min-height:90px"></textarea>
         <div id="leaveFileRow" class="leave-file-row">
           <input type="file" id="leaveFile" class="hidden">
@@ -56,7 +56,7 @@
           <span id="leaveFileName" class="leave-file-name"></span>
         </div>
         <button id="leaveSendBtn">
-          <i class="ti ti-send" aria-hidden="true"></i> Send Message
+          <i class="ti ti-send" aria-hidden="true"></i> Захиаг явуулах
         </button>
         <div id="leaveStatus" class="leave-status"></div>
       </div>
@@ -66,7 +66,7 @@
   <!-- JOIN PIN MODAL -->
   <div id="pinOverlay" class="overlay hidden">
     <div class="modal">
-      <h2>Enter Session PIN</h2>
+      <h2>Өрөөрүү нэвтрэх код</h2>
       <p id="pinSessionLabel" style="color:#06b6d4;margin:0 0 16px"></p>
       <input id="pinInput" type="text" maxlength="6" placeholder="6-digit PIN">
       <div style="display:flex;gap:10px;margin-top:12px">
