@@ -100,7 +100,7 @@ const recvBuffers = {};
 
 const WS_URL        = "wss://direct-connection.onrender.com";
 const SERVER_URL    = "https://direct-connection.onrender.com";
-const CHUNK_SIZE    = 16384; // 16 KB — safe for all DataChannel implementations
+const CHUNK_SIZE    = 65536; // 64 KB — faster transfers, still safe for modern browsers
 const MAX_DC_MSG    = 200000; // ~200 KB — safety cap for single JSON messages
 
 const ICE_CONFIG = {
@@ -610,7 +610,10 @@ function handleTextMessage(data) {
     case "transfer-meta":
       // Start of a binary transfer (file, image, or voice)
       recvBuffers[data.id] = { chunks: [], name: data.name, size: data.size, mimeType: data.mimeType, kind: data.kind };
-      if (data.kind === "file") appendFileBubble("peer", null, data.name, data.size, data.id);
+      // Create placeholder for ALL kinds on receiver side
+      if (data.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
+      if (data.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
+      if (data.kind === "voice") appendVoicePlaceholder("peer", data.id);
       break;
 
     case "transfer-done":
@@ -653,11 +656,13 @@ async function sendBinary(file, kind) {
   const id = makeTransferId(); // exactly 36 chars
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-  dcSend({ type: "transfer-meta", id, name: file.name || `voice.webm`, size: file.size, mimeType: file.type || "audio/webm", kind, totalChunks });
+  dcSend({ type: "transfer-meta", id, name: file.name || "voice.webm", size: file.size, mimeType: file.type || "audio/webm", kind, totalChunks });
 
-  if (kind === "file")  appendFileBubble("me", null, file.name, file.size, id);
-  if (kind === "image") appendImagePlaceholder("me", id, file.name);
-  if (kind === "voice") appendVoicePlaceholder("me", id);
+  // Sender already has the data — show immediately using a local object URL
+  const localUrl = URL.createObjectURL(file);
+  if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
+  if (kind === "image") resolveImageNow("me", localUrl, file.name);
+  if (kind === "voice") resolveVoiceNow("me", localUrl);
 
   const idBytes = new TextEncoder().encode(id); // always 36 bytes
   const ab = await file.arrayBuffer();
@@ -695,7 +700,7 @@ function assembleTransfer(id) {
 function drainBuffer() {
   return new Promise(resolve => {
     const check = () => {
-      if (!dataChannel || dataChannel.bufferedAmount < 65536) resolve();
+      if (!dataChannel || dataChannel.bufferedAmount < 262144) resolve();
       else setTimeout(check, 50);
     };
     check();
@@ -916,6 +921,46 @@ function appendBubble(who, text) {
   chatMessages.appendChild(row);
   scrollBottom();
   return row;
+}
+
+/* Immediate bubble — used by sender who already has the data */
+function resolveImageNow(who, url, name) {
+  const row    = document.createElement("div");
+  row.className = `bubble-row ${who}`;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  const img = document.createElement("img");
+  img.src = url; img.alt = name;
+  img.onclick = () => window.open(url, "_blank");
+  bubble.appendChild(img);
+  const meta = document.createElement("div");
+  meta.className = "bubble-meta";
+  meta.textContent = now();
+  bubble.appendChild(meta);
+  row.appendChild(bubble);
+  chatMessages.appendChild(row);
+  scrollBottom();
+}
+
+function resolveVoiceNow(who, url) {
+  const row    = document.createElement("div");
+  row.className = `bubble-row ${who}`;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  const wrap = document.createElement("div");
+  wrap.className = "voice-bubble";
+  wrap.innerHTML = "<span>🎤</span>";
+  const audio = document.createElement("audio");
+  audio.src = url; audio.controls = true;
+  wrap.appendChild(audio);
+  bubble.appendChild(wrap);
+  const meta = document.createElement("div");
+  meta.className = "bubble-meta";
+  meta.textContent = now();
+  bubble.appendChild(meta);
+  row.appendChild(bubble);
+  chatMessages.appendChild(row);
+  scrollBottom();
 }
 
 function appendImagePlaceholder(who, id, name) {
