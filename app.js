@@ -130,43 +130,37 @@ const FILE_CHUNK_SIZE = 16384; // 16 KB
    APPROVAL
 ══════════════════════════════════════════════ */
 
-/* Update approval modal if this is an auto-join link */
+/* Skip approval modal entirely for link joins — connect immediately */
 if (_isAutoJoin) {
-  document.querySelector(".modal h2").textContent  = "Join Session";
-  document.querySelector(".modal p").textContent   =
-    `You've been invited to join session "${_autoSessionId}". ` +
-    "This will establish a direct encrypted peer-to-peer connection.";
-  approveBtn.textContent = "Approve & Join";
-}
+  overlay.classList.add("hidden");
+  /* connectWebSocket() called after DOM ready — see bottom of script */
+} 
 
 approveBtn.onclick = () => {
   overlay.classList.add("hidden");
-  if (_isAutoJoin) {
-    /* Show joining state in lobby before WS connects */
-    createInfo.textContent = `Joining session "${_autoSessionId}"…`;
-    setButtonsDisabled(true);
-  }
   connectWebSocket();
 };
 
 /* Disable/enable lobby buttons during connecting state */
 function setButtonsDisabled(disabled) {
-  createBtn.disabled      = disabled;
-  joinBtn.disabled        = disabled;
-  sessionIdInput.disabled = disabled;
-  refreshBtn.disabled     = disabled;
+  createBtn.disabled       = disabled;
+  sessionIdInput.disabled  = disabled;
+  refreshBtn.disabled      = disabled;
 }
 
-/* Auto-join — called from ws.onopen using pre-captured params */
-function checkAutoJoin() {
-  console.log("[AutoJoin] _isAutoJoin:", _isAutoJoin, "| session:", _autoSessionId, "| token:", _autoToken);
-  if (!_isAutoJoin) return;
+/* Auto-join — only fires once even if WS reconnects */
+let _autoJoinSent = false;
 
+function checkAutoJoin() {
+  console.log("[AutoJoin] check: _isAutoJoin=" + _isAutoJoin + " sent=" + _autoJoinSent);
+  if (!_isAutoJoin || _autoJoinSent) return;
+
+  _autoJoinSent = true;
   isConnecting = true;
   setButtonsDisabled(true);
   createInfo.innerHTML = `<span style="color:#7dd3fc">⏳ Joining session "<strong>${_autoSessionId}</strong>"…</span>`;
 
-  console.log("[AutoJoin] Sending join-session to server");
+  console.log("[AutoJoin] Sending join-session — sessionId:" + _autoSessionId + " token:" + _autoToken);
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
 }
 
@@ -1234,4 +1228,9 @@ function dcSend(obj) {
   if (dataChannel && dataChannel.readyState === 'open') {
     dataChannel.send(JSON.stringify(obj));
   }
+}
+
+/* Auto-connect for link joins — runs after all JS is parsed */
+if (_isAutoJoin) {
+  connectWebSocket();
 }
