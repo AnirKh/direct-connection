@@ -735,33 +735,46 @@ fileInput.onchange = () => {
    VOICE NOTE
 ══════════════════════════════════════════════ */
 
-voiceRecordBtn.addEventListener("mousedown",  startVoiceRecord);
-voiceRecordBtn.addEventListener("touchstart", startVoiceRecord, { passive: true });
-voiceRecordBtn.addEventListener("mouseup",    stopVoiceRecord);
-voiceRecordBtn.addEventListener("touchend",   stopVoiceRecord);
+voiceRecordBtn.addEventListener("click", toggleVoiceRecord);
 
-async function startVoiceRecord() {
+let _isRecording = false;
+
+async function toggleVoiceRecord() {
   if (!dcReady()) return;
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    voiceChunks  = [];
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
-    mediaRecorder.onstop = () => {
-      stream.getTracks().forEach(t => t.stop());
-      const blob = new Blob(voiceChunks, { type: "audio/webm" });
-      const file = new File([blob], "voice.webm", { type: "audio/webm" });
-      sendBinary(file, "voice");
-    };
-    mediaRecorder.start();
-    voiceRecordBtn.classList.add("recording");
-  } catch (_) { alert("Microphone access denied"); }
-}
 
-function stopVoiceRecord() {
-  if (mediaRecorder && mediaRecorder.state !== "inactive") {
-    mediaRecorder.stop();
-    voiceRecordBtn.classList.remove("recording");
+  if (!_isRecording) {
+    /* ── Start recording ── */
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceChunks   = [];
+      mediaRecorder = new MediaRecorder(stream);
+
+      mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
+
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(voiceChunks, { type: "audio/webm" });
+        const file = new File([blob], "voice.webm", { type: "audio/webm" });
+        sendBinary(file, "voice");
+        _isRecording = false;
+        voiceRecordBtn.classList.remove("recording");
+        voiceRecordBtn.title = "Record voice";
+      };
+
+      mediaRecorder.start();
+      _isRecording = true;
+      voiceRecordBtn.classList.add("recording");
+      voiceRecordBtn.title = "Tap to stop & send";
+
+    } catch (_) {
+      alert("Microphone access denied");
+    }
+
+  } else {
+    /* ── Stop and send ── */
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
   }
 }
 
