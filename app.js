@@ -23,14 +23,15 @@
 
 "use strict";
 
-/* ── Read URL params immediately on load ─────── */
-/* Must happen before anything else — before WS, before approval */
-const _urlParams     = new URLSearchParams(location.search);
-const _autoSessionId = _urlParams.get("session");
-const _autoToken     = _urlParams.get("token");
+/* ── Read hash immediately on load ───────────── */
+/* Hash format: #sessionId:token  e.g. #myroom:a3f8xk29qm1z */
+const _hash          = location.hash.slice(1);
+const _hashParts     = _hash.split(":");
+const _autoSessionId = _hashParts[0] || null;
+const _autoToken     = _hashParts[1] || null;
 const _isAutoJoin    = Boolean(_autoSessionId && _autoToken);
 
-/* Clean URL immediately so params don't persist or confuse */
+/* Clear hash from URL bar immediately */
 if (_isAutoJoin) {
   history.replaceState({}, "", location.pathname);
 }
@@ -433,7 +434,7 @@ async function handleSignaling(data) {
       isHost = true;
       currentSession = { sessionId: data.sessionId, token: data.token };
 
-      const shareUrl = `${location.origin}${location.pathname}?session=${encodeURIComponent(data.sessionId)}&token=${data.token}`;
+      const shareUrl = `${location.origin}${location.pathname}#${encodeURIComponent(data.sessionId)}:${data.token}`;
 
       createInfo.style.textAlign = "left";
       createInfo.innerHTML = `
