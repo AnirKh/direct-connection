@@ -1,20 +1,12 @@
 /*
-  Direct Connection — app.js  v20260517-2
+  Direct Connection — app.js  v20260518
   ─────────────────────────────────────────────
-  Fixes vs previous version:
-  - Calls use a SEPARATE RTCPeerConnection (callPc)
-    so call renegotiation never touches the data channel PC
-  - Images chunked as binary (same protocol as files)
-    so large images don't hit the 256 KB DC message limit
-  - Voice notes chunked as binary (same protocol)
-  - File/image/voice all share one robust binary transfer protocol
-  - ICE candidate queue (prevents addIceCandidate before remoteDescription)
-  - Hash URL auto-join (#sessionId:token)
-  - Approval modal skipped for link joins
+  Dual-language support: Mongolian (default) / English
+  All user-visible strings routed through t() / I18N
   ─────────────────────────────────────────────
 */
 
-"use strict"; // v20260517-2
+"use strict";
 
 /* ── Read hash immediately ───────────────────── */
 const _hash          = location.hash.slice(1);
@@ -23,6 +15,222 @@ const _autoSessionId = _hashParts[0] || null;
 const _autoToken     = _hashParts[1] || null;
 const _isAutoJoin    = Boolean(_autoSessionId && _autoToken);
 if (_isAutoJoin) history.replaceState({}, "", location.pathname);
+
+/* ══════════════════════════════════════════════
+   I18N
+══════════════════════════════════════════════ */
+
+let LANG = localStorage.getItem("lang") || "mn";
+
+const I18N = {
+  mn: {
+    // Modal
+    modalTitle:      "Шууд холбоос",
+    modalDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
+    modalBtn:        "Зөвшөөрөх & үргэлжлүүлэх",
+    // Lobby
+    lobbyTitle:      "Шууд холбогдох хэсэг",
+    createLabel:     "Шинээр өрөө үүсгэх",
+    sessionPlaceholder: "Өрөөний нэр оруулах",
+    createBtnLabel:  "Өрөөг үүсгэх",
+    roomsLabel:      "Идэвхтэй байгаа өрөөнүүд",
+    refreshBtnLabel: "Ахин хайх",
+    noRooms:         "Идэвхтэй өрөө байхгүй",
+    joinBtn:         "Орох",
+    sessionMeta:     (ago) => `${ago} өмнө үүсгэсэн`,
+    timeS:           (n) => `${n}с`,
+    timeM:           (n) => `${n}м`,
+    timeH:           (n) => `${n}ц`,
+    // Leave a message
+    leaveLabel:      "Захиа шууд и-мэйлрүү явуулах",
+    leaveHint:       "Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно.",
+    senderPlaceholder: "Таны нэр (эсвэл холбоо барих мэдээлэл)",
+    msgPlaceholder:  "Энд явуулах мэдээллээ бичнэ үү",
+    attachFile:      "Файл хавсаргах",
+    changeFile:      "Файл солих",
+    leaveSendLabel:  "Захиаг явуулах",
+    // PIN modal
+    pinTitle:        "Өрөөрүү нэвтрэх код",
+    pinPlaceholder:  "6 оронтой PIN",
+    pinCancel:       "Цуцлах",
+    pinJoin:         "Нэгдэх",
+    pinMustBe6:      "PIN 6 оронтой байх ёстой",
+    sessionLabel:    (id) => `Өрөө: ${id}`,
+    // Connection quality
+    connecting:      "Холбогдож байна…",
+    connected:       "Холбогдсон",
+    fair:            "Дунд зэрэг",
+    poor:            "Муу",
+    reconnecting:    "Ахин холбогдож байна…",
+    connFailed:      "Бүтсэнгүй — ахин оролдож байна…",
+    connClosed:      "Холбоо тасарсан",
+    // Attach menu / chat
+    photoImage:      "Зураг / Фото",
+    fileUpload:      "Файл",
+    voiceHint:       "Дуу бичихийн тулд микрофон дарна уу",
+    peerTyping:      "Бичиж байна…",
+    chatPlaceholder: "Мэдээлэл…",
+    // System messages
+    sysConnected:    "Харилцагчдын хооронд шууд холбоос тогтлоо 🔒",
+    sysClosed:       "Холбоос хаагдлаа",
+    sysPeerLeft:     "Харилцагч гарлаа",
+    sysCallEnded:    "Дуудлага дууслаа",
+    sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
+    // Creating room
+    creating:        "Үүсгэж байна…",
+    enterSessionName: "Өрөөний нэр оруулна уу",
+    joiningSession:  (id) => `⏳ "${id}" өрөөнд нэвтэрч байна…`,
+    roomReady:       "✅ Өрөө бэлэн боллоо.",
+    pinCode:         "КОД",
+    pinCodeHint:     "Харилцах хүн энэ КОД-ыг хийж өрөөнд нэвтэрнэ",
+    linkHint:        "Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой (КОД шаардахгүй):",
+    copyBtn:         "Хуулах",
+    copiedBtn:       "✓ Хуулагдсан!",
+    // Call
+    videoCallingOut: "📹 Видео дуудлага хийж байна…",
+    voiceCallingOut: "📞 Дуудлага хийж байна…",
+    videoConnecting: "📹 Холбогдож байна…",
+    voiceConnecting: "📞 Холбогдож байна…",
+    callConnected:   "Холбогдсон",
+    incomingVideo:   "Видео",
+    incomingVoice:   "Дуу",
+    incomingCall:    (kind) => `Ирж буй ${kind} дуудлага — зөвшөөрөх үү?`,
+    // Voice record
+    recordVoice:     "Дуу бичих",
+    stopRecord:      "Зогсоох & илгээх",
+    micDenied:       "Микрофон ашиглах эрхийг татгалзлаа",
+    // Leave message status
+    writeFirst:      "Эхлэн мэдээлэл бичнэ үү.",
+    sending:         "Илгээж байна…",
+    msgSent:         "✓ Мэдээлэл илгээгдлээ!",
+    networkErr:      "Сүлжээний алдаа. Холболтоо шалгана уу.",
+    // Binary transfer
+    receiving:       "Хүлээн авч байна…",
+    download:        "Татах",
+    image:           "Зураг",
+    // Auto-join errors
+    couldNotJoin:    (msg) => `❌ Нэгдэж чадсангүй: ${msg}`,
+    sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
+  },
+  en: {
+    modalTitle:      "Direct Connection",
+    modalDesc:       "This link was created to communicate without sharing your information through any third party.",
+    modalBtn:        "Approve & Continue",
+    lobbyTitle:      "Direct Connection",
+    createLabel:     "Create a New Room",
+    sessionPlaceholder: "Enter room name",
+    createBtnLabel:  "Create Room",
+    roomsLabel:      "Active Rooms",
+    refreshBtnLabel: "Refresh",
+    noRooms:         "No active rooms",
+    joinBtn:         "Join",
+    sessionMeta:     (ago) => `Created ${ago} ago`,
+    timeS:           (n) => `${n}s`,
+    timeM:           (n) => `${n}m`,
+    timeH:           (n) => `${n}h`,
+    leaveLabel:      "Send a Message to Email",
+    leaveHint:       "If direct connection is unavailable, you can send a message to my email.",
+    senderPlaceholder: "Your name (or contact info)",
+    msgPlaceholder:  "Write your message here",
+    attachFile:      "Attach file",
+    changeFile:      "Change file",
+    leaveSendLabel:  "Send Message",
+    pinTitle:        "Room Access Code",
+    pinPlaceholder:  "6-digit PIN",
+    pinCancel:       "Cancel",
+    pinJoin:         "Join",
+    pinMustBe6:      "PIN must be 6 digits",
+    sessionLabel:    (id) => `Session: ${id}`,
+    connecting:      "Connecting…",
+    connected:       "Connected",
+    fair:            "Fair",
+    poor:            "Poor",
+    reconnecting:    "Reconnecting…",
+    connFailed:      "Failed — retrying…",
+    connClosed:      "Disconnected",
+    photoImage:      "Photo / Image",
+    fileUpload:      "File",
+    voiceHint:       "Tap mic to record voice",
+    peerTyping:      "Peer is typing…",
+    chatPlaceholder: "Message…",
+    sysConnected:    "End-to-end encrypted connection established 🔒",
+    sysClosed:       "Connection closed",
+    sysPeerLeft:     "Peer disconnected",
+    sysCallEnded:    "Call ended",
+    sysCallFailed:   (msg) => `Call failed — ${msg}`,
+    creating:        "Creating…",
+    enterSessionName: "Enter a session name",
+    joiningSession:  (id) => `⏳ Joining session "${id}"…`,
+    roomReady:       "✅ Room is ready.",
+    pinCode:         "PIN",
+    pinCodeHint:     "Share this PIN with your contact to enter the room",
+    linkHint:        "Or send this link for direct access (no PIN needed):",
+    copyBtn:         "Copy",
+    copiedBtn:       "✓ Copied!",
+    videoCallingOut: "📹 Video calling…",
+    voiceCallingOut: "📞 Voice calling…",
+    videoConnecting: "📹 Connecting…",
+    voiceConnecting: "📞 Connecting…",
+    callConnected:   "Connected",
+    incomingVideo:   "Video",
+    incomingVoice:   "Voice",
+    incomingCall:    (kind) => `Incoming ${kind} call — accept?`,
+    recordVoice:     "Record voice",
+    stopRecord:      "Tap to stop & send",
+    micDenied:       "Microphone access denied",
+    writeFirst:      "Please write a message first.",
+    sending:         "Sending…",
+    msgSent:         "✓ Message sent!",
+    networkErr:      "Network error. Check connection.",
+    receiving:       "Receiving…",
+    download:        "Download",
+    image:           "Image",
+    couldNotJoin:    (msg) => `❌ Could not join: ${msg}`,
+    sessionExpired:  "The session may have expired.",
+  }
+};
+
+/** Get a plain string from the current language */
+function t(key) {
+  return I18N[LANG][key] ?? I18N.en[key] ?? key;
+}
+
+/** Update all static DOM elements tagged with data-i18n / data-i18n-ph */
+function applyI18n() {
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const key = el.dataset.i18n;
+    const val = I18N[LANG][key];
+    if (typeof val === "string") el.textContent = val;
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => {
+    const key = el.dataset.i18nPh;
+    const val = I18N[LANG][key];
+    if (typeof val === "string") el.placeholder = val;
+  });
+  // lang toggle active state
+  document.querySelectorAll(".lang-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.lang === LANG);
+  });
+  // update document lang attribute
+  document.documentElement.lang = LANG === "mn" ? "mn" : "en";
+  // re-render session list so timeAgo labels update
+  renderSessionList(_lastSessionList);
+  // update voice record button title
+  if (voiceRecordBtn) voiceRecordBtn.title = t("recordVoice");
+  // update typing indicator if visible
+  if (typingIndicator && !typingIndicator.classList.contains("hidden")) {
+    typingIndicator.textContent = t("peerTyping");
+  }
+}
+
+/* ── Language switcher ───────────────────────── */
+document.querySelectorAll(".lang-btn").forEach(btn => {
+  btn.onclick = () => {
+    LANG = btn.dataset.lang;
+    localStorage.setItem("lang", LANG);
+    applyI18n();
+  };
+});
 
 /* ── DOM refs ────────────────────────────────── */
 const overlay          = document.getElementById("overlay");
@@ -74,8 +282,8 @@ const leaveStatus      = document.getElementById("leaveStatus");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
-let pc              = null;        // data channel peer connection
-let callPc          = null;        // SEPARATE peer connection for calls
+let pc              = null;
+let callPc          = null;
 let dataChannel     = null;
 let currentSession  = null;
 let isConnecting    = false;
@@ -94,14 +302,14 @@ const pendingAcks   = {};
 let typingTimeout   = null;
 let peerTyping      = false;
 
-// Binary transfer receive buffers — shared by files, images, voice
-// transferId → { chunks[], name, size, mimeType, kind: "file"|"image"|"voice" }
+let _lastSessionList = [];  // cache for re-render on language change
+
 const recvBuffers = {};
 
 const WS_URL        = "wss://direct-connection.onrender.com";
 const SERVER_URL    = "https://direct-connection.onrender.com";
-const CHUNK_SIZE    = 65536; // 64 KB — faster transfers, still safe for modern browsers
-const MAX_DC_MSG    = 200000; // ~200 KB — safety cap for single JSON messages
+const CHUNK_SIZE    = 65536;
+const MAX_DC_MSG    = 200000;
 
 const ICE_CONFIG = {
   iceServers: [
@@ -112,6 +320,9 @@ const ICE_CONFIG = {
   ],
   iceTransportPolicy: "all"
 };
+
+/* ── Apply i18n on load ─────────────────────── */
+applyI18n();
 
 /* ══════════════════════════════════════════════
    APPROVAL / AUTO-JOIN
@@ -137,7 +348,7 @@ function checkAutoJoin() {
   _autoJoinSent = true;
   isConnecting = true;
   setLobbyButtons(true);
-  createInfo.innerHTML = `<span style="color:#7dd3fc">⏳ Joining session "<strong>${_autoSessionId}</strong>"…</span>`;
+  createInfo.innerHTML = `<span style="color:#7dd3fc">${I18N[LANG].joiningSession(_autoSessionId)}</span>`;
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
 }
 
@@ -168,20 +379,21 @@ function requestSessionList() { wsSend({ type: "list-sessions" }); }
 refreshBtn.onclick = requestSessionList;
 
 function renderSessionList(sessions) {
-  if (!sessions || !sessions.length) {
-    sessionsList.innerHTML = '<div class="empty-state">Одоогоор идэвхтэй өрөө байхгүй</div>';
+  _lastSessionList = sessions || [];
+  if (!_lastSessionList.length) {
+    sessionsList.innerHTML = `<div class="empty-state">${t("noRooms")}</div>`;
     return;
   }
   sessionsList.innerHTML = "";
-  sessions.forEach(({ sessionId, createdAt }) => {
+  _lastSessionList.forEach(({ sessionId, createdAt }) => {
     const item = document.createElement("div");
     item.className = "session-item";
     item.innerHTML = `
       <div class="session-item-info">
         <div class="session-item-name">📡 ${sessionId}</div>
-        <div class="session-item-meta">Created ${timeAgo(createdAt)}</div>
+        <div class="session-item-meta">${I18N[LANG].sessionMeta(timeAgo(createdAt))}</div>
       </div>
-      <button class="join-btn" data-id="${sessionId}">Орох</button>`;
+      <button class="join-btn" data-id="${sessionId}">${t("joinBtn")}</button>`;
     item.querySelector(".join-btn").onclick = () => openPinModal(sessionId);
     sessionsList.appendChild(item);
   });
@@ -189,18 +401,18 @@ function renderSessionList(sessions) {
 
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s/60)}m ago`;
-  return `${Math.floor(s/3600)}h ago`;
+  if (s < 60)   return I18N[LANG].timeS(s);
+  if (s < 3600) return I18N[LANG].timeM(Math.floor(s / 60));
+  return I18N[LANG].timeH(Math.floor(s / 3600));
 }
 
 createBtn.onclick = () => {
   const sessionId = sessionIdInput.value.trim();
-  if (!sessionId) { alert("Enter a session name"); return; }
+  if (!sessionId) { alert(t("enterSessionName")); return; }
   if (isConnecting) return;
   isConnecting = true;
   createBtn.disabled = true;
-  createInfo.textContent = "Creating…";
+  createInfo.textContent = t("creating");
   wsSend({ type: "create-session", sessionId });
 };
 
@@ -209,7 +421,7 @@ let pendingJoinId = null;
 
 function openPinModal(sessionId) {
   pendingJoinId = sessionId;
-  pinSessionLabel.textContent = `Session: ${sessionId}`;
+  pinSessionLabel.textContent = I18N[LANG].sessionLabel(sessionId);
   pinInput.value = "";
   pinError.textContent = "";
   pinOverlay.classList.remove("hidden");
@@ -222,7 +434,7 @@ pinInput.addEventListener("keydown", e => { if (e.key === "Enter") attemptJoin()
 
 function attemptJoin() {
   const pin = pinInput.value.trim();
-  if (pin.length !== 6) { pinError.textContent = "PIN must be 6 digits"; return; }
+  if (pin.length !== 6) { pinError.textContent = t("pinMustBe6"); return; }
   pinError.textContent = "";
   pinJoinBtn.disabled = true;
   wsSend({ type: "join-session", sessionId: pendingJoinId, pin });
@@ -255,14 +467,13 @@ function createPeerConnection() {
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
     console.log("ICE:", s);
-    if (s === "checking")                   setQuality("⬤ Холбогдож байна…", "");
-    if (s === "connected" || s === "completed") { setQuality("⬤ Холбогдсон", "connected"); startStatsPolling(); }
-    if (s === "disconnected")               { setQuality("⬤ Ахин холбогдож байна…", "сул"); pc.restartIce(); }
-    if (s === "failed")                     { setQuality("⬤ Бүтсэнгүй — ахин оролдож байна…", "Бүтсэнгүй"); handleFullRenegotiation(); }
-    if (s === "closed")                     setQuality("⬤ Холбоо тасарсан", "Бүтсэнгүй");
+    if (s === "checking")                        setQuality(`⬤ ${t("connecting")}`, "");
+    if (s === "connected" || s === "completed")  { setQuality(`⬤ ${t("connected")}`, "connected"); startStatsPolling(); }
+    if (s === "disconnected")                    { setQuality(`⬤ ${t("reconnecting")}`, "poor"); pc.restartIce(); }
+    if (s === "failed")                          { setQuality(`⬤ ${t("connFailed")}`, "failed"); handleFullRenegotiation(); }
+    if (s === "closed")                          setQuality(`⬤ ${t("connClosed")}`, "failed");
   };
 
-  // ontrack here handles remote media from callPc — set on callPc below
   pc.ondatachannel = ({ channel }) => { dataChannel = channel; setupDataChannel(); };
 }
 
@@ -279,7 +490,12 @@ async function handleFullRenegotiation() {
 function waitForICEGathering(peerConn) {
   return new Promise(resolve => {
     if (peerConn.iceGatheringState === "complete") return resolve();
-    const fn = () => { if (peerConn.iceGatheringState === "complete") { peerConn.removeEventListener("icegatheringstatechange", fn); resolve(); } };
+    const fn = () => {
+      if (peerConn.iceGatheringState === "complete") {
+        peerConn.removeEventListener("icegatheringstatechange", fn);
+        resolve();
+      }
+    };
     peerConn.addEventListener("icegatheringstatechange", fn);
     setTimeout(() => { peerConn.removeEventListener("icegatheringstatechange", fn); resolve(); }, 5000);
   });
@@ -292,12 +508,12 @@ function setupDataChannel() {
     sendBtn.disabled = false;
     voiceCallBtn.disabled = false;
     videoCallBtn.disabled = false;
-    appendSys("Харилцагчдын хооронд шууд холбоос тогтлоо 🔒");
+    appendSys(t("sysConnected"));
   };
 
   dataChannel.onclose = () => {
     sendBtn.disabled = true;
-    appendSys("Холбоос хаагдлаа");
+    appendSys(t("sysClosed"));
   };
 
   dataChannel.onerror = e => console.error("DC error", e);
@@ -329,30 +545,30 @@ async function handleSignaling(data) {
 
       createInfo.style.textAlign = "left";
       createInfo.innerHTML = `
-        <div style="text-align:center;margin-bottom:14px">✅ Өрөө бэлэн боллоо.</div>
+        <div style="text-align:center;margin-bottom:14px">${t("roomReady")}</div>
         <div style="background:#12151c;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center">
-          <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">КОД</div>
+          <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">${t("pinCode")}</div>
           <div style="font-size:28px;font-weight:700;letter-spacing:10px;color:#fff">${data.pin}</div>
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Харилцах хүн энэ КОД-ыг хийж өрөөнд нэвтэрнэ</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">${t("pinCodeHint")}</div>
         </div>
-        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой (КОД шаардахгүй):</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">${t("linkHint")}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <input id="shareUrlInput" type="text" value="${shareUrl}" readonly
             style="font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a">
           <button id="copyLinkBtn"
             style="width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0">
-            Copy
+            ${t("copyBtn")}
           </button>
         </div>`;
 
       document.getElementById("copyLinkBtn").onclick = () => {
         navigator.clipboard.writeText(shareUrl).then(() => {
-          document.getElementById("copyLinkBtn").textContent = "✓ Copied!";
-          setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = "Хуулах"; }, 2000);
+          document.getElementById("copyLinkBtn").textContent = t("copiedBtn");
+          setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = t("copyBtn"); }, 2000);
         }).catch(() => {
           document.getElementById("shareUrlInput").select();
           document.execCommand("copy");
-          document.getElementById("copyLinkBtn").textContent = "✓ Хуулагдсан!";
+          document.getElementById("copyLinkBtn").textContent = t("copiedBtn");
         });
       };
 
@@ -427,7 +643,6 @@ async function handleSignaling(data) {
       await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
       break;
 
-    /* ── Call signaling — uses callPc, not pc ── */
     case "call-offer":
       await handleIncomingCallOffer(data);
       break;
@@ -435,7 +650,7 @@ async function handleSignaling(data) {
     case "call-answer":
       if (callPc) {
         await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        callStatusLabel.textContent = "Connected";
+        callStatusLabel.textContent = t("callConnected");
       }
       break;
 
@@ -446,7 +661,7 @@ async function handleSignaling(data) {
       break;
 
     case "peer-disconnected":
-      appendSys("Харилцагч гарлаа");
+      appendSys(t("sysPeerLeft"));
       endCall(false);
       closePeerConnection();
       break;
@@ -467,8 +682,11 @@ async function handleSignaling(data) {
 
     case "pin-error":
       if (_isAutoJoin) {
-        createInfo.innerHTML = `<span style="color:#f87171">❌ Could not join: ${data.message}<br>
-          <small style="color:#9ca3af">The session may have expired.</small></span>`;
+        createInfo.innerHTML = `
+          <span style="color:#f87171">
+            ${I18N[LANG].couldNotJoin(data.message)}<br>
+            <small style="color:#9ca3af">${t("sessionExpired")}</small>
+          </span>`;
         setLobbyButtons(false);
         isConnecting = false;
       } else {
@@ -487,7 +705,7 @@ function switchToChat(sessionId) {
   lobbyScreen.classList.add("hidden");
   chatScreen.classList.remove("hidden");
   chatSessionLabel.textContent = sessionId;
-  setQuality("⬤ Connecting…", "");
+  setQuality(`⬤ ${t("connecting")}`, "");
   chatMessages.innerHTML = "";
   sendBtn.disabled = true;
   voiceCallBtn.disabled = true;
@@ -531,11 +749,12 @@ function startStatsPolling() {
       if (rtt !== null) {
         const ms = Math.round(rtt * 1000);
         parts.push(`RTT: ${ms}ms`);
-        setQuality(ms < 80 ? "⬤ Connected" : ms < 250 ? "⬤ Fair" : "⬤ Poor",
-                   ms < 80 ? "connected" : "poor");
+        if (ms < 80)       setQuality(`⬤ ${t("connected")}`, "connected");
+        else if (ms < 250) setQuality(`⬤ ${t("fair")}`, "poor");
+        else               setQuality(`⬤ ${t("poor")}`, "poor");
       }
-      if (sent) parts.push(`↑ ${fmtBytes(sent)}`);
-      if (recv) parts.push(`↓ ${fmtBytes(recv)}`);
+      if (sent)  parts.push(`↑ ${fmtBytes(sent)}`);
+      if (recv)  parts.push(`↓ ${fmtBytes(recv)}`);
       if (ctype) parts.push(`via: ${ctype}`);
       statsBar.textContent = parts.join("   ");
     } catch (_) {}
@@ -543,7 +762,7 @@ function startStatsPolling() {
 }
 
 function fmtBytes(b) {
-  if (b < 1024) return `${b}B`;
+  if (b < 1024)    return `${b}B`;
   if (b < 1048576) return `${(b/1024).toFixed(1)}KB`;
   return `${(b/1048576).toFixed(1)}MB`;
 }
@@ -600,17 +819,20 @@ function handleTextMessage(data) {
       break;
 
     case "typing":
-      if (!peerTyping) { peerTyping = true; typingIndicator.classList.remove("hidden"); }
+      if (!peerTyping) {
+        peerTyping = true;
+        typingIndicator.textContent = t("peerTyping");
+        typingIndicator.classList.remove("hidden");
+      }
       break;
 
     case "typing-stop":
-      peerTyping = false; typingIndicator.classList.add("hidden");
+      peerTyping = false;
+      typingIndicator.classList.add("hidden");
       break;
 
     case "transfer-meta":
-      // Start of a binary transfer (file, image, or voice)
       recvBuffers[data.id] = { chunks: [], name: data.name, size: data.size, mimeType: data.mimeType, kind: data.kind };
-      // Create placeholder for ALL kinds on receiver side
       if (data.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
       if (data.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
       if (data.kind === "voice") appendVoicePlaceholder("peer", data.id);
@@ -620,14 +842,13 @@ function handleTextMessage(data) {
       assembleTransfer(data.id);
       break;
 
-    /* Call signaling over DataChannel */
     case "call-request":
       handleCallRequest(data);
       break;
 
     case "call-reject":
       endCall(false);
-      appendSys("Call ended");
+      appendSys(t("sysCallEnded"));
       break;
 
     case "call-accept":
@@ -638,12 +859,9 @@ function handleTextMessage(data) {
 
 /* ══════════════════════════════════════════════
    BINARY TRANSFER PROTOCOL
-   Used for: files, images, voice notes
-   Each message: [ 36 bytes transferId ][ N bytes chunk ]
 ══════════════════════════════════════════════ */
 
 function makeTransferId() {
-  // produces exactly 36 char UUID
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
     const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
     return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
@@ -651,20 +869,18 @@ function makeTransferId() {
 }
 
 async function sendBinary(file, kind) {
-  // kind: "file" | "image" | "voice"
   if (!dcReady()) return;
-  const id = makeTransferId(); // exactly 36 chars
+  const id = makeTransferId();
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
   dcSend({ type: "transfer-meta", id, name: file.name || "voice.webm", size: file.size, mimeType: file.type || "audio/webm", kind, totalChunks });
 
-  // Sender already has the data — show immediately using a local object URL
   const localUrl = URL.createObjectURL(file);
   if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
   if (kind === "image") resolveImageNow("me", localUrl, file.name);
   if (kind === "voice") resolveVoiceNow("me", localUrl);
 
-  const idBytes = new TextEncoder().encode(id); // always 36 bytes
+  const idBytes = new TextEncoder().encode(id);
   const ab = await file.arrayBuffer();
   for (let i = 0; i < totalChunks; i++) {
     const chunk  = ab.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
@@ -736,6 +952,7 @@ fileInput.onchange = () => {
 ══════════════════════════════════════════════ */
 
 voiceRecordBtn.addEventListener("click", toggleVoiceRecord);
+voiceRecordBtn.title = t("recordVoice");
 
 let _isRecording = false;
 
@@ -743,7 +960,6 @@ async function toggleVoiceRecord() {
   if (!dcReady()) return;
 
   if (!_isRecording) {
-    /* ── Start recording ── */
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       voiceChunks   = [];
@@ -758,20 +974,19 @@ async function toggleVoiceRecord() {
         sendBinary(file, "voice");
         _isRecording = false;
         voiceRecordBtn.classList.remove("recording");
-        voiceRecordBtn.title = "Record voice";
+        voiceRecordBtn.title = t("recordVoice");
       };
 
       mediaRecorder.start();
       _isRecording = true;
       voiceRecordBtn.classList.add("recording");
-      voiceRecordBtn.title = "Tap to stop & send";
+      voiceRecordBtn.title = t("stopRecord");
 
     } catch (_) {
-      alert("Microphone access denied");
+      alert(t("micDenied"));
     }
 
   } else {
-    /* ── Stop and send ── */
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
       mediaRecorder.stop();
     }
@@ -779,9 +994,7 @@ async function toggleVoiceRecord() {
 }
 
 /* ══════════════════════════════════════════════
-   CALLS — separate callPc for media
-   Signaling: call-request/accept/reject via DataChannel
-              call-offer/answer/ice via WebSocket (needs relay)
+   CALLS
 ══════════════════════════════════════════════ */
 
 voiceCallBtn.onclick = () => requestCall(false);
@@ -790,21 +1003,19 @@ videoCallBtn.onclick = () => requestCall(true);
 function requestCall(withVideo) {
   if (!dcReady()) return;
   dcSend({ type: "call-request", withVideo });
-  showCallOverlay(withVideo ? "📹 Video calling…" : "📞 Voice calling…", withVideo);
+  showCallOverlay(withVideo ? t("videoCallingOut") : t("voiceCallingOut"), withVideo);
 }
 
 function handleCallRequest(data) {
-  const kind   = data.withVideo ? "Video" : "Voice";
-  const accept = confirm(`Incoming ${kind} call — accept?`);
+  const kind   = data.withVideo ? t("incomingVideo") : t("incomingVoice");
+  const accept = confirm(I18N[LANG].incomingCall(kind));
   if (!accept) { dcSend({ type: "call-reject" }); return; }
   dcSend({ type: "call-accept", withVideo: data.withVideo });
-  showCallOverlay("Connecting…", data.withVideo);
-  // Caller (who sent call-request) will now initiate the WebRTC offer
+  showCallOverlay(t("connecting"), data.withVideo);
 }
 
 async function initiateCallOffer(withVideo) {
-  // Called on the side that originally requested the call
-  showCallOverlay(withVideo ? "📹 Connecting…" : "📞 Connecting…", withVideo);
+  showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
     await setupCallPc(withVideo);
     const offer = await callPc.createOffer();
@@ -814,13 +1025,12 @@ async function initiateCallOffer(withVideo) {
   } catch (e) {
     console.error("Call offer error:", e);
     endCall(false);
-    appendSys("Call failed — " + e.message);
+    appendSys(I18N[LANG].sysCallFailed(e.message));
   }
 }
 
 async function handleIncomingCallOffer(data) {
-  // Called on the side that accepted the call
-  showCallOverlay("Connecting…", data.withVideo);
+  showCallOverlay(t("connecting"), data.withVideo);
   try {
     await setupCallPc(data.withVideo);
     await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -828,33 +1038,30 @@ async function handleIncomingCallOffer(data) {
     await callPc.setLocalDescription(answer);
     await waitForICEGathering(callPc);
     wsSend({ type: "call-answer", answer: callPc.localDescription, sessionId: currentSession.sessionId });
-    callStatusLabel.textContent = "Connected";
+    callStatusLabel.textContent = t("callConnected");
   } catch (e) {
     console.error("Call answer error:", e);
     endCall(false);
-    appendSys("Call failed — " + e.message);
+    appendSys(I18N[LANG].sysCallFailed(e.message));
   }
 }
 
 function setupCallPc(withVideo) {
   return new Promise(async (resolve, reject) => {
     try {
-      closeCallPc(); // close any previous call PC
+      closeCallPc();
 
       callPc = new RTCPeerConnection(ICE_CONFIG);
 
-      // ICE candidates for call go through WebSocket relay
       callPc.onicecandidate = ({ candidate }) => {
         if (candidate) wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
       };
 
-      // Remote media track → show in remoteVideo
       callPc.ontrack = ({ streams }) => {
         remoteVideo.srcObject = streams[0];
-        callStatusLabel.textContent = "Connected";
+        callStatusLabel.textContent = t("callConnected");
       };
 
-      // Get local media and add to callPc
       localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
       localVideo.srcObject = localStream;
       localStream.getTracks().forEach(track => callPc.addTrack(track, localStream));
@@ -884,14 +1091,18 @@ toggleMuteBtn.onclick = () => {
   if (!localStream) return;
   isMuted = !isMuted;
   localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
-  toggleMuteBtn.innerHTML = isMuted ? '<i class="ti ti-microphone-off" aria-hidden="true"></i>' : '<i class="ti ti-microphone" aria-hidden="true"></i>';
+  toggleMuteBtn.innerHTML = isMuted
+    ? '<i class="ti ti-microphone-off" aria-hidden="true"></i>'
+    : '<i class="ti ti-microphone" aria-hidden="true"></i>';
 };
 
 toggleCamBtn.onclick = () => {
   if (!localStream) return;
   isCamOff = !isCamOff;
   localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
-  toggleCamBtn.innerHTML = isCamOff ? '<i class="ti ti-camera-off" aria-hidden="true"></i>' : '<i class="ti ti-camera" aria-hidden="true"></i>';
+  toggleCamBtn.innerHTML = isCamOff
+    ? '<i class="ti ti-camera-off" aria-hidden="true"></i>'
+    : '<i class="ti ti-camera" aria-hidden="true"></i>';
 };
 
 endCallBtn.onclick = () => endCall(true);
@@ -927,7 +1138,6 @@ function appendBubble(who, text) {
   bubble.className = "bubble";
   bubble.textContent = text;
   row.appendChild(bubble);
-  /* Timestamp outside bubble */
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
@@ -937,7 +1147,6 @@ function appendBubble(who, text) {
   return row;
 }
 
-/* Immediate bubble — used by sender who already has the data */
 function resolveImageNow(who, url, name) {
   const row    = document.createElement("div");
   row.className = `bubble-row ${who}`;
@@ -983,7 +1192,7 @@ function appendImagePlaceholder(who, id, name) {
   row.dataset.tid = id;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerHTML = `<div style="color:#9ca3af;font-size:13px">🖼️ ${name || "Image"} — receiving…</div>`;
+  bubble.innerHTML = `<div style="color:#9ca3af;font-size:13px">🖼️ ${name || t("image")} — ${t("receiving")}</div>`;
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
@@ -1002,7 +1211,6 @@ function resolveImagePlaceholder(id, url, name) {
   img.onclick = () => window.open(url, "_blank");
   bubble.innerHTML = "";
   bubble.appendChild(img);
-  /* meta outside bubble */
   let meta = row.querySelector(".bubble-meta");
   if (!meta) { meta = document.createElement("div"); meta.className = "bubble-meta"; row.appendChild(meta); }
   meta.textContent = now();
@@ -1022,8 +1230,8 @@ function appendFileBubble(who, url, name, size, id) {
         <div class="file-name">${name}</div>
         <div class="file-size">${fmtBytes(size)}</div>
         ${url
-          ? `<a href="${url}" download="${name}">Download</a>`
-          : `<span style="color:#94a3b8;font-size:12px" class="file-pending">Receiving…</span>`}
+          ? `<a href="${url}" download="${name}">${t("download")}</a>`
+          : `<span style="color:#94a3b8;font-size:12px" class="file-pending">${t("receiving")}</span>`}
       </div>
     </div>`;
   row.appendChild(bubble);
@@ -1039,7 +1247,7 @@ function resolveFileBubble(id, url, name) {
   const row = chatMessages.querySelector(`[data-tid="${id}"]`);
   if (!row) return;
   const pending = row.querySelector(".file-pending");
-  if (pending) pending.outerHTML = `<a href="${url}" download="${name}">Download</a>`;
+  if (pending) pending.outerHTML = `<a href="${url}" download="${name}">${t("download")}</a>`;
 }
 
 function appendVoicePlaceholder(who, id) {
@@ -1048,7 +1256,7 @@ function appendVoicePlaceholder(who, id) {
   row.dataset.tid = id;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerHTML = `<div class="voice-bubble"><span>🎤</span><span style="color:#9ca3af;font-size:12px">Receiving…</span></div>`;
+  bubble.innerHTML = `<div class="voice-bubble"><span>🎤</span><span style="color:#9ca3af;font-size:12px">${t("receiving")}</span></div>`;
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
@@ -1079,7 +1287,6 @@ function appendSys(text) {
 }
 
 function addAckTick(row, msgId) {
-  /* meta is now a direct child of row, outside bubble */
   let meta = row.querySelector(".bubble-meta");
   if (!meta) {
     meta = document.createElement("div");
@@ -1105,7 +1312,7 @@ function now() {
 function scrollBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
 
 /* ══════════════════════════════════════════════
-   LEAVE A MESSAGE — Resend email via server
+   LEAVE A MESSAGE
 ══════════════════════════════════════════════ */
 
 leaveFileBtn.onclick = () => leaveFile.click();
@@ -1113,14 +1320,16 @@ leaveFileBtn.onclick = () => leaveFile.click();
 leaveFile.onchange = () => {
   const f = leaveFile.files[0];
   leaveFileName.textContent = f ? `${f.name} (${fmtBytes(f.size)})` : "";
-  leaveFileBtn.textContent  = f ? "📎 Change file" : "📎 Attach file";
+  // Update the text span inside leaveFileBtn
+  const span = leaveFileBtn.querySelector("span[data-i18n]");
+  if (span) span.textContent = f ? t("changeFile") : t("attachFile");
 };
 
 leaveSendBtn.onclick = async () => {
   const msg = leaveMessage.value.trim();
-  if (!msg) { setLeaveStatus("Please write a message first.", "err"); return; }
+  if (!msg) { setLeaveStatus(t("writeFirst"), "err"); return; }
   leaveSendBtn.disabled = true;
-  setLeaveStatus("Sending…", "sending");
+  setLeaveStatus(t("sending"), "sending");
 
   const fd = new FormData();
   fd.append("message", msg);
@@ -1132,17 +1341,18 @@ leaveSendBtn.onclick = async () => {
     const res  = await fetch(`${SERVER_URL}/api/send-message`, { method: "POST", body: fd });
     const json = await res.json();
     if (res.ok && json.ok) {
-      setLeaveStatus("✓ Message sent!", "ok");
+      setLeaveStatus(t("msgSent"), "ok");
       leaveMessage.value = "";
       senderName.value   = "";
       leaveFile.value    = "";
       leaveFileName.textContent = "";
-      leaveFileBtn.textContent  = "📎 Attach file";
+      const span = leaveFileBtn.querySelector("span[data-i18n]");
+      if (span) span.textContent = t("attachFile");
     } else {
       setLeaveStatus((json.error || "Failed") + (json.detail ? ": " + json.detail : ""), "err");
     }
   } catch (_) {
-    setLeaveStatus("Network error. Check connection.", "err");
+    setLeaveStatus(t("networkErr"), "err");
   } finally {
     leaveSendBtn.disabled = false;
   }
@@ -1164,8 +1374,6 @@ function dcReady() {
 function dcSend(obj) {
   if (dcReady()) dataChannel.send(JSON.stringify(obj));
 }
-
-/* Also relay call-ice over WebSocket on server — add to server.js handler */
 
 /* ── Auto-connect for hash-based link joins ── */
 if (_isAutoJoin) connectWebSocket();

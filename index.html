@@ -1,62 +1,108 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="mn">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Шууд холбоос</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="style.css">
+  <style>
+    .lang-switcher {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1001;
+      display: flex;
+      gap: 2px;
+      background: rgba(15,23,42,0.85);
+      border-radius: 8px;
+      padding: 3px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid #334155;
+    }
+    .lang-btn {
+      width: auto !important;
+      min-height: 26px !important;
+      padding: 0 10px !important;
+      font-size: 11px !important;
+      font-weight: 700 !important;
+      border-radius: 5px !important;
+      background: transparent !important;
+      color: #6b7280 !important;
+      margin: 0 !important;
+      letter-spacing: 0.5px;
+      transition: background 0.15s, color 0.15s !important;
+    }
+    .lang-btn.active {
+      background: #2563eb !important;
+      color: #fff !important;
+    }
+    .lang-btn:hover:not(.active) {
+      background: rgba(255,255,255,0.07) !important;
+      color: #e2e8f0 !important;
+    }
+  </style>
 </head>
 <body>
+
+  <!-- Language switcher — always on top -->
+  <div class="lang-switcher" id="langSwitcher">
+    <button class="lang-btn active" data-lang="mn">MN</button>
+    <button class="lang-btn" data-lang="en">EN</button>
+  </div>
 
   <!-- Approval Modal -->
   <div id="overlay" class="overlay">
     <div class="modal">
       <div class="modal-icon">🔒</div>
-      <h2>Шууд холбоос</h2>
-      <p>Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.</p>
-      <button id="approveBtn">Зөвшөөрөх &amp; үргэлжлүүлэх</button>
+      <h2 data-i18n="modalTitle">Шууд холбоос</h2>
+      <p data-i18n="modalDesc">Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.</p>
+      <button id="approveBtn" data-i18n="modalBtn">Зөвшөөрөх &amp; үргэлжлүүлэх</button>
     </div>
   </div>
 
   <!-- LOBBY SCREEN -->
   <div id="lobbyScreen" class="screen">
     <div class="lobby-wrap">
-      <h1 class="lobby-title">Шууд холбогдох хэсэг</h1>
+      <h1 class="lobby-title" data-i18n="lobbyTitle">Шууд холбогдох хэсэг</h1>
 
       <div class="card">
-        <p class="card-label">Шинээр өрөө үүсгэх</p>
-        <input id="sessionId" type="text" placeholder="Өрөөний нэр оруулах">
-        <button id="createBtn">Өрөөг үүсгэх</button>
+        <p class="card-label" data-i18n="createLabel">Шинээр өрөө үүсгэх</p>
+        <input id="sessionId" type="text" data-i18n-ph="sessionPlaceholder" placeholder="Өрөөний нэр оруулах">
+        <button id="createBtn" data-i18n="createBtnLabel">Өрөөг үүсгэх</button>
         <div id="createInfo" class="create-info"></div>
       </div>
 
       <div class="card">
         <p class="card-label">
-          Идэвхтэй байгаа өрөөнүүд
+          <span data-i18n="roomsLabel">Идэвхтэй байгаа өрөөнүүд</span>
           <button id="refreshBtn" class="refresh-btn">
-            <i class="ti ti-refresh" aria-hidden="true"></i> Ахин хайх
+            <i class="ti ti-refresh" aria-hidden="true"></i>
+            <span data-i18n="refreshBtnLabel">Ахин хайх</span>
           </button>
         </p>
-        <div id="sessionsList"><div class="empty-state">Идэвхтэй өрөө байхгүй</div></div>
+        <div id="sessionsList"><div class="empty-state" data-i18n="noRooms">Идэвхтэй өрөө байхгүй</div></div>
       </div>
 
       <!-- Leave a Message -->
       <div class="card">
-        <p class="card-label">Захиа шууд и-мэйлрүү явуулах</p>
-        <p class="leave-msg-hint">Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно.</p>
-        <input id="senderName" type="text" placeholder="Таны нэр (эсвэл холбогдох агуулга)">
-        <textarea id="leaveMessage" placeholder="Энд явуулах мэдээллээ бичнэ үү?" rows="4"
+        <p class="card-label" data-i18n="leaveLabel">Захиа шууд и-мэйлрүү явуулах</p>
+        <p class="leave-msg-hint" data-i18n="leaveHint">Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно.</p>
+        <input id="senderName" type="text" data-i18n-ph="senderPlaceholder" placeholder="Таны нэр (эсвэл холбоо барих мэдээлэл)">
+        <textarea id="leaveMessage" data-i18n-ph="msgPlaceholder" placeholder="Энд явуулах мэдээллээ бичнэ үү" rows="4"
           style="margin-top:10px;border-radius:10px;resize:vertical;min-height:90px"></textarea>
         <div id="leaveFileRow" class="leave-file-row">
           <input type="file" id="leaveFile" class="hidden">
           <button id="leaveFileBtn" class="leave-attach-btn" type="button">
-            <i class="ti ti-paperclip" aria-hidden="true"></i> Attach file
+            <i class="ti ti-paperclip" aria-hidden="true"></i>
+            <span data-i18n="attachFile">Файл хавсаргах</span>
           </button>
           <span id="leaveFileName" class="leave-file-name"></span>
         </div>
         <button id="leaveSendBtn">
-          <i class="ti ti-send" aria-hidden="true"></i> Захиаг явуулах
+          <i class="ti ti-send" aria-hidden="true"></i>
+          <span data-i18n="leaveSendLabel">Захиаг явуулах</span>
         </button>
         <div id="leaveStatus" class="leave-status"></div>
       </div>
@@ -66,12 +112,12 @@
   <!-- JOIN PIN MODAL -->
   <div id="pinOverlay" class="overlay hidden">
     <div class="modal">
-      <h2>Өрөөрүү нэвтрэх код</h2>
+      <h2 data-i18n="pinTitle">Өрөөрүү нэвтрэх код</h2>
       <p id="pinSessionLabel" style="color:#06b6d4;margin:0 0 16px"></p>
-      <input id="pinInput" type="text" maxlength="6" placeholder="6-digit PIN">
+      <input id="pinInput" type="text" maxlength="6" data-i18n-ph="pinPlaceholder" placeholder="6 оронтой PIN">
       <div style="display:flex;gap:10px;margin-top:12px">
-        <button id="pinCancelBtn" style="background:#334155;color:#e2e8f0">Cancel</button>
-        <button id="pinJoinBtn">Join</button>
+        <button id="pinCancelBtn" style="background:#334155;color:#e2e8f0" data-i18n="pinCancel">Цуцлах</button>
+        <button id="pinJoinBtn" data-i18n="pinJoin">Нэгдэх</button>
       </div>
       <div id="pinError" style="color:#ef4444;margin-top:10px;min-height:20px;font-size:13px"></div>
     </div>
@@ -105,7 +151,7 @@
       </button>
       <div class="chat-header-center">
         <div id="chatSessionLabel" class="chat-session-name"></div>
-        <div id="connectionQuality" class="quality-label">⬤ Connecting…</div>
+        <div id="connectionQuality" class="quality-label">⬤ <span data-i18n="connecting">Холбогдож байна…</span></div>
       </div>
       <div class="chat-header-actions">
         <button id="voiceCallBtn" class="icon-btn" aria-label="Voice call" disabled>
@@ -124,7 +170,7 @@
     <div id="chatMessages" class="chat-messages"></div>
 
     <!-- Typing indicator -->
-    <div id="typingIndicator" class="typing-indicator hidden">Peer is typing…</div>
+    <div id="typingIndicator" class="typing-indicator hidden" data-i18n="peerTyping">Бичиж байна…</div>
 
     <!-- Input area -->
     <div class="input-area">
@@ -132,13 +178,16 @@
       <!-- Attach menu -->
       <div id="attachMenu" class="attach-menu hidden">
         <button id="sendImageBtn">
-          <i class="ti ti-photo" aria-hidden="true"></i> Photo / Image
+          <i class="ti ti-photo" aria-hidden="true"></i>
+          <span data-i18n="photoImage">Зураг / Фото</span>
         </button>
         <button id="sendFileBtn">
-          <i class="ti ti-file-upload" aria-hidden="true"></i> File
+          <i class="ti ti-file-upload" aria-hidden="true"></i>
+          <span data-i18n="fileUpload">Файл</span>
         </button>
         <button id="voiceNoteHintBtn">
-          <i class="ti ti-microphone" aria-hidden="true"></i> Tap mic to record voice
+          <i class="ti ti-microphone" aria-hidden="true"></i>
+          <span data-i18n="voiceHint">Дуу бичихийн тулд микрофон дарна уу</span>
         </button>
       </div>
 
@@ -150,10 +199,10 @@
       </button>
 
       <div class="textarea-wrap">
-        <textarea id="messageInput" placeholder="Message…" rows="1"></textarea>
+        <textarea id="messageInput" data-i18n-ph="chatPlaceholder" placeholder="Мэдээлэл…" rows="1"></textarea>
       </div>
 
-      <button id="voiceRecordBtn" class="icon-btn mic-btn" aria-label="Record voice" title="Tap to record voice">
+      <button id="voiceRecordBtn" class="icon-btn mic-btn" aria-label="Record voice">
         <i class="ti ti-microphone" aria-hidden="true"></i>
       </button>
 
@@ -164,6 +213,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=202605171300"></script>
+  <script src="app.js?v=202605181200"></script>
 </body>
 </html>
