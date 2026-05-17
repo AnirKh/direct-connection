@@ -21,7 +21,7 @@
   ─────────────────────────────────────────────
 */
 
-"use strict";
+"use strict"; // v20260517-0742
 
 /* ── Read hash immediately on load ───────────── */
 /* Hash format: #sessionId:token  e.g. #myroom:a3f8xk29qm1z */
