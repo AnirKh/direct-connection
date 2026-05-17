@@ -329,13 +329,13 @@ async function handleSignaling(data) {
 
       createInfo.style.textAlign = "left";
       createInfo.innerHTML = `
-        <div style="text-align:center;margin-bottom:14px">✅ Session ready!</div>
+        <div style="text-align:center;margin-bottom:14px">✅ Өрөө бэлэн боллоо.</div>
         <div style="background:#12151c;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center">
-          <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">PIN</div>
+          <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">КОД</div>
           <div style="font-size:28px;font-weight:700;letter-spacing:10px;color:#fff">${data.pin}</div>
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Share manually with your peer</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Харилцах хүн энэ КОД-ыг хийж өрөөнд нэвтэрнэ</div>
         </div>
-        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">Or share this link (no PIN needed):</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой(КОД шаардахгүй):</div>
         <div style="display:flex;gap:6px;align-items:center">
           <input id="shareUrlInput" type="text" value="${shareUrl}" readonly
             style="font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a">
