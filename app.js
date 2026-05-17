@@ -181,7 +181,7 @@ function renderSessionList(sessions) {
         <div class="session-item-name">📡 ${sessionId}</div>
         <div class="session-item-meta">Created ${timeAgo(createdAt)}</div>
       </div>
-      <button class="join-btn" data-id="${sessionId}">Join</button>`;
+      <button class="join-btn" data-id="${sessionId}">Орох</button>`;
     item.querySelector(".join-btn").onclick = () => openPinModal(sessionId);
     sessionsList.appendChild(item);
   });
@@ -335,7 +335,7 @@ async function handleSignaling(data) {
           <div style="font-size:28px;font-weight:700;letter-spacing:10px;color:#fff">${data.pin}</div>
           <div style="font-size:11px;color:#9ca3af;margin-top:4px">Харилцах хүн энэ КОД-ыг хийж өрөөнд нэвтэрнэ</div>
         </div>
-        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой(КОД шаардахгүй):</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой (КОД шаардахгүй):</div>
         <div style="display:flex;gap:6px;align-items:center">
           <input id="shareUrlInput" type="text" value="${shareUrl}" readonly
             style="font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a">
@@ -348,11 +348,11 @@ async function handleSignaling(data) {
       document.getElementById("copyLinkBtn").onclick = () => {
         navigator.clipboard.writeText(shareUrl).then(() => {
           document.getElementById("copyLinkBtn").textContent = "✓ Copied!";
-          setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = "Copy"; }, 2000);
+          setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = "Хуулах"; }, 2000);
         }).catch(() => {
           document.getElementById("shareUrlInput").select();
           document.execCommand("copy");
-          document.getElementById("copyLinkBtn").textContent = "✓ Copied!";
+          document.getElementById("copyLinkBtn").textContent = "✓ Хуулагдсан!";
         });
       };
 
