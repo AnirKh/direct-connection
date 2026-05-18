@@ -119,6 +119,9 @@ const I18N = {
     // E2E encryption
     sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Хурууны хээ: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
+    // Server wake
+    serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
+    serverReady:     "Сервер бэлэн боллоо.",
   },
   en: {
     modalTitle:      "Direct Connection",
@@ -203,6 +206,9 @@ const I18N = {
     // E2E encryption
     sysE2eReady:     (fp) => `🔐 Encryption active · Fingerprint: ${fp}`,
     e2eWaiting:      "Setting up encryption…",
+    // Server wake
+    serverWaking:    "Server is waking up, please wait…",
+    serverReady:     "Server is ready.",
   }
 };
 
@@ -415,6 +421,46 @@ const SERVER_URL    = "https://direct-connection.onrender.com";
 const CHUNK_SIZE    = 65536;
 const MAX_DC_MSG    = 200000;
 
+/* ══════════════════════════════════════════════
+   SERVER WAKE-UP
+   ─────────────────────────────────────────────
+   Render free tier sleeps after ~15 min idle.
+   On page load we hit /api/ping immediately so
+   the server is warm by the time the user acts.
+   If it takes >2s we surface a notice so the
+   user knows to wait rather than retry-spam.
+══════════════════════════════════════════════ */
+
+let _serverWoke = false;
+
+function wakeServer() {
+  if (_serverWoke) return Promise.resolve();
+  const wakeNoticeTimer = setTimeout(() => {
+    createInfo.innerHTML =
+      `<span style="color:#fbbf24">⏳ ${t("serverWaking")}</span>`;
+  }, 2000);
+
+  return fetch(`${SERVER_URL}/api/ping`, { method: "GET" })
+    .then(() => {
+      clearTimeout(wakeNoticeTimer);
+      _serverWoke = true;
+      // Only replace the notice if we actually showed it
+      if (createInfo.innerHTML.includes("serverWaking") ||
+          createInfo.textContent.includes(t("serverWaking"))) {
+        createInfo.innerHTML =
+          `<span style="color:#4ade80">✓ ${t("serverReady")}</span>`;
+        setTimeout(() => { createInfo.innerHTML = ""; }, 2000);
+      }
+    })
+    .catch(() => {
+      clearTimeout(wakeNoticeTimer);
+      // Silent fail — WS reconnect loop will handle it
+    });
+}
+
+// Fire immediately on script load (before user clicks anything)
+wakeServer();
+
 const ICE_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302"  },
@@ -462,7 +508,19 @@ function checkAutoJoin() {
 
 function connectWebSocket() {
   ws = new WebSocket(WS_URL);
-  ws.onopen    = () => { requestSessionList(); checkAutoJoin(); };
+  ws.onopen    = () => {
+    _serverWoke = true;
+    requestSessionList();
+    checkAutoJoin();
+    // Keep server warm — ping every 10 min so Render doesn't sleep
+    if (!_keepAliveInterval) {
+      _keepAliveInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 10 * 60 * 1000);
+    }
+  };
   ws.onclose   = () => setTimeout(connectWebSocket, 3000);
   ws.onerror   = (e) => console.error("WS error", e);
   ws.onmessage = (ev) => {
@@ -470,6 +528,8 @@ function connectWebSocket() {
     catch (e) { console.error("WS parse error", e); }
   };
 }
+
+let _keepAliveInterval = null;
 
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));

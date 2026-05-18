@@ -41,7 +41,8 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-/* ── CORS headers (GitHub Pages → Render) ─── */
+/* ── Ping endpoint — used by client to wake server ── */
+app.get("/api/ping", (req, res) => res.json({ ok: true }));
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -372,6 +373,8 @@ wss.on("connection", (ws, req) => {
       case "call-ice":           relayToOther(ws, data.sessionId, { type: "call-ice",           candidate: data.candidate }); break;
 
       case "leave-session": cleanupClient(ws); break;
+
+      case "ping": /* keep-alive, no-op */ break;
 
       default: console.log("Unknown msg type:", data.type);
     }
