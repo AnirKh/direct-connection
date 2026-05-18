@@ -41,17 +41,15 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-/* ── CORS headers ───────────────────────────── */
+/* ── Ping endpoint — used by client to wake server ── */
+app.get("/api/ping", (req, res) => res.json({ ok: true }));
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin",  "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-
-/* ── Ping endpoint — used by client to wake server ── */
-app.get("/api/ping", (req, res) => res.json({ ok: true }));
 
 /* ══════════════════════════════════════════════
    POST /api/send-message
