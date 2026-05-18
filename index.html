@@ -93,11 +93,11 @@
         <textarea id="leaveMessage" data-i18n-ph="msgPlaceholder" placeholder="Энд явуулах мэдээллээ бичнэ үү" rows="4"
           style="margin-top:10px;border-radius:10px;resize:vertical;min-height:90px"></textarea>
         <div id="leaveFileRow" class="leave-file-row">
-          <input type="file" id="leaveFile" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none">
-          <label for="leaveFile" id="leaveFileBtn" class="leave-attach-btn">
+          <input type="file" id="leaveFile" class="hidden">
+          <button id="leaveFileBtn" class="leave-attach-btn" type="button">
             <i class="ti ti-paperclip" aria-hidden="true"></i>
             <span data-i18n="attachFile">Файл хавсаргах</span>
-          </label>
+          </button>
           <span id="leaveFileName" class="leave-file-name"></span>
         </div>
         <button id="leaveSendBtn">
