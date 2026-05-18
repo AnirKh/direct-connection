@@ -821,6 +821,7 @@ async function handleSignaling(data) {
 function switchToChat(sessionId) {
   lobbyScreen.classList.add("hidden");
   chatScreen.classList.remove("hidden");
+  document.getElementById("langSwitcher").style.display = "none";
   chatSessionLabel.textContent = sessionId;
   setQuality(`⬤ ${t("connecting")}`, "");
   chatMessages.innerHTML = "";
@@ -839,6 +840,7 @@ leaveBtn.onclick = () => {
   isConnecting = false;
   chatScreen.classList.add("hidden");
   lobbyScreen.classList.remove("hidden");
+  document.getElementById("langSwitcher").style.display = "";
   createInfo.textContent = "";
   createBtn.disabled = false;
   sessionIdInput.value = "";
