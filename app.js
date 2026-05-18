@@ -111,6 +111,14 @@ const I18N = {
     // Auto-join errors
     couldNotJoin:    (msg) => `❌ Нэгдэж чадсангүй: ${msg}`,
     sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
+    // PIN rate limit
+    pinRateLimited:  (s) => `Олон удаа оролдлоо. ${s} секундын дараа дахин оролдоно уу.`,
+    pinAttemptsLeft: (n) => `Буруу PIN. ${n} оролдлого үлдлээ.`,
+    sessionNotFound: "Өрөө олдсонгүй — хугацаа дуусч байж магадгүй.",
+    sessionFull:     "Өрөө дүүрсэн байна.",
+    // E2E encryption
+    sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Хурууны хээ: ${fp}`,
+    e2eWaiting:      "Шифрлэлт тохируулж байна…",
   },
   en: {
     modalTitle:      "Direct Connection",
@@ -187,6 +195,14 @@ const I18N = {
     image:           "Image",
     couldNotJoin:    (msg) => `❌ Could not join: ${msg}`,
     sessionExpired:  "The session may have expired.",
+    // PIN rate limit
+    pinRateLimited:  (s) => `Too many attempts. Try again in ${s}s.`,
+    pinAttemptsLeft: (n) => `Wrong PIN. ${n} attempt(s) remaining.`,
+    sessionNotFound: "Session not found — it may have expired.",
+    sessionFull:     "Session is full.",
+    // E2E encryption
+    sysE2eReady:     (fp) => `🔐 Encryption active · Fingerprint: ${fp}`,
+    e2eWaiting:      "Setting up encryption…",
   }
 };
 
@@ -305,6 +321,94 @@ let peerTyping      = false;
 let _lastSessionList = [];  // cache for re-render on language change
 
 const recvBuffers = {};
+
+/* ══════════════════════════════════════════════
+   E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
+   ─────────────────────────────────────────────
+   Flow:
+     1. dataChannel.onopen → e2eInit()
+        - generates ephemeral ECDH key pair
+        - sends public key JWK to peer: {type:"e2e-pubkey", key:JWK}
+     2. On receiving peer's pubkey → e2eDeriveKey(jwk)
+        - imports peer public key
+        - derives 256-bit AES-GCM shared key
+        - enables send button & shows fingerprint
+     3. Every text message: encrypt with random 96-bit IV
+        - sent as {type:"text", ct:base64, iv:base64, msgId}
+     4. Receiver decrypts before rendering
+══════════════════════════════════════════════ */
+
+let e2eKey      = null;   // CryptoKey AES-GCM 256 (derived)
+let e2eKeyPair  = null;   // ECDH ephemeral key pair
+let e2eReady    = false;
+
+async function e2eInit() {
+  e2eKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveKey"]
+  );
+  const pubJwk = await crypto.subtle.exportKey("jwk", e2eKeyPair.publicKey);
+  // Send over already-open data channel (raw, not through dcSend so we bypass e2eReady guard)
+  if (dataChannel && dataChannel.readyState === "open") {
+    dataChannel.send(JSON.stringify({ type: "e2e-pubkey", key: pubJwk }));
+  }
+}
+
+async function e2eDeriveKey(peerPubJwk) {
+  try {
+    const peerPub = await crypto.subtle.importKey(
+      "jwk", peerPubJwk,
+      { name: "ECDH", namedCurve: "P-256" },
+      true,   // extractable only to compute fingerprint
+      []
+    );
+    e2eKey = await crypto.subtle.deriveKey(
+      { name: "ECDH", public: peerPub },
+      e2eKeyPair.privateKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+    e2eReady = true;
+    sendBtn.disabled = false;
+
+    // Compute a short fingerprint from the peer's raw public key
+    const raw  = await crypto.subtle.exportKey("raw", peerPub);
+    const hash = await crypto.subtle.digest("SHA-256", raw);
+    const fp   = Array.from(new Uint8Array(hash))
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("")
+      .slice(0, 16)
+      .replace(/(.{4})/g, "$1 ")
+      .trim();
+
+    appendSys(I18N[LANG].sysE2eReady(fp));
+  } catch (err) {
+    console.error("E2E key derivation failed:", err);
+    // Fall back — allow sending without app-level encryption (DTLS still protects)
+    e2eReady = false;
+    sendBtn.disabled = false;
+  }
+}
+
+async function e2eEncrypt(plaintext) {
+  const iv      = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plaintext);
+  const ct      = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, e2eKey, encoded);
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  return { ct: b64(ct), iv: b64(iv) };
+}
+
+async function e2eDecrypt(ctB64, ivB64) {
+  const from64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const plain  = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: from64(ivB64) },
+    e2eKey,
+    from64(ctB64)
+  );
+  return new TextDecoder().decode(plain);
+}
 
 const WS_URL        = "wss://direct-connection.onrender.com";
 const SERVER_URL    = "https://direct-connection.onrender.com";
@@ -504,11 +608,15 @@ function waitForICEGathering(peerConn) {
 function setupDataChannel() {
   dataChannel.binaryType = "arraybuffer";
 
-  dataChannel.onopen = () => {
-    sendBtn.disabled = false;
+  dataChannel.onopen = async () => {
+    // sendBtn stays disabled until E2E key exchange completes (usually <100ms)
     voiceCallBtn.disabled = false;
     videoCallBtn.disabled = false;
     appendSys(t("sysConnected"));
+    appendSys(t("e2eWaiting"));
+    e2eReady = false;
+    await e2eInit();
+    // sendBtn enabled in e2eDeriveKey() once shared key is ready
   };
 
   dataChannel.onclose = () => {
@@ -680,20 +788,29 @@ async function handleSignaling(data) {
       }
       break;
 
-    case "pin-error":
+    case "pin-error": {
+      // Translate structured error codes from server
+      let msg;
+      if      (data.code === "rate-limited")  msg = I18N[LANG].pinRateLimited(data.remaining);
+      else if (data.code === "wrong-pin")     msg = I18N[LANG].pinAttemptsLeft(data.attemptsLeft);
+      else if (data.code === "not-found")     msg = t("sessionNotFound");
+      else if (data.code === "full")          msg = t("sessionFull");
+      else                                    msg = data.message || "Error";
+
       if (_isAutoJoin) {
         createInfo.innerHTML = `
           <span style="color:#f87171">
-            ${I18N[LANG].couldNotJoin(data.message)}<br>
+            ${I18N[LANG].couldNotJoin(msg)}<br>
             <small style="color:#9ca3af">${t("sessionExpired")}</small>
           </span>`;
         setLobbyButtons(false);
         isConnecting = false;
       } else {
-        pinError.textContent = data.message;
-        pinJoinBtn.disabled = false;
+        pinError.textContent = msg;
+        pinJoinBtn.disabled  = false;
       }
       break;
+    }
   }
 }
 
@@ -793,25 +910,48 @@ function sendTypingSignal() {
   typingTimeout = setTimeout(() => dcSend({ type: "typing-stop" }), 1500);
 }
 
-function sendTextMessage() {
+async function sendTextMessage() {
   const text = messageInput.value.trim();
   if (!text || !dcReady()) return;
   const msgId = ++msgIdCounter;
-  dcSend({ type: "text", text, msgId });
+
+  if (e2eReady) {
+    const { ct, iv } = await e2eEncrypt(text);
+    dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId }));
+  } else {
+    dataChannel.send(JSON.stringify({ type: "text", text, msgId }));
+  }
+
   const row = appendBubble("me", text);
   addAckTick(row, msgId);
   pendingAcks[msgId] = row;
   messageInput.value = "";
   messageInput.style.height = "auto";
-  dcSend({ type: "typing-stop" });
+  dataChannel.send(JSON.stringify({ type: "typing-stop" }));
 }
 
 function handleTextMessage(data) {
   switch (data.type) {
 
     case "text":
-      appendBubble("peer", data.text);
-      dcSend({ type: "ack", msgId: data.msgId });
+      if (data.ct && e2eReady) {
+        e2eDecrypt(data.ct, data.iv)
+          .then(plain => {
+            appendBubble("peer", plain);
+            dcSend({ type: "ack", msgId: data.msgId });
+          })
+          .catch(err => {
+            console.error("Decrypt failed:", err);
+            appendBubble("peer", "⚠️ [decrypt error]");
+          });
+      } else {
+        appendBubble("peer", data.text ?? "");
+        dcSend({ type: "ack", msgId: data.msgId });
+      }
+      break;
+
+    case "e2e-pubkey":
+      e2eDeriveKey(data.key);
       break;
 
     case "ack":
