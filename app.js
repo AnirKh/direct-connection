@@ -10,9 +10,11 @@
 
 /* ── Read hash immediately ───────────────────── */
 const _hash          = location.hash.slice(1);
-const _hashParts     = _hash.split(":");
-const _autoSessionId = _hashParts[0] || null;
-const _autoToken     = _hashParts[1] || null;
+// FIX: use indexOf(":") instead of split(":") so session names with colons work,
+//      and decodeURIComponent so encoded names (spaces, Unicode, etc.) round-trip correctly.
+const _colonIdx      = _hash.indexOf(":");
+const _autoSessionId = _colonIdx > -1 ? decodeURIComponent(_hash.slice(0, _colonIdx)) : null;
+const _autoToken     = _colonIdx > -1 ? _hash.slice(_colonIdx + 1) : null;
 const _isAutoJoin    = Boolean(_autoSessionId && _autoToken);
 if (_isAutoJoin) history.replaceState({}, "", location.pathname);
 
