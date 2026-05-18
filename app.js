@@ -434,32 +434,23 @@ const MAX_DC_MSG    = 200000;
 let _serverWoke = false;
 
 function wakeServer() {
-  if (_serverWoke) return Promise.resolve();
+  if (_serverWoke) return;
   const wakeNoticeTimer = setTimeout(() => {
     createInfo.innerHTML =
       `<span style="color:#fbbf24">⏳ ${t("serverWaking")}</span>`;
   }, 2000);
 
-  return fetch(`${SERVER_URL}/api/ping`, { method: "GET" })
-    .then(() => {
+  // Abort if server doesn't respond within 60s (Render cold start max)
+  const controller = new AbortController();
+  const timeout    = setTimeout(() => controller.abort(), 60_000);
+
+  fetch(`${SERVER_URL}/api/ping`, { signal: controller.signal })
+    .catch(() => {}) // WS onopen will handle the ready state
+    .finally(() => {
       clearTimeout(wakeNoticeTimer);
-      _serverWoke = true;
-      // Only replace the notice if we actually showed it
-      if (createInfo.innerHTML.includes("serverWaking") ||
-          createInfo.textContent.includes(t("serverWaking"))) {
-        createInfo.innerHTML =
-          `<span style="color:#4ade80">✓ ${t("serverReady")}</span>`;
-        setTimeout(() => { createInfo.innerHTML = ""; }, 2000);
-      }
-    })
-    .catch(() => {
-      clearTimeout(wakeNoticeTimer);
-      // Silent fail — WS reconnect loop will handle it
+      clearTimeout(timeout);
     });
 }
-
-// Fire immediately on script load (before user clicks anything)
-wakeServer();
 
 const ICE_CONFIG = {
   iceServers: [
@@ -482,7 +473,7 @@ if (_isAutoJoin) overlay.classList.add("hidden");
 
 approveBtn.onclick = () => {
   overlay.classList.add("hidden");
-  connectWebSocket();
+  // WS already connecting in background — nothing else needed
 };
 
 function setLobbyButtons(disabled) {
@@ -510,9 +501,15 @@ function connectWebSocket() {
   ws = new WebSocket(WS_URL);
   ws.onopen    = () => {
     _serverWoke = true;
+    // Clear the "waking up" notice — WS open is the true ready signal
+    if (createInfo.innerHTML.includes("⏳")) {
+      createInfo.innerHTML =
+        `<span style="color:#4ade80">✓ ${t("serverReady")}</span>`;
+      setTimeout(() => { if (createInfo.innerHTML.includes("serverReady") ||
+        createInfo.textContent.includes(t("serverReady"))) createInfo.innerHTML = ""; }, 2000);
+    }
     requestSessionList();
     checkAutoJoin();
-    // Keep server warm — ping every 10 min so Render doesn't sleep
     if (!_keepAliveInterval) {
       _keepAliveInterval = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -530,6 +527,11 @@ function connectWebSocket() {
 }
 
 let _keepAliveInterval = null;
+
+// Connect on page load — don't wait for approve click
+// (no data is sent until user approves; WS just warms up)
+connectWebSocket();
+wakeServer();
 
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
