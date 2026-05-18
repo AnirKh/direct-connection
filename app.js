@@ -1519,8 +1519,6 @@ function scrollBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
    LEAVE A MESSAGE
 ══════════════════════════════════════════════ */
 
-leaveFileBtn.onclick = () => leaveFile.click();
-
 leaveFile.onchange = () => {
   const f = leaveFile.files[0];
   leaveFileName.textContent = f ? `${f.name} (${fmtBytes(f.size)})` : "";
