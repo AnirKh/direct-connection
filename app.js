@@ -121,6 +121,7 @@ const I18N = {
     // E2E encryption
     sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Хурууны хээ: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
+    e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
     // Server wake
     serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
     serverReady:     "Сервер бэлэн боллоо.",
@@ -208,6 +209,7 @@ const I18N = {
     // E2E encryption
     sysE2eReady:     (fp) => `🔐 Encryption active · Fingerprint: ${fp}`,
     e2eWaiting:      "Setting up encryption…",
+    e2eFailed:       "Encryption setup failed. Please reconnect.",
     // Server wake
     serverWaking:    "Server is waking up, please wait…",
     serverReady:     "Server is ready.",
@@ -394,9 +396,9 @@ async function e2eDeriveKey(peerPubJwk) {
     appendSys(I18N[LANG].sysE2eReady(fp));
   } catch (err) {
     console.error("E2E key derivation failed:", err);
-    // Fall back — allow sending without app-level encryption (DTLS still protects)
     e2eReady = false;
-    sendBtn.disabled = false;
+    sendBtn.disabled = true;
+    appendSys(t("e2eFailed"));
   }
 }
 
@@ -418,8 +420,12 @@ async function e2eDecrypt(ctB64, ivB64) {
   return new TextDecoder().decode(plain);
 }
 
-const WS_URL        = "wss://direct-connection.onrender.com";
-const SERVER_URL    = "https://direct-connection.onrender.com";
+const DEFAULT_SERVER_URL = "https://direct-connection.onrender.com";
+const SERVER_URL = window.DIRECT_CONNECTION_SERVER_URL ||
+  (["localhost", "127.0.0.1"].includes(location.hostname)
+    ? `${location.protocol}//${location.hostname}:3000`
+    : DEFAULT_SERVER_URL);
+const WS_URL = SERVER_URL.replace(/^http/, "ws");
 const CHUNK_SIZE    = 65536;
 const MAX_DC_MSG    = 200000;
 
@@ -438,8 +444,11 @@ let _serverWoke = false;
 function wakeServer() {
   if (_serverWoke) return;
   const wakeNoticeTimer = setTimeout(() => {
-    createInfo.innerHTML =
-      `<span style="color:#fbbf24">⏳ ${t("serverWaking")}</span>`;
+    const msg = document.createElement("span");
+    msg.className = "server-wake-status";
+    msg.style.color = "#fbbf24";
+    msg.textContent = `⏳ ${t("serverWaking")}`;
+    createInfo.replaceChildren(msg);
   }, 2000);
 
   // Abort if server doesn't respond within 60s (Render cold start max)
@@ -491,7 +500,10 @@ function checkAutoJoin() {
   _autoJoinSent = true;
   isConnecting = true;
   setLobbyButtons(true);
-  createInfo.innerHTML = `<span style="color:#7dd3fc">${I18N[LANG].joiningSession(_autoSessionId)}</span>`;
+  const msg = document.createElement("span");
+  msg.style.color = "#7dd3fc";
+  msg.textContent = I18N[LANG].joiningSession(_autoSessionId);
+  createInfo.replaceChildren(msg);
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
 }
 
@@ -504,11 +516,15 @@ function connectWebSocket() {
   ws.onopen    = () => {
     _serverWoke = true;
     // Clear the "waking up" notice — WS open is the true ready signal
-    if (createInfo.innerHTML.includes("⏳")) {
-      createInfo.innerHTML =
-        `<span style="color:#4ade80">✓ ${t("serverReady")}</span>`;
-      setTimeout(() => { if (createInfo.innerHTML.includes("serverReady") ||
-        createInfo.textContent.includes(t("serverReady"))) createInfo.innerHTML = ""; }, 2000);
+    if (createInfo.querySelector(".server-wake-status")) {
+      const msg = document.createElement("span");
+      msg.className = "server-ready-status";
+      msg.style.color = "#4ade80";
+      msg.textContent = `✓ ${t("serverReady")}`;
+      createInfo.replaceChildren(msg);
+      setTimeout(() => {
+        if (createInfo.querySelector(".server-ready-status")) createInfo.textContent = "";
+      }, 2000);
     }
     requestSessionList();
     checkAutoJoin();
@@ -549,20 +565,31 @@ refreshBtn.onclick = requestSessionList;
 function renderSessionList(sessions) {
   _lastSessionList = sessions || [];
   if (!_lastSessionList.length) {
-    sessionsList.innerHTML = `<div class="empty-state">${t("noRooms")}</div>`;
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = t("noRooms");
+    sessionsList.replaceChildren(empty);
     return;
   }
-  sessionsList.innerHTML = "";
+  sessionsList.replaceChildren();
   _lastSessionList.forEach(({ sessionId, createdAt }) => {
     const item = document.createElement("div");
     item.className = "session-item";
-    item.innerHTML = `
-      <div class="session-item-info">
-        <div class="session-item-name">📡 ${sessionId}</div>
-        <div class="session-item-meta">${I18N[LANG].sessionMeta(timeAgo(createdAt))}</div>
-      </div>
-      <button class="join-btn" data-id="${sessionId}">${t("joinBtn")}</button>`;
-    item.querySelector(".join-btn").onclick = () => openPinModal(sessionId);
+    const info = document.createElement("div");
+    info.className = "session-item-info";
+    const name = document.createElement("div");
+    name.className = "session-item-name";
+    name.textContent = `📡 ${sessionId}`;
+    const meta = document.createElement("div");
+    meta.className = "session-item-meta";
+    meta.textContent = I18N[LANG].sessionMeta(timeAgo(createdAt));
+    const joinBtn = document.createElement("button");
+    joinBtn.className = "join-btn";
+    joinBtn.dataset.id = sessionId;
+    joinBtn.textContent = t("joinBtn");
+    joinBtn.onclick = () => openPinModal(sessionId);
+    info.append(name, meta);
+    item.append(info, joinBtn);
     sessionsList.appendChild(item);
   });
 }
@@ -634,7 +661,6 @@ function createPeerConnection() {
 
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
-    console.log("ICE:", s);
     if (s === "checking")                        setQuality(`⬤ ${t("connecting")}`, "");
     if (s === "connected" || s === "completed")  { setQuality(`⬤ ${t("connected")}`, "connected"); startStatsPolling(); }
     if (s === "disconnected")                    { setQuality(`⬤ ${t("reconnecting")}`, "poor"); pc.restartIce(); }
@@ -691,8 +717,12 @@ function setupDataChannel() {
   dataChannel.onerror = e => console.error("DC error", e);
 
   dataChannel.onmessage = ({ data }) => {
-    if (typeof data === "string") handleTextMessage(JSON.parse(data));
-    else                          handleBinaryChunk(data);
+    if (typeof data === "string") {
+      try { handleTextMessage(JSON.parse(data)); }
+      catch (err) { console.error("DC parse error", err); }
+    } else {
+      handleBinaryChunk(data);
+    }
   };
 }
 
@@ -701,8 +731,6 @@ function setupDataChannel() {
 ══════════════════════════════════════════════ */
 
 async function handleSignaling(data) {
-  console.log("Signaling:", data.type);
-
   switch (data.type) {
 
     case "session-list":
@@ -716,31 +744,49 @@ async function handleSignaling(data) {
       const shareUrl = `${location.origin}${location.pathname}#${encodeURIComponent(data.sessionId)}:${data.token}`;
 
       createInfo.style.textAlign = "left";
-      createInfo.innerHTML = `
-        <div style="text-align:center;margin-bottom:14px">${t("roomReady")}</div>
-        <div style="background:#12151c;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center">
-          <div style="font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">${t("pinCode")}</div>
-          <div style="font-size:28px;font-weight:700;letter-spacing:10px;color:#fff">${data.pin}</div>
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px">${t("pinCodeHint")}</div>
-        </div>
-        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">${t("linkHint")}</div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <input id="shareUrlInput" type="text" value="${shareUrl}" readonly
-            style="font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a">
-          <button id="copyLinkBtn"
-            style="width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0">
-            ${t("copyBtn")}
-          </button>
-        </div>`;
+      const ready = document.createElement("div");
+      ready.style.cssText = "text-align:center;margin-bottom:14px";
+      ready.textContent = t("roomReady");
 
-      document.getElementById("copyLinkBtn").onclick = () => {
+      const pinBox = document.createElement("div");
+      pinBox.style.cssText = "background:#12151c;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
+      const pinLabel = document.createElement("div");
+      pinLabel.style.cssText = "font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
+      pinLabel.textContent = t("pinCode");
+      const pinValue = document.createElement("div");
+      pinValue.style.cssText = "font-size:28px;font-weight:700;letter-spacing:10px;color:#fff";
+      pinValue.textContent = data.pin;
+      const pinHint = document.createElement("div");
+      pinHint.style.cssText = "font-size:11px;color:#9ca3af;margin-top:4px";
+      pinHint.textContent = t("pinCodeHint");
+      pinBox.append(pinLabel, pinValue, pinHint);
+
+      const linkHint = document.createElement("div");
+      linkHint.style.cssText = "font-size:12px;color:#9ca3af;margin-bottom:6px";
+      linkHint.textContent = t("linkHint");
+      const linkRow = document.createElement("div");
+      linkRow.style.cssText = "display:flex;gap:6px;align-items:center";
+      const shareUrlInput = document.createElement("input");
+      shareUrlInput.id = "shareUrlInput";
+      shareUrlInput.type = "text";
+      shareUrlInput.value = shareUrl;
+      shareUrlInput.readOnly = true;
+      shareUrlInput.style.cssText = "font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a";
+      const copyLinkBtn = document.createElement("button");
+      copyLinkBtn.id = "copyLinkBtn";
+      copyLinkBtn.style.cssText = "width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0";
+      copyLinkBtn.textContent = t("copyBtn");
+      linkRow.append(shareUrlInput, copyLinkBtn);
+      createInfo.replaceChildren(ready, pinBox, linkHint, linkRow);
+
+      copyLinkBtn.onclick = () => {
         navigator.clipboard.writeText(shareUrl).then(() => {
-          document.getElementById("copyLinkBtn").textContent = t("copiedBtn");
+          copyLinkBtn.textContent = t("copiedBtn");
           setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = t("copyBtn"); }, 2000);
         }).catch(() => {
-          document.getElementById("shareUrlInput").select();
+          shareUrlInput.select();
           document.execCommand("copy");
-          document.getElementById("copyLinkBtn").textContent = t("copiedBtn");
+          copyLinkBtn.textContent = t("copiedBtn");
         });
       };
 
@@ -841,11 +887,15 @@ async function handleSignaling(data) {
     case "error":
       console.error("[Server error]", data.message);
       if (_isAutoJoin && isConnecting) {
-        createInfo.innerHTML = `<span style="color:#f87171">❌ ${data.message}</span>`;
+        const msg = document.createElement("span");
+        msg.style.color = "#f87171";
+        msg.textContent = `❌ ${data.message}`;
+        createInfo.replaceChildren(msg);
         setLobbyButtons(false);
         isConnecting = false;
       } else {
         alert(data.message);
+        createInfo.textContent = "";
         createBtn.disabled = false;
         pinJoinBtn.disabled = false;
         isConnecting = false;
@@ -862,11 +912,15 @@ async function handleSignaling(data) {
       else                                    msg = data.message || "Error";
 
       if (_isAutoJoin) {
-        createInfo.innerHTML = `
-          <span style="color:#f87171">
-            ${I18N[LANG].couldNotJoin(msg)}<br>
-            <small style="color:#9ca3af">${t("sessionExpired")}</small>
-          </span>`;
+        const wrap = document.createElement("span");
+        wrap.style.color = "#f87171";
+        wrap.append(document.createTextNode(I18N[LANG].couldNotJoin(msg)));
+        wrap.appendChild(document.createElement("br"));
+        const small = document.createElement("small");
+        small.style.color = "#9ca3af";
+        small.textContent = t("sessionExpired");
+        wrap.appendChild(small);
+        createInfo.replaceChildren(wrap);
         setLobbyButtons(false);
         isConnecting = false;
       } else {
@@ -888,7 +942,7 @@ function switchToChat(sessionId) {
   document.getElementById("langSwitcher").style.display = "none";
   chatSessionLabel.textContent = sessionId;
   setQuality(`⬤ ${t("connecting")}`, "");
-  chatMessages.innerHTML = "";
+  chatMessages.replaceChildren();
   sendBtn.disabled = true;
   voiceCallBtn.disabled = true;
   videoCallBtn.disabled = true;
@@ -979,14 +1033,14 @@ function sendTypingSignal() {
 async function sendTextMessage() {
   const text = messageInput.value.trim();
   if (!text || !dcReady()) return;
+  if (!e2eReady) {
+    appendSys(t("e2eWaiting"));
+    return;
+  }
   const msgId = ++msgIdCounter;
 
-  if (e2eReady) {
-    const { ct, iv } = await e2eEncrypt(text);
-    dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId }));
-  } else {
-    dataChannel.send(JSON.stringify({ type: "text", text, msgId }));
-  }
+  const { ct, iv } = await e2eEncrypt(text);
+  dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId }));
 
   const row = appendBubble("me", text);
   addAckTick(row, msgId);
@@ -1293,22 +1347,27 @@ function showCallOverlay(statusText, withVideo) {
   }
 }
 
+function tablerIcon(name, size, color) {
+  const icon = document.createElement("i");
+  icon.className = `ti ti-${name}`;
+  icon.setAttribute("aria-hidden", "true");
+  if (size) icon.style.fontSize = `${size}px`;
+  if (color) icon.style.color = color;
+  return icon;
+}
+
 toggleMuteBtn.onclick = () => {
   if (!localStream) return;
   isMuted = !isMuted;
   localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
-  toggleMuteBtn.innerHTML = isMuted
-    ? '<i class="ti ti-microphone-off" aria-hidden="true"></i>'
-    : '<i class="ti ti-microphone" aria-hidden="true"></i>';
+  toggleMuteBtn.replaceChildren(tablerIcon(isMuted ? "microphone-off" : "microphone"));
 };
 
 toggleCamBtn.onclick = () => {
   if (!localStream) return;
   isCamOff = !isCamOff;
   localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
-  toggleCamBtn.innerHTML = isCamOff
-    ? '<i class="ti ti-camera-off" aria-hidden="true"></i>'
-    : '<i class="ti ti-camera" aria-hidden="true"></i>';
+  toggleCamBtn.replaceChildren(tablerIcon(isCamOff ? "camera-off" : "camera"));
 };
 
 endCallBtn.onclick = () => endCall(true);
@@ -1321,8 +1380,8 @@ function endCall(notify = true) {
   localVideo.classList.remove("hidden");
   callOverlay.classList.add("hidden");
   isMuted = false; isCamOff = false;
-  toggleMuteBtn.innerHTML = '<i class="ti ti-microphone" aria-hidden="true"></i>';
-  toggleCamBtn.innerHTML  = '<i class="ti ti-camera" aria-hidden="true"></i>';
+  toggleMuteBtn.replaceChildren(tablerIcon("microphone"));
+  toggleCamBtn.replaceChildren(tablerIcon("camera"));
   closeCallPc();
 }
 
@@ -1378,7 +1437,7 @@ function resolveVoiceNow(who, url) {
   bubble.className = "bubble";
   const wrap = document.createElement("div");
   wrap.className = "voice-bubble";
-  wrap.innerHTML = '<i class="ti ti-microphone" style="font-size:18px;color:#06b6d4"></i>';
+  wrap.appendChild(tablerIcon("microphone", 18, "#06b6d4"));
   const audio = document.createElement("audio");
   audio.src = url; audio.controls = true;
   wrap.appendChild(audio);
@@ -1398,7 +1457,10 @@ function appendImagePlaceholder(who, id, name) {
   row.dataset.tid = id;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerHTML = `<div style="color:#9ca3af;font-size:13px">🖼️ ${name || t("image")} — ${t("receiving")}</div>`;
+  const label = document.createElement("div");
+  label.style.cssText = "color:#9ca3af;font-size:13px";
+  label.textContent = `🖼️ ${name || t("image")} — ${t("receiving")}`;
+  bubble.appendChild(label);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
@@ -1415,8 +1477,7 @@ function resolveImagePlaceholder(id, url, name) {
   const img = document.createElement("img");
   img.src = url; img.alt = name;
   img.onclick = () => window.open(url, "_blank");
-  bubble.innerHTML = "";
-  bubble.appendChild(img);
+  bubble.replaceChildren(img);
   let meta = row.querySelector(".bubble-meta");
   if (!meta) { meta = document.createElement("div"); meta.className = "bubble-meta"; row.appendChild(meta); }
   meta.textContent = now();
@@ -1429,17 +1490,34 @@ function appendFileBubble(who, url, name, size, id) {
   if (id) row.dataset.tid = id;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerHTML = `
-    <div class="file-bubble">
-      <div class="file-icon"><i class="ti ti-file" style="font-size:22px"></i></div>
-      <div>
-        <div class="file-name">${name}</div>
-        <div class="file-size">${fmtBytes(size)}</div>
-        ${url
-          ? `<a href="${url}" download="${name}">${t("download")}</a>`
-          : `<span style="color:#94a3b8;font-size:12px" class="file-pending">${t("receiving")}</span>`}
-      </div>
-    </div>`;
+  const fileBubble = document.createElement("div");
+  fileBubble.className = "file-bubble";
+  const icon = document.createElement("div");
+  icon.className = "file-icon";
+  icon.appendChild(tablerIcon("file", 22));
+  const info = document.createElement("div");
+  const fileName = document.createElement("div");
+  fileName.className = "file-name";
+  fileName.textContent = name;
+  const fileSize = document.createElement("div");
+  fileSize.className = "file-size";
+  fileSize.textContent = fmtBytes(size);
+  info.append(fileName, fileSize);
+  if (url) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.textContent = t("download");
+    info.appendChild(link);
+  } else {
+    const pending = document.createElement("span");
+    pending.className = "file-pending";
+    pending.style.cssText = "color:#94a3b8;font-size:12px";
+    pending.textContent = t("receiving");
+    info.appendChild(pending);
+  }
+  fileBubble.append(icon, info);
+  bubble.appendChild(fileBubble);
   row.appendChild(bubble);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
@@ -1453,7 +1531,13 @@ function resolveFileBubble(id, url, name) {
   const row = chatMessages.querySelector(`[data-tid="${id}"]`);
   if (!row) return;
   const pending = row.querySelector(".file-pending");
-  if (pending) pending.outerHTML = `<a href="${url}" download="${name}">${t("download")}</a>`;
+  if (pending) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.textContent = t("download");
+    pending.replaceWith(link);
+  }
 }
 
 function appendVoicePlaceholder(who, id) {
@@ -1462,7 +1546,15 @@ function appendVoicePlaceholder(who, id) {
   row.dataset.tid = id;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerHTML = `<div class="voice-bubble"><span>🎤</span><span style="color:#9ca3af;font-size:12px">${t("receiving")}</span></div>`;
+  const vb = document.createElement("div");
+  vb.className = "voice-bubble";
+  const mic = document.createElement("span");
+  mic.textContent = "🎤";
+  const pending = document.createElement("span");
+  pending.style.cssText = "color:#9ca3af;font-size:12px";
+  pending.textContent = t("receiving");
+  vb.append(mic, pending);
+  bubble.appendChild(vb);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
@@ -1479,8 +1571,9 @@ function resolveVoicePlaceholder(id, url) {
   if (!vb) return;
   const audio = document.createElement("audio");
   audio.src = url; audio.controls = true;
-  vb.innerHTML = "<span>🎤</span>";
-  vb.appendChild(audio);
+  const mic = document.createElement("span");
+  mic.textContent = "🎤";
+  vb.replaceChildren(mic, audio);
   scrollBottom();
 }
 
@@ -1581,5 +1674,3 @@ function dcSend(obj) {
   if (dcReady()) dataChannel.send(JSON.stringify(obj));
 }
 
-/* ── Auto-connect for hash-based link joins ── */
-if (_isAutoJoin) connectWebSocket();
