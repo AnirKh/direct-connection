@@ -73,7 +73,7 @@ const I18N = {
     peerTyping:      "Бичиж байна…",
     chatPlaceholder: "Мэдээлэл…",
     // System messages
-    sysConnected:    "Шууд, шифрлэгдсэн холбоос тогтлоо 🔒 (мессеж, файл, дуудлага)",
+    sysConnected:    "Шууд холбоос тогтлоо 🔒 Мессеж/файл — аппын түлхүүр. Дуудлага — WebRTC шифрлэлт.",
     sysClosed:       "Холбоос хаагдлаа",
     sysPeerLeft:     "Харилцагч гарлаа",
     sysCallEnded:    "Дуудлага дууслаа",
@@ -124,7 +124,7 @@ const I18N = {
     sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Хурууны хээ: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
     e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
-    callE2eBrowser:   "Энэ хөтөч дуудлагын нэмэлт шифрлэлтийг дэмжихгүй — зөвхөн холбоосын шифрлэлт ашиглана.",
+    sysCallSecure:   "Дуудлага холбогдлоо — аудио/видео WebRTC-ээр шифрлэгдэнэ (сервер уншихгүй).",
     // Server wake
     serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
     serverReady:     "Сервер бэлэн боллоо.",
@@ -170,7 +170,7 @@ const I18N = {
     voiceHint:       "Tap mic to record voice",
     peerTyping:      "Peer is typing…",
     chatPlaceholder: "Message…",
-    sysConnected:    "End-to-end encrypted link ready 🔒 (messages, files, calls)",
+    sysConnected:    "Direct link ready 🔒 Messages/files use app key. Calls use WebRTC encryption.",
     sysClosed:       "Connection closed",
     sysPeerLeft:     "Peer disconnected",
     sysCallEnded:    "Call ended",
@@ -215,7 +215,7 @@ const I18N = {
     sysE2eReady:     (fp) => `🔐 Encryption active · Fingerprint: ${fp}`,
     e2eWaiting:      "Setting up encryption…",
     e2eFailed:       "Encryption setup failed. Please reconnect.",
-    callE2eBrowser:   "This browser does not support extra call encryption — using connection encryption only.",
+    sysCallSecure:   "Call connected — audio/video encrypted by WebRTC (server cannot listen in).",
     // Server wake
     serverWaking:    "Server is waking up, please wait…",
     serverReady:     "Server is ready.",
@@ -317,6 +317,7 @@ const leaveStatus      = document.getElementById("leaveStatus");
 let ws              = null;
 let pc              = null;
 let callPc          = null;
+let callIceQueue    = [];
 let dataChannel     = null;
 let currentSession  = null;
 let isConnecting    = false;
@@ -342,10 +343,10 @@ const recvBuffers = {};
 /* ══════════════════════════════════════════════
    E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
    ─────────────────────────────────────────────
-   Same shared key for:
-     - text chat
-     - photos, files, voice notes (encrypted chunks on data channel)
-     - voice / video calls (RTCRtpScriptTransform on encoded frames)
+   App-layer key (fingerprint shown in chat) for:
+     - text, photos, files, voice notes on the data channel
+   Voice/video calls use WebRTC’s built-in DTLS-SRTP (reliable in all
+   major browsers; the server still cannot decrypt call media).
    Flow:
      1. dataChannel.onopen → e2eInit() → e2e-pubkey exchange
      2. e2eDeriveKey() → shared AES-GCM key + fingerprint
@@ -354,10 +355,7 @@ const recvBuffers = {};
 
 let e2eKey      = null;   // CryptoKey AES-GCM 256 (derived)
 let e2eKeyPair  = null;   // ECDH ephemeral key pair
-let e2eKeyRaw   = null;   // raw bytes for call media worker
 let e2eReady    = false;
-let e2eMediaWorker = null;
-let _warnedCallE2e   = false;
 
 async function e2eInit() {
   e2eKeyPair = await crypto.subtle.generateKey(
@@ -384,12 +382,11 @@ async function e2eDeriveKey(peerPubJwk) {
       { name: "ECDH", public: peerPub },
       e2eKeyPair.privateKey,
       { name: "AES-GCM", length: 256 },
-      true,
+      false,
       ["encrypt", "decrypt"]
     );
     e2eReady = true;
     sendBtn.disabled = false;
-    e2eKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", e2eKey));
 
     // Compute a short fingerprint from the peer's raw public key
     const raw  = await crypto.subtle.exportKey("raw", peerPub);
@@ -440,7 +437,6 @@ async function e2eDecryptBytes(ct, iv) {
   return new Uint8Array(plain);
 }
 
-const E2E_MEDIA_WORKER_URL = new URL("e2e-media-worker.js", location.href).href;
 const E2E_BIN_IV_LEN = 12;
 
 /** Send JSON over the data channel inside the same E2E envelope as text. */
@@ -451,30 +447,12 @@ async function dcSendE2e(obj) {
   return true;
 }
 
-function getE2eMediaWorker() {
-  if (!e2eMediaWorker) e2eMediaWorker = new Worker(E2E_MEDIA_WORKER_URL);
-  return e2eMediaWorker;
-}
-
-function applyRtpTransform(rtp, operation) {
-  if (!e2eKeyRaw || typeof RTCRtpScriptTransform === "undefined") return;
-  rtp.transform = new RTCRtpScriptTransform(getE2eMediaWorker(), {
-    keyBytes: Array.from(e2eKeyRaw),
-    operation
-  });
-}
-
-function applyCallE2ETransforms(pc) {
-  if (!e2eKeyRaw) return;
-  if (typeof RTCRtpScriptTransform === "undefined") {
-    if (!_warnedCallE2e) {
-      appendSys(t("callE2eBrowser"));
-      _warnedCallE2e = true;
-    }
-    return;
-  }
-  pc.getSenders().forEach(s => { if (s.track) applyRtpTransform(s, "encrypt"); });
-  pc.getReceivers().forEach(r => { if (r.track) applyRtpTransform(r, "decrypt"); });
+/** Call signaling: encrypted when chat E2E is ready, otherwise plain on the data channel. */
+async function dcSendCallSignal(obj) {
+  if (!dcReady()) return false;
+  if (e2eReady) return dcSendE2e(obj);
+  dcSend(obj);
+  return true;
 }
 
 const DEFAULT_SERVER_URL = "https://direct-connection.onrender.com";
@@ -714,10 +692,7 @@ function closePeerConnection() {
   iceQueue = [];
   e2eKey = null;
   e2eKeyPair = null;
-  e2eKeyRaw = null;
   e2eReady = false;
-  _warnedCallE2e = false;
-  if (e2eMediaWorker) { e2eMediaWorker.terminate(); e2eMediaWorker = null; }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (pc) {
     pc.onicecandidate = pc.oniceconnectionstatechange =
@@ -945,15 +920,14 @@ async function handleSignaling(data) {
     case "call-answer":
       if (callPc) {
         await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        applyCallE2ETransforms(callPc);
+        await flushCallIceQueue();
         callStatusLabel.textContent = t("callConnected");
+        appendSys(t("sysCallSecure"));
       }
       break;
 
     case "call-ice":
-      if (callPc && callPc.remoteDescription) {
-        try { await callPc.addIceCandidate(data.candidate); } catch (e) { console.error(e); }
-      }
+      await addCallIceCandidate(data.candidate);
       break;
 
     case "peer-disconnected":
@@ -1373,16 +1347,15 @@ videoCallBtn.onclick = () => requestCall(true);
 
 function requestCall(withVideo) {
   if (!dcReady()) return;
-  if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
-  dcSendE2e({ type: "call-request", withVideo });
+  dcSendCallSignal({ type: "call-request", withVideo });
   showCallOverlay(withVideo ? t("videoCallingOut") : t("voiceCallingOut"), withVideo);
 }
 
 function handleCallRequest(data) {
   const kind   = data.withVideo ? t("incomingVideo") : t("incomingVoice");
   const accept = confirm(I18N[LANG].incomingCall(kind));
-  if (!accept) { dcSendE2e({ type: "call-reject" }); return; }
-  dcSendE2e({ type: "call-accept", withVideo: data.withVideo });
+  if (!accept) { dcSendCallSignal({ type: "call-reject" }); return; }
+  dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
   showCallOverlay(t("connecting"), data.withVideo);
 }
 
@@ -1406,12 +1379,13 @@ async function handleIncomingCallOffer(data) {
   try {
     await setupCallPc(data.withVideo);
     await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
-    applyCallE2ETransforms(callPc);
     const answer = await callPc.createAnswer();
     await callPc.setLocalDescription(answer);
     await waitForICEGathering(callPc);
     wsSend({ type: "call-answer", answer: callPc.localDescription, sessionId: currentSession.sessionId });
+    await flushCallIceQueue();
     callStatusLabel.textContent = t("callConnected");
+    appendSys(t("sysCallSecure"));
   } catch (e) {
     console.error("Call answer error:", e);
     endCall(false);
@@ -1419,26 +1393,58 @@ async function handleIncomingCallOffer(data) {
   }
 }
 
+async function addCallIceCandidate(candidate) {
+  if (!callPc) return;
+  if (callPc.remoteDescription && callPc.remoteDescription.type) {
+    try { await callPc.addIceCandidate(candidate); } catch (e) { console.error("Call ICE error:", e); }
+  } else {
+    callIceQueue.push(candidate);
+  }
+}
+
+async function flushCallIceQueue() {
+  if (!callPc) return;
+  while (callIceQueue.length) {
+    try { await callPc.addIceCandidate(callIceQueue.shift()); } catch (e) { console.error("Call ICE flush:", e); }
+  }
+}
+
 function setupCallPc(withVideo) {
   return new Promise(async (resolve, reject) => {
     try {
       closeCallPc();
+      callIceQueue = [];
 
-      callPc = new RTCPeerConnection(ICE_CONFIG);
+      callPc = new RTCPeerConnection({
+        ...ICE_CONFIG,
+        bundlePolicy: "max-bundle",
+        rtcpMuxPolicy: "require"
+      });
 
       callPc.onicecandidate = ({ candidate }) => {
         if (candidate) wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
       };
 
+      callPc.oniceconnectionstatechange = () => {
+        const s = callPc.iceConnectionState;
+        if (s === "failed") {
+          appendSys(I18N[LANG].sysCallFailed(t("connFailed")));
+          endCall(false);
+        }
+      };
+
       callPc.ontrack = ({ streams }) => {
+        if (!streams[0]) return;
         remoteVideo.srcObject = streams[0];
         callStatusLabel.textContent = t("callConnected");
       };
 
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: withVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false
+      });
       localVideo.srcObject = localStream;
       localStream.getTracks().forEach(track => callPc.addTrack(track, localStream));
-      applyCallE2ETransforms(callPc);
 
       resolve();
     } catch (e) { reject(e); }
@@ -1446,7 +1452,8 @@ function setupCallPc(withVideo) {
 }
 
 function closeCallPc() {
-  if (callPc) { callPc.onicecandidate = callPc.ontrack = null; callPc.close(); callPc = null; }
+  callIceQueue = [];
+  if (callPc) { callPc.onicecandidate = callPc.oniceconnectionstatechange = callPc.ontrack = null; callPc.close(); callPc = null; }
 }
 
 function showCallOverlay(statusText, withVideo) {
@@ -1487,7 +1494,7 @@ toggleCamBtn.onclick = () => {
 endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
-  if (notify && dcReady() && e2eReady) dcSendE2e({ type: "call-reject" });
+  if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   remoteVideo.srcObject = localVideo.srcObject = null;
   remoteVideo.classList.remove("hidden");
