@@ -115,6 +115,7 @@ const I18N = {
     sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
     // PIN rate limit
     pinRateLimited:  (s) => `Олон удаа оролдлоо. ${s} секундын дараа дахин оролдоно уу.`,
+    sessionJoinLocked: (s) => `Энэ өрөөнд олон удаа буруу оролдсон. ${s} секундын дараа дахин оролдоно уу.`,
     pinAttemptsLeft: (n) => `Буруу PIN. ${n} оролдлого үлдлээ.`,
     sessionNotFound: "Өрөө олдсонгүй — хугацаа дуусч байж магадгүй.",
     sessionFull:     "Өрөө дүүрсэн байна.",
@@ -203,6 +204,7 @@ const I18N = {
     sessionExpired:  "The session may have expired.",
     // PIN rate limit
     pinRateLimited:  (s) => `Too many attempts. Try again in ${s}s.`,
+    sessionJoinLocked: (s) => `Too many failed join attempts for this room. Try again in ${s}s.`,
     pinAttemptsLeft: (n) => `Wrong PIN. ${n} attempt(s) remaining.`,
     sessionNotFound: "Session not found — it may have expired.",
     sessionFull:     "Session is full.",
@@ -905,8 +907,9 @@ async function handleSignaling(data) {
     case "pin-error": {
       // Translate structured error codes from server
       let msg;
-      if      (data.code === "rate-limited")  msg = I18N[LANG].pinRateLimited(data.remaining);
-      else if (data.code === "wrong-pin")     msg = I18N[LANG].pinAttemptsLeft(data.attemptsLeft);
+      if      (data.code === "rate-limited")        msg = I18N[LANG].pinRateLimited(data.remaining);
+      else if (data.code === "session-join-locked") msg = I18N[LANG].sessionJoinLocked(data.remaining);
+      else if (data.code === "wrong-pin")           msg = I18N[LANG].pinAttemptsLeft(data.attemptsLeft);
       else if (data.code === "not-found")     msg = t("sessionNotFound");
       else if (data.code === "full")          msg = t("sessionFull");
       else                                    msg = data.message || "Error";
@@ -1637,7 +1640,11 @@ leaveSendBtn.onclick = async () => {
   if (lf) fd.append("file", lf);
 
   try {
-    const res  = await fetch(`${SERVER_URL}/api/send-message`, { method: "POST", body: fd });
+    const res  = await fetch(`${SERVER_URL}/api/send-message`, {
+      method: "POST",
+      headers: { "X-DC-Client": "1" },
+      body: fd
+    });
     const json = await res.json();
     if (res.ok && json.ok) {
       setLeaveStatus(t("msgSent"), "ok");

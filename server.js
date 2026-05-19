@@ -12,12 +12,20 @@
   - Session cleanup on disconnect
   - Stale session pruner (10 min)
   - PIN brute-force protection (3 attempts → 30s lockout per IP)
-  - POST /api/send-message (Resend + optional file attachment)
+  - Per-room failed join throttling (mitigates distributed PIN guessing)
+  - WebSocket Origin allowlist (same as CORS)
+  - list-sessions / create-session rate limits per IP
+  - POST /api/send-message (Resend + optional file attachment; requires X-DC-Client header)
+  - Optional PUBLIC_SESSION_LIST=0 to hide active room names from the lobby
   ─────────────────────────────────────────────
 
   Render environment variables required:
     RESEND_API_KEY  Resend API key
     MAIL_TO         recipient email address
+
+  Optional:
+    ALLOWED_ORIGINS       Comma-separated browser origins (must include your static site origin)
+    PUBLIC_SESSION_LIST   Set to "0" to never expose other users' room names in the lobby
 */
 
 "use strict";
@@ -31,9 +39,12 @@ const { Resend } = require("resend");
 
 const app    = express();
 const server = http.createServer(app);
-const wss    = new WebSocket.Server({ server, maxPayload: 1024 * 1024 });
+
+const PUBLIC_SESSION_LIST = process.env.PUBLIC_SESSION_LIST !== "0";
+
 const DEFAULT_ALLOWED_ORIGINS = [
   "https://direct-connection.onrender.com",
+  "https://anirkh.github.io",
   "http://localhost:3000",
   "http://127.0.0.1:3000"
 ];
@@ -41,6 +52,40 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.
   .split(",")
   .map(origin => origin.trim())
   .filter(Boolean);
+
+const API_CLIENT_HEADER = "x-dc-client";
+const API_CLIENT_VALUE  = "1";
+
+function getClientIp(req) {
+  return (
+    (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
+    req.socket.remoteAddress ||
+    "unknown"
+  );
+}
+
+function isLoopbackIp(ip) {
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+}
+
+/** WebSocket upgrade: Origin must match allowlist (browsers always send Origin). */
+function isAllowedWebSocketOrigin(req) {
+  if (!ALLOWED_ORIGINS.length) return false;
+  const origin = req.headers.origin;
+  if (origin) return ALLOWED_ORIGINS.includes(origin);
+  /* Non-browser clients have no Origin; allow loopback only in development. */
+  const ip = getClientIp(req);
+  if (process.env.NODE_ENV === "production") return false;
+  return isLoopbackIp(ip);
+}
+
+const wss = new WebSocket.Server({
+  server,
+  maxPayload: 1024 * 1024,
+  verifyClient: (info, cb) => {
+    cb(isAllowedWebSocketOrigin(info.req));
+  }
+});
 
 /* ── Resend client ─────────────────────────── */
 let resend = null;
@@ -58,12 +103,14 @@ const upload = multer({
 });
 
 app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", `Content-Type, ${API_CLIENT_HEADER}`);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
@@ -116,11 +163,13 @@ function cleanAttachmentName(name) {
 }
 
 app.post("/api/send-message", upload.single("file"), async (req, res) => {
+  /* Non-simple header forces CORS preflight; simple cross-site forms cannot set it. */
+  if ((req.headers[API_CLIENT_HEADER] || "") !== API_CLIENT_VALUE) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   const { message, name } = req.body;
-  const clientIp =
-    (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
-    req.socket.remoteAddress ||
-    "unknown";
+  const clientIp = getClientIp(req);
   const emailLimit = checkEmailRateLimit(clientIp);
   if (!emailLimit.allowed) {
     return res.status(429).json({ error: `Too many messages. Try again in ${emailLimit.remaining}s.` });
@@ -217,24 +266,22 @@ function escapeHtml(str) {
 const MAX_ATTEMPTS = 3;
 const LOCKOUT_MS   = 30_000;  // 30 seconds
 
-// ip → { count: number, lockedUntil: timestamp }
+/** Per-IP failed join (wrong PIN/token). ip → { count, lockedUntil, lastFailAt } */
 const joinAttempts = new Map();
+
+const SESSION_JOIN_FAIL_WINDOW_MS = 10 * 60 * 1000; // 10 min
+const SESSION_JOIN_FAIL_MAX       = 15;           // failures from any IP before room lock
+const SESSION_JOIN_LOCK_MS        = 5 * 60 * 1000;  // 5 min room-level join lock
 
 /**
  * Returns { allowed: true } or { allowed: false, remaining: seconds }.
  */
 function rateLimitCheck(ip) {
-  const now   = Date.now();
+  const now = Date.now();
   const entry = joinAttempts.get(ip);
   if (!entry) return { allowed: true };
-
   if (entry.lockedUntil && entry.lockedUntil > now) {
     return { allowed: false, remaining: Math.ceil((entry.lockedUntil - now) / 1000) };
-  }
-  // Lockout expired — reset
-  if (entry.lockedUntil && entry.lockedUntil <= now) {
-    joinAttempts.delete(ip);
-    return { allowed: true };
   }
   return { allowed: true };
 }
@@ -244,11 +291,13 @@ function rateLimitCheck(ip) {
  * Returns 0 when just locked out.
  */
 function rateLimitFail(ip) {
-  const entry = joinAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  const now = Date.now();
+  const entry = joinAttempts.get(ip) || { count: 0, lockedUntil: 0, lastFailAt: now };
+  entry.lastFailAt = now;
   entry.count++;
   const remaining = MAX_ATTEMPTS - entry.count;
   if (remaining <= 0) {
-    entry.lockedUntil = Date.now() + LOCKOUT_MS;
+    entry.lockedUntil = now + LOCKOUT_MS;
     console.log(`Rate-limited IP ${ipLogId(ip)} for ${LOCKOUT_MS / 1000}s`);
   }
   joinAttempts.set(ip, entry);
@@ -260,11 +309,18 @@ function rateLimitClear(ip) {
   joinAttempts.delete(ip);
 }
 
-/* Prune expired entries every 60s */
+/* Prune stale per-IP join state (do not wipe in-progress counters). */
 setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of joinAttempts) {
-    if (!entry.lockedUntil || entry.lockedUntil <= now) joinAttempts.delete(ip);
+    if (entry.lockedUntil && entry.lockedUntil > now) continue;
+    if (entry.lockedUntil && entry.lockedUntil <= now) {
+      joinAttempts.delete(ip);
+      continue;
+    }
+    if (!entry.lockedUntil && entry.lastFailAt && now - entry.lastFailAt > 60 * 60 * 1000) {
+      joinAttempts.delete(ip);
+    }
   }
 }, 60_000);
 
@@ -293,9 +349,41 @@ function ipLogId(ip) {
 }
 
 function publicSessions() {
+  if (!PUBLIC_SESSION_LIST) return [];
   return Array.from(sessions)
     .filter(([, s]) => !s.guest)
     .map(([sessionId, s]) => ({ sessionId, createdAt: s.createdAt }));
+}
+
+const listSessionsHits   = new Map();
+const createSessionHits  = new Map();
+const LIST_SESSIONS_WINDOW_MS  = 60_000;
+const LIST_SESSIONS_MAX        = 40;
+const CREATE_SESSION_WINDOW_MS = 10 * 60 * 1000;
+const CREATE_SESSION_MAX       = 10;
+
+/** Sliding-window rate limit; mutates map. Returns true if allowed. */
+function slidingAllow(map, ip, max, windowMs) {
+  const now = Date.now();
+  let arr = map.get(ip) || [];
+  arr = arr.filter(t => now - t < windowMs);
+  if (arr.length >= max) return false;
+  arr.push(now);
+  map.set(ip, arr);
+  return true;
+}
+
+function recordSessionJoinFailure(sessionId, session) {
+  const now = Date.now();
+  if (!session.failedJoinWindowStart || now - session.failedJoinWindowStart > SESSION_JOIN_FAIL_WINDOW_MS) {
+    session.failedJoinWindowStart = now;
+    session.failedJoinCount = 0;
+  }
+  session.failedJoinCount++;
+  if (session.failedJoinCount >= SESSION_JOIN_FAIL_MAX) {
+    session.joinLockedUntil = now + SESSION_JOIN_LOCK_MS;
+    console.log(`Session ${sessionLogId(sessionId)} join-locked ${SESSION_JOIN_LOCK_MS / 1000}s`);
+  }
 }
 
 function generatePin() {
@@ -340,11 +428,7 @@ function relayToOther(ws, sessionId, payload) {
 }
 
 wss.on("connection", (ws, req) => {
-  /* Resolve real client IP (works behind Render's proxy) */
-  const clientIp =
-    (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
-    req.socket.remoteAddress ||
-    "unknown";
+  const clientIp = getClientIp(req);
 
   ws.clientIp = clientIp;
   console.log(`Client connected ${ipLogId(clientIp)} | sessions: ${sessions.size}`);
@@ -361,6 +445,10 @@ wss.on("connection", (ws, req) => {
 
       /* ── List sessions ──────────────────────── */
       case "list-sessions": {
+        if (!slidingAllow(listSessionsHits, clientIp, LIST_SESSIONS_MAX, LIST_SESSIONS_WINDOW_MS)) {
+          ws.send(JSON.stringify({ type: "session-list", sessions: [], throttled: true }));
+          break;
+        }
         ws.send(JSON.stringify({ type: "session-list", sessions: publicSessions() }));
         break;
       }
@@ -375,11 +463,18 @@ wss.on("connection", (ws, req) => {
           ws.send(JSON.stringify({ type: "error", message: "Session name is already in use" }));
           break;
         }
+        if (!slidingAllow(createSessionHits, clientIp, CREATE_SESSION_MAX, CREATE_SESSION_WINDOW_MS)) {
+          ws.send(JSON.stringify({ type: "error", message: "Too many rooms created from this network. Try again later." }));
+          break;
+        }
         const pin   = generatePin();
         const token = generateToken();
         sessions.set(data.sessionId, {
           host: ws, guest: null, offer: null,
-          pin, token, createdAt: Date.now()
+          pin, token, createdAt: Date.now(),
+          joinLockedUntil: 0,
+          failedJoinWindowStart: 0,
+          failedJoinCount: 0
         });
         ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token }));
         broadcastSessionList();
@@ -391,19 +486,7 @@ wss.on("connection", (ws, req) => {
       case "join-session": {
         const ip = ws.clientIp;
 
-        /* 1. Rate-limit check */
-        const rl = rateLimitCheck(ip);
-        if (!rl.allowed) {
-          ws.send(JSON.stringify({
-            type: "pin-error",
-            code: "rate-limited",
-            remaining: rl.remaining,
-            message: `Too many attempts. Try again in ${rl.remaining}s.`
-          }));
-          break;
-        }
-
-        /* 2. Session lookup */
+        /* 1. Session lookup — unknown rooms do not affect per-IP join counters */
         const session = sessions.get(data.sessionId);
         if (!session) {
           console.log(`Session lookup failed from ${ipLogId(ip)}`);
@@ -411,6 +494,23 @@ wss.on("connection", (ws, req) => {
             type: "pin-error",
             code: "not-found",
             message: "Session not found — it may have expired."
+          }));
+          break;
+        }
+
+        /* 2. Room-level join lock (many failed PIN/token attempts from any IP) */
+        if (session.joinLockedUntil && session.joinLockedUntil <= Date.now()) {
+          session.joinLockedUntil = 0;
+          session.failedJoinCount = 0;
+          session.failedJoinWindowStart = 0;
+        }
+        if (session.joinLockedUntil && session.joinLockedUntil > Date.now()) {
+          const rem = Math.ceil((session.joinLockedUntil - Date.now()) / 1000);
+          ws.send(JSON.stringify({
+            type: "pin-error",
+            code: "session-join-locked",
+            remaining: rem,
+            message: `Too many failed join attempts for this room. Try again in ${rem}s.`
           }));
           break;
         }
@@ -425,11 +525,24 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 4. Auth: valid PIN or valid token */
+        /* 4. Per-IP rate limit (wrong PIN / token for a real room) */
+        const rl = rateLimitCheck(ip);
+        if (!rl.allowed) {
+          ws.send(JSON.stringify({
+            type: "pin-error",
+            code: "rate-limited",
+            remaining: rl.remaining,
+            message: `Too many attempts. Try again in ${rl.remaining}s.`
+          }));
+          break;
+        }
+
+        /* 5. Auth: valid PIN or valid token */
         const pinOk   = typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && session.pin === data.pin;
         const tokenOk = data.token && session.token === data.token;
 
         if (!pinOk && !tokenOk) {
+          recordSessionJoinFailure(data.sessionId, session);
           const left = rateLimitFail(ip);
           if (left === 0) {
             ws.send(JSON.stringify({
@@ -449,8 +562,11 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 5. Success — clear rate limit, admit guest */
+        /* 6. Success — clear rate limit, admit guest */
         rateLimitClear(ip);
+        session.joinLockedUntil = 0;
+        session.failedJoinCount = 0;
+        session.failedJoinWindowStart = 0;
         session.guest = ws;
         ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId }));
         if (session.host?.readyState === WebSocket.OPEN) {
