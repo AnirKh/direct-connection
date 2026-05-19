@@ -73,7 +73,7 @@ const I18N = {
     peerTyping:      "Бичиж байна…",
     chatPlaceholder: "Мэдээлэл…",
     // System messages
-    sysConnected:    "Харилцагчдын хооронд шууд холбоос тогтлоо 🔒",
+    sysConnected:    "Шууд, шифрлэгдсэн холбоос тогтлоо 🔒 (мессеж, файл, дуудлага)",
     sysClosed:       "Холбоос хаагдлаа",
     sysPeerLeft:     "Харилцагч гарлаа",
     sysCallEnded:    "Дуудлага дууслаа",
@@ -124,6 +124,7 @@ const I18N = {
     sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Хурууны хээ: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
     e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
+    callE2eBrowser:   "Энэ хөтөч дуудлагын нэмэлт шифрлэлтийг дэмжихгүй — зөвхөн холбоосын шифрлэлт ашиглана.",
     // Server wake
     serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
     serverReady:     "Сервер бэлэн боллоо.",
@@ -169,7 +170,7 @@ const I18N = {
     voiceHint:       "Tap mic to record voice",
     peerTyping:      "Peer is typing…",
     chatPlaceholder: "Message…",
-    sysConnected:    "End-to-end encrypted connection established 🔒",
+    sysConnected:    "End-to-end encrypted link ready 🔒 (messages, files, calls)",
     sysClosed:       "Connection closed",
     sysPeerLeft:     "Peer disconnected",
     sysCallEnded:    "Call ended",
@@ -214,6 +215,7 @@ const I18N = {
     sysE2eReady:     (fp) => `🔐 Encryption active · Fingerprint: ${fp}`,
     e2eWaiting:      "Setting up encryption…",
     e2eFailed:       "Encryption setup failed. Please reconnect.",
+    callE2eBrowser:   "This browser does not support extra call encryption — using connection encryption only.",
     // Server wake
     serverWaking:    "Server is waking up, please wait…",
     serverReady:     "Server is ready.",
@@ -340,22 +342,22 @@ const recvBuffers = {};
 /* ══════════════════════════════════════════════
    E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
    ─────────────────────────────────────────────
+   Same shared key for:
+     - text chat
+     - photos, files, voice notes (encrypted chunks on data channel)
+     - voice / video calls (RTCRtpScriptTransform on encoded frames)
    Flow:
-     1. dataChannel.onopen → e2eInit()
-        - generates ephemeral ECDH key pair
-        - sends public key JWK to peer: {type:"e2e-pubkey", key:JWK}
-     2. On receiving peer's pubkey → e2eDeriveKey(jwk)
-        - imports peer public key
-        - derives 256-bit AES-GCM shared key
-        - enables send button & shows fingerprint
-     3. Every text message: encrypt with random 96-bit IV
-        - sent as {type:"text", ct:base64, iv:base64, msgId}
-     4. Receiver decrypts before rendering
+     1. dataChannel.onopen → e2eInit() → e2e-pubkey exchange
+     2. e2eDeriveKey() → shared AES-GCM key + fingerprint
+     3. Text: {type:"text", ct, iv}; other DC JSON via {type:"e2e-dc", ct, iv}
 ══════════════════════════════════════════════ */
 
 let e2eKey      = null;   // CryptoKey AES-GCM 256 (derived)
 let e2eKeyPair  = null;   // ECDH ephemeral key pair
+let e2eKeyRaw   = null;   // raw bytes for call media worker
 let e2eReady    = false;
+let e2eMediaWorker = null;
+let _warnedCallE2e   = false;
 
 async function e2eInit() {
   e2eKeyPair = await crypto.subtle.generateKey(
@@ -382,11 +384,12 @@ async function e2eDeriveKey(peerPubJwk) {
       { name: "ECDH", public: peerPub },
       e2eKeyPair.privateKey,
       { name: "AES-GCM", length: 256 },
-      false,
+      true,
       ["encrypt", "decrypt"]
     );
     e2eReady = true;
     sendBtn.disabled = false;
+    e2eKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", e2eKey));
 
     // Compute a short fingerprint from the peer's raw public key
     const raw  = await crypto.subtle.exportKey("raw", peerPub);
@@ -423,6 +426,55 @@ async function e2eDecrypt(ctB64, ivB64) {
     from64(ctB64)
   );
   return new TextDecoder().decode(plain);
+}
+
+async function e2eEncryptBytes(data) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const input = data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, e2eKey, input);
+  return { iv, ct: new Uint8Array(ct) };
+}
+
+async function e2eDecryptBytes(ct, iv) {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, e2eKey, ct);
+  return new Uint8Array(plain);
+}
+
+const E2E_MEDIA_WORKER_URL = new URL("e2e-media-worker.js", location.href).href;
+const E2E_BIN_IV_LEN = 12;
+
+/** Send JSON over the data channel inside the same E2E envelope as text. */
+async function dcSendE2e(obj) {
+  if (!dcReady() || !e2eReady) return false;
+  const { ct, iv } = await e2eEncrypt(JSON.stringify(obj));
+  dataChannel.send(JSON.stringify({ type: "e2e-dc", ct, iv }));
+  return true;
+}
+
+function getE2eMediaWorker() {
+  if (!e2eMediaWorker) e2eMediaWorker = new Worker(E2E_MEDIA_WORKER_URL);
+  return e2eMediaWorker;
+}
+
+function applyRtpTransform(rtp, operation) {
+  if (!e2eKeyRaw || typeof RTCRtpScriptTransform === "undefined") return;
+  rtp.transform = new RTCRtpScriptTransform(getE2eMediaWorker(), {
+    keyBytes: Array.from(e2eKeyRaw),
+    operation
+  });
+}
+
+function applyCallE2ETransforms(pc) {
+  if (!e2eKeyRaw) return;
+  if (typeof RTCRtpScriptTransform === "undefined") {
+    if (!_warnedCallE2e) {
+      appendSys(t("callE2eBrowser"));
+      _warnedCallE2e = true;
+    }
+    return;
+  }
+  pc.getSenders().forEach(s => { if (s.track) applyRtpTransform(s, "encrypt"); });
+  pc.getReceivers().forEach(r => { if (r.track) applyRtpTransform(r, "decrypt"); });
 }
 
 const DEFAULT_SERVER_URL = "https://direct-connection.onrender.com";
@@ -660,6 +712,12 @@ function attemptJoin() {
 
 function closePeerConnection() {
   iceQueue = [];
+  e2eKey = null;
+  e2eKeyPair = null;
+  e2eKeyRaw = null;
+  e2eReady = false;
+  _warnedCallE2e = false;
+  if (e2eMediaWorker) { e2eMediaWorker.terminate(); e2eMediaWorker = null; }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (pc) {
     pc.onicecandidate = pc.oniceconnectionstatechange =
@@ -887,6 +945,7 @@ async function handleSignaling(data) {
     case "call-answer":
       if (callPc) {
         await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        applyCallE2ETransforms(callPc);
         callStatusLabel.textContent = t("callConnected");
       }
       break;
@@ -1073,6 +1132,13 @@ async function sendTextMessage() {
 function handleTextMessage(data) {
   switch (data.type) {
 
+    case "e2e-dc":
+      if (!e2eReady) break;
+      e2eDecrypt(data.ct, data.iv)
+        .then(json => handleTextMessage(JSON.parse(json)))
+        .catch(err => console.error("E2E envelope decrypt failed:", err));
+      break;
+
     case "text":
       if (data.ct && e2eReady) {
         e2eDecrypt(data.ct, data.iv)
@@ -1112,14 +1178,17 @@ function handleTextMessage(data) {
       break;
 
     case "transfer-meta":
-      recvBuffers[data.id] = { chunks: [], name: data.name, size: data.size, mimeType: data.mimeType, kind: data.kind };
+      recvBuffers[data.id] = {
+        chunks: [], name: data.name, size: data.size,
+        mimeType: data.mimeType, kind: data.kind, e2e: true
+      };
       if (data.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
       if (data.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
       if (data.kind === "voice") appendVoicePlaceholder("peer", data.id);
       break;
 
     case "transfer-done":
-      assembleTransfer(data.id);
+      assembleTransfer(data.id).catch(err => console.error("Transfer assemble failed:", err));
       break;
 
     case "call-request":
@@ -1150,10 +1219,16 @@ function makeTransferId() {
 
 async function sendBinary(file, kind) {
   if (!dcReady()) return;
+  if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
+
   const id = makeTransferId();
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-  dcSend({ type: "transfer-meta", id, name: file.name || "voice.webm", size: file.size, mimeType: file.type || "audio/webm", kind, totalChunks });
+  await dcSendE2e({
+    type: "transfer-meta", id,
+    name: file.name || "voice.webm", size: file.size,
+    mimeType: file.type || "audio/webm", kind, totalChunks
+  });
 
   const localUrl = URL.createObjectURL(file);
   if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
@@ -1163,28 +1238,43 @@ async function sendBinary(file, kind) {
   const idBytes = new TextEncoder().encode(id);
   const ab = await file.arrayBuffer();
   for (let i = 0; i < totalChunks; i++) {
-    const chunk  = ab.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-    const packet = new Uint8Array(36 + chunk.byteLength);
+    const chunk = ab.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const { iv, ct } = await e2eEncryptBytes(chunk);
+    const packet = new Uint8Array(36 + E2E_BIN_IV_LEN + ct.byteLength);
     packet.set(idBytes, 0);
-    packet.set(new Uint8Array(chunk), 36);
+    packet.set(iv, 36);
+    packet.set(ct, 36 + E2E_BIN_IV_LEN);
     await drainBuffer();
     dataChannel.send(packet.buffer);
   }
 
-  dcSend({ type: "transfer-done", id });
+  await dcSendE2e({ type: "transfer-done", id });
 }
 
 function handleBinaryChunk(buffer) {
-  const id        = new TextDecoder().decode(new Uint8Array(buffer, 0, 36));
+  const id = new TextDecoder().decode(new Uint8Array(buffer, 0, 36));
   const chunkData = buffer.slice(36);
-  if (recvBuffers[id]) recvBuffers[id].chunks.push(chunkData);
+  if (recvBuffers[id]) recvBuffers[id].chunks.push(new Uint8Array(chunkData));
 }
 
-function assembleTransfer(id) {
+async function assembleTransfer(id) {
   const info = recvBuffers[id];
   if (!info) return;
-  const blob = new Blob(info.chunks, { type: info.mimeType });
-  const url  = URL.createObjectURL(blob);
+
+  let blob;
+  if (info.e2e) {
+    const parts = [];
+    for (const packet of info.chunks) {
+      if (packet.byteLength < E2E_BIN_IV_LEN) continue;
+      const iv = packet.slice(0, E2E_BIN_IV_LEN);
+      const ct = packet.slice(E2E_BIN_IV_LEN);
+      parts.push(await e2eDecryptBytes(ct, iv));
+    }
+    blob = new Blob(parts, { type: info.mimeType });
+  } else {
+    blob = new Blob(info.chunks, { type: info.mimeType });
+  }
+  const url = URL.createObjectURL(blob);
 
   if (info.kind === "file")  resolveFileBubble(id, url, info.name);
   if (info.kind === "image") resolveImagePlaceholder(id, url, info.name);
@@ -1238,6 +1328,7 @@ let _isRecording = false;
 
 async function toggleVoiceRecord() {
   if (!dcReady()) return;
+  if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
 
   if (!_isRecording) {
     try {
@@ -1282,15 +1373,16 @@ videoCallBtn.onclick = () => requestCall(true);
 
 function requestCall(withVideo) {
   if (!dcReady()) return;
-  dcSend({ type: "call-request", withVideo });
+  if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
+  dcSendE2e({ type: "call-request", withVideo });
   showCallOverlay(withVideo ? t("videoCallingOut") : t("voiceCallingOut"), withVideo);
 }
 
 function handleCallRequest(data) {
   const kind   = data.withVideo ? t("incomingVideo") : t("incomingVoice");
   const accept = confirm(I18N[LANG].incomingCall(kind));
-  if (!accept) { dcSend({ type: "call-reject" }); return; }
-  dcSend({ type: "call-accept", withVideo: data.withVideo });
+  if (!accept) { dcSendE2e({ type: "call-reject" }); return; }
+  dcSendE2e({ type: "call-accept", withVideo: data.withVideo });
   showCallOverlay(t("connecting"), data.withVideo);
 }
 
@@ -1314,6 +1406,7 @@ async function handleIncomingCallOffer(data) {
   try {
     await setupCallPc(data.withVideo);
     await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    applyCallE2ETransforms(callPc);
     const answer = await callPc.createAnswer();
     await callPc.setLocalDescription(answer);
     await waitForICEGathering(callPc);
@@ -1345,6 +1438,7 @@ function setupCallPc(withVideo) {
       localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
       localVideo.srcObject = localStream;
       localStream.getTracks().forEach(track => callPc.addTrack(track, localStream));
+      applyCallE2ETransforms(callPc);
 
       resolve();
     } catch (e) { reject(e); }
@@ -1393,7 +1487,7 @@ toggleCamBtn.onclick = () => {
 endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
-  if (notify && dcReady()) dcSend({ type: "call-reject" });
+  if (notify && dcReady() && e2eReady) dcSendE2e({ type: "call-reject" });
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   remoteVideo.srcObject = localVideo.srcObject = null;
   remoteVideo.classList.remove("hidden");
