@@ -96,10 +96,19 @@ function getResendClient() {
   return resend;
 }
 
-/* ── Multer — store file in memory (max 10MB) ── */
+/* ── Leave-a-message attachment (Resend caps whole email ~40MB after Base64) ── */
+const LEAVE_MESSAGE_MAX_FILE_BYTES = (() => {
+  const cap   = 35 * 1024 * 1024;
+  const def   = 28 * 1024 * 1024;
+  const parsed = parseInt(process.env.LEAVE_ATTACH_MAX_BYTES || "", 10);
+  if (Number.isFinite(parsed) && parsed >= 1024 * 1024 && parsed <= cap) return parsed;
+  return def;
+})();
+
+/* ── Multer — store file in memory ── */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: LEAVE_MESSAGE_MAX_FILE_BYTES }
 });
 
 app.use((req, res, next) => {
@@ -117,7 +126,10 @@ app.use((req, res, next) => {
 });
 
 /* ── Ping endpoint — used by client to wake server ── */
-app.get("/api/ping", (req, res) => res.json({ ok: true }));
+app.get("/api/ping", (req, res) => res.json({
+  ok: true,
+  maxLeaveAttachBytes: LEAVE_MESSAGE_MAX_FILE_BYTES
+}));
 
 /* ══════════════════════════════════════════════
    POST /api/send-message
@@ -238,8 +250,11 @@ app.post("/api/send-message", upload.single("file"), async (req, res) => {
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
-    return res.status(status).json({ error: err.message });
+    if (err.code === "LIMIT_FILE_SIZE") {
+      const mb = Math.round(LEAVE_MESSAGE_MAX_FILE_BYTES / 1024 / 1024);
+      return res.status(413).json({ error: `File is too large (max about ${mb} MB).` });
+    }
+    return res.status(400).json({ error: err.message });
   }
   next(err);
 });

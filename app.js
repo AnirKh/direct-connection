@@ -45,7 +45,7 @@ const I18N = {
     timeH:           (n) => `${n}ц`,
     // Leave a message
     leaveLabel:      "Захиа шууд и-мэйлрүү явуулах",
-    leaveHint:       "Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно.",
+    leaveHint:       (mb) => `Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно. Хавсралтын дээд хэмжээ ~${mb} МБ.`,
     senderPlaceholder: "Таны нэр (эсвэл холбоо барих мэдээлэл)",
     msgPlaceholder:  "Энд явуулах мэдээллээ бичнэ үү",
     attachFile:      "Файл хавсаргах",
@@ -106,6 +106,7 @@ const I18N = {
     sending:         "Илгээж байна…",
     msgSent:         "✓ Мэдээлэл илгээгдлээ!",
     networkErr:      "Сүлжээний алдаа. Холболтоо шалгана уу.",
+    leaveFileTooBig: (mb) => `Файлын хэмжээ ${mb} МБ-аас их байна. Жижиг файл эсвэл шахсан хувилбар ашиглана уу.`,
     // Binary transfer
     receiving:       "Хүлээн авч байна…",
     download:        "Татах",
@@ -144,7 +145,7 @@ const I18N = {
     timeM:           (n) => `${n}m`,
     timeH:           (n) => `${n}h`,
     leaveLabel:      "Send a Message to Email",
-    leaveHint:       "If direct connection is unavailable, you can send a message to my email.",
+    leaveHint:       (mb) => `If direct connection is unavailable, you can send a message to my email. Attachments up to about ${mb} MB.`,
     senderPlaceholder: "Your name (or contact info)",
     msgPlaceholder:  "Write your message here",
     attachFile:      "Attach file",
@@ -197,6 +198,7 @@ const I18N = {
     sending:         "Sending…",
     msgSent:         "✓ Message sent!",
     networkErr:      "Network error. Check connection.",
+    leaveFileTooBig: (mb) => `File is too large (max about ${mb} MB). Try a smaller file or a zip.`,
     receiving:       "Receiving…",
     download:        "Download",
     image:           "Image",
@@ -229,6 +231,7 @@ function applyI18n() {
     const key = el.dataset.i18n;
     const val = I18N[LANG][key];
     if (typeof val === "string") el.textContent = val;
+    if (key === "leaveHint" && typeof val === "function") el.textContent = val(leaveAttachMaxMbRounded());
   });
   document.querySelectorAll("[data-i18n-ph]").forEach(el => {
     const key = el.dataset.i18nPh;
@@ -431,6 +434,13 @@ const WS_URL = SERVER_URL.replace(/^http/, "ws");
 const CHUNK_SIZE    = 65536;
 const MAX_DC_MSG    = 200000;
 
+/** Max size for “leave a message” file; server may raise via /api/ping (Resend email ~40MB cap). */
+let maxLeaveAttachBytes = 28 * 1024 * 1024;
+
+function leaveAttachMaxMbRounded() {
+  return Math.max(1, Math.round(maxLeaveAttachBytes / 1024 / 1024));
+}
+
 /* ══════════════════════════════════════════════
    SERVER WAKE-UP
    ─────────────────────────────────────────────
@@ -458,7 +468,14 @@ function wakeServer() {
   const timeout    = setTimeout(() => controller.abort(), 60_000);
 
   fetch(`${SERVER_URL}/api/ping`, { signal: controller.signal })
-    .catch(() => {}) // WS onopen will handle the ready state
+    .then(r => (r.ok ? r.json() : null))
+    .then(j => {
+      if (j && typeof j.maxLeaveAttachBytes === "number" && j.maxLeaveAttachBytes >= 1048576) {
+        maxLeaveAttachBytes = j.maxLeaveAttachBytes;
+        applyI18n();
+      }
+    })
+    .catch(() => {})
     .finally(() => {
       clearTimeout(wakeNoticeTimer);
       clearTimeout(timeout);
@@ -1621,6 +1638,15 @@ leaveFileBtn.onclick = () => leaveFile.click();
 
 leaveFile.onchange = () => {
   const f = leaveFile.files[0];
+  const mb = leaveAttachMaxMbRounded();
+  if (f && f.size > maxLeaveAttachBytes) {
+    setLeaveStatus(I18N[LANG].leaveFileTooBig(mb), "err");
+    leaveFile.value = "";
+    leaveFileName.textContent = "";
+    const span = leaveFileBtn.querySelector("span[data-i18n]");
+    if (span) span.textContent = t("attachFile");
+    return;
+  }
   leaveFileName.textContent = f ? `${f.name} (${fmtBytes(f.size)})` : "";
   // Update the text span inside leaveFileBtn
   const span = leaveFileBtn.querySelector("span[data-i18n]");
@@ -1630,13 +1656,18 @@ leaveFile.onchange = () => {
 leaveSendBtn.onclick = async () => {
   const msg = leaveMessage.value.trim();
   if (!msg) { setLeaveStatus(t("writeFirst"), "err"); return; }
+  const lf = leaveFile.files[0];
+  const mb = leaveAttachMaxMbRounded();
+  if (lf && lf.size > maxLeaveAttachBytes) {
+    setLeaveStatus(I18N[LANG].leaveFileTooBig(mb), "err");
+    return;
+  }
   leaveSendBtn.disabled = true;
   setLeaveStatus(t("sending"), "sending");
 
   const fd = new FormData();
   fd.append("message", msg);
   fd.append("name", senderName.value.trim());
-  const lf = leaveFile.files[0];
   if (lf) fd.append("file", lf);
 
   try {
