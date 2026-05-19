@@ -125,6 +125,7 @@ const I18N = {
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
     e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
     sysCallSecure:   "Дуудлага холбогдлоо — аудио/видео WebRTC-ээр шифрлэгдэнэ (сервер уншихгүй).",
+    callNeedLink:    "Эхлээд харилцагчтай холбогдохыг хүлээнэ үү (холбоос ногоон болмогц дахин оролдоно уу).",
     // Server wake
     serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
     serverReady:     "Сервер бэлэн боллоо.",
@@ -216,6 +217,7 @@ const I18N = {
     e2eWaiting:      "Setting up encryption…",
     e2eFailed:       "Encryption setup failed. Please reconnect.",
     sysCallSecure:   "Call connected — audio/video encrypted by WebRTC (server cannot listen in).",
+    callNeedLink:    "Wait until you are connected to your contact (green status), then try again.",
     // Server wake
     serverWaking:    "Server is waking up, please wait…",
     serverReady:     "Server is ready.",
@@ -316,9 +318,9 @@ const leaveStatus      = document.getElementById("leaveStatus");
 /* ── State ───────────────────────────────────── */
 let ws              = null;
 let pc              = null;
-let callPc          = null;
-let callIceQueue    = [];
 let dataChannel     = null;
+let inCall          = false;
+let pendingCallVideo = false;
 let currentSession  = null;
 let isConnecting    = false;
 let isHost          = false;
@@ -447,10 +449,9 @@ async function dcSendE2e(obj) {
   return true;
 }
 
-/** Call signaling: encrypted when chat E2E is ready, otherwise plain on the data channel. */
-async function dcSendCallSignal(obj) {
+/** Call signaling on the data channel (plain JSON — must arrive reliably). */
+function dcSendCallSignal(obj) {
   if (!dcReady()) return false;
-  if (e2eReady) return dcSendE2e(obj);
   dcSend(obj);
   return true;
 }
@@ -721,6 +722,20 @@ function createPeerConnection() {
   };
 
   pc.ondatachannel = ({ channel }) => { dataChannel = channel; setupDataChannel(); };
+
+  pc.ontrack = ({ streams }) => {
+    const stream = streams[0];
+    if (!stream || !inCall) return;
+    remoteVideo.srcObject = stream;
+    remoteVideo.play().catch(() => {});
+    callStatusLabel.textContent = t("callConnected");
+  };
+}
+
+function isChatLinkUp() {
+  if (!pc) return false;
+  const ice = pc.iceConnectionState;
+  return ice === "connected" || ice === "completed";
 }
 
 async function handleFullRenegotiation() {
@@ -918,16 +933,14 @@ async function handleSignaling(data) {
       break;
 
     case "call-answer":
-      if (callPc) {
-        await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        await flushCallIceQueue();
+      if (pc && inCall) {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        while (iceQueue.length) {
+          try { await pc.addIceCandidate(iceQueue.shift()); } catch (e) { console.error(e); }
+        }
         callStatusLabel.textContent = t("callConnected");
         appendSys(t("sysCallSecure"));
       }
-      break;
-
-    case "call-ice":
-      await addCallIceCandidate(data.candidate);
       break;
 
     case "peer-disconnected":
@@ -1005,7 +1018,6 @@ leaveBtn.onclick = () => {
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();
-  closeCallPc();
   currentSession = null;
   isHost = false;
   isConnecting = false;
@@ -1346,27 +1358,54 @@ voiceCallBtn.onclick = () => requestCall(false);
 videoCallBtn.onclick = () => requestCall(true);
 
 function requestCall(withVideo) {
-  if (!dcReady()) return;
+  if (!dcReady() || !pc) { appendSys(t("callNeedLink")); return; }
+  if (!isChatLinkUp()) { appendSys(t("callNeedLink")); return; }
+  inCall = true;
+  pendingCallVideo = withVideo;
   dcSendCallSignal({ type: "call-request", withVideo });
   showCallOverlay(withVideo ? t("videoCallingOut") : t("voiceCallingOut"), withVideo);
 }
 
 function handleCallRequest(data) {
-  const kind   = data.withVideo ? t("incomingVideo") : t("incomingVoice");
+  const kind = data.withVideo ? t("incomingVideo") : t("incomingVoice");
   const accept = confirm(I18N[LANG].incomingCall(kind));
   if (!accept) { dcSendCallSignal({ type: "call-reject" }); return; }
+  if (!pc || !isChatLinkUp()) {
+    appendSys(t("callNeedLink"));
+    dcSendCallSignal({ type: "call-reject" });
+    return;
+  }
+  inCall = true;
+  pendingCallVideo = data.withVideo;
   dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
   showCallOverlay(t("connecting"), data.withVideo);
 }
 
+async function attachCallMedia(withVideo) {
+  stopCallMedia(false);
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: withVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false
+  });
+  localVideo.srcObject = localStream;
+  localVideo.muted = true;
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+}
+
 async function initiateCallOffer(withVideo) {
+  if (!pc || !currentSession) return;
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
-    await setupCallPc(withVideo);
-    const offer = await callPc.createOffer();
-    await callPc.setLocalDescription(offer);
-    await waitForICEGathering(callPc);
-    wsSend({ type: "call-offer", offer: callPc.localDescription, withVideo, sessionId: currentSession.sessionId });
+    await attachCallMedia(withVideo);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForICEGathering(pc);
+    wsSend({
+      type: "call-offer",
+      offer: pc.localDescription,
+      withVideo,
+      sessionId: currentSession.sessionId
+    });
   } catch (e) {
     console.error("Call offer error:", e);
     endCall(false);
@@ -1375,15 +1414,23 @@ async function initiateCallOffer(withVideo) {
 }
 
 async function handleIncomingCallOffer(data) {
-  showCallOverlay(t("connecting"), data.withVideo);
+  if (!pc || !currentSession) return;
+  const withVideo = Boolean(data.withVideo);
+  showCallOverlay(t("connecting"), withVideo);
   try {
-    await setupCallPc(data.withVideo);
-    await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
-    const answer = await callPc.createAnswer();
-    await callPc.setLocalDescription(answer);
-    await waitForICEGathering(callPc);
-    wsSend({ type: "call-answer", answer: callPc.localDescription, sessionId: currentSession.sessionId });
-    await flushCallIceQueue();
+    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    while (iceQueue.length) {
+      try { await pc.addIceCandidate(iceQueue.shift()); } catch (e) { console.error(e); }
+    }
+    await attachCallMedia(withVideo);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitForICEGathering(pc);
+    wsSend({
+      type: "call-answer",
+      answer: pc.localDescription,
+      sessionId: currentSession.sessionId
+    });
     callStatusLabel.textContent = t("callConnected");
     appendSys(t("sysCallSecure"));
   } catch (e) {
@@ -1393,77 +1440,41 @@ async function handleIncomingCallOffer(data) {
   }
 }
 
-async function addCallIceCandidate(candidate) {
-  if (!callPc) return;
-  if (callPc.remoteDescription && callPc.remoteDescription.type) {
-    try { await callPc.addIceCandidate(candidate); } catch (e) { console.error("Call ICE error:", e); }
-  } else {
-    callIceQueue.push(candidate);
+function stopCallMedia(clearOverlay = true) {
+  if (localStream) {
+    localStream.getTracks().forEach(tr => tr.stop());
+    localStream = null;
   }
-}
-
-async function flushCallIceQueue() {
-  if (!callPc) return;
-  while (callIceQueue.length) {
-    try { await callPc.addIceCandidate(callIceQueue.shift()); } catch (e) { console.error("Call ICE flush:", e); }
+  if (pc) {
+    pc.getSenders().forEach(sender => {
+      if (sender.track && (sender.track.kind === "audio" || sender.track.kind === "video")) {
+        try { pc.removeTrack(sender); } catch (_) {}
+      }
+    });
   }
-}
-
-function setupCallPc(withVideo) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      closeCallPc();
-      callIceQueue = [];
-
-      callPc = new RTCPeerConnection({
-        ...ICE_CONFIG,
-        bundlePolicy: "max-bundle",
-        rtcpMuxPolicy: "require"
-      });
-
-      callPc.onicecandidate = ({ candidate }) => {
-        if (candidate) wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
-      };
-
-      callPc.oniceconnectionstatechange = () => {
-        const s = callPc.iceConnectionState;
-        if (s === "failed") {
-          appendSys(I18N[LANG].sysCallFailed(t("connFailed")));
-          endCall(false);
-        }
-      };
-
-      callPc.ontrack = ({ streams }) => {
-        if (!streams[0]) return;
-        remoteVideo.srcObject = streams[0];
-        callStatusLabel.textContent = t("callConnected");
-      };
-
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: withVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false
-      });
-      localVideo.srcObject = localStream;
-      localStream.getTracks().forEach(track => callPc.addTrack(track, localStream));
-
-      resolve();
-    } catch (e) { reject(e); }
-  });
-}
-
-function closeCallPc() {
-  callIceQueue = [];
-  if (callPc) { callPc.onicecandidate = callPc.oniceconnectionstatechange = callPc.ontrack = null; callPc.close(); callPc = null; }
+  localVideo.srcObject = null;
+  remoteVideo.srcObject = null;
+  isMuted = false;
+  isCamOff = false;
+  toggleMuteBtn.replaceChildren(tablerIcon("microphone"));
+  toggleCamBtn.replaceChildren(tablerIcon("camera"));
+  if (clearOverlay) {
+    callOverlay.classList.add("hidden");
+    callOverlay.classList.remove("voice-only");
+    remoteVideo.classList.remove("hidden");
+    localVideo.classList.remove("hidden");
+  }
 }
 
 function showCallOverlay(statusText, withVideo) {
   callStatusLabel.textContent = statusText;
   callOverlay.classList.remove("hidden");
+  callOverlay.classList.toggle("voice-only", !withVideo);
   if (withVideo) {
     remoteVideo.classList.remove("hidden");
     localVideo.classList.remove("hidden");
   } else {
-    remoteVideo.classList.add("hidden");
+    remoteVideo.classList.remove("hidden");
     localVideo.classList.add("hidden");
   }
 }
@@ -1494,16 +1505,10 @@ toggleCamBtn.onclick = () => {
 endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
+  inCall = false;
+  pendingCallVideo = false;
   if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
-  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-  remoteVideo.srcObject = localVideo.srcObject = null;
-  remoteVideo.classList.remove("hidden");
-  localVideo.classList.remove("hidden");
-  callOverlay.classList.add("hidden");
-  isMuted = false; isCamOff = false;
-  toggleMuteBtn.replaceChildren(tablerIcon("microphone"));
-  toggleCamBtn.replaceChildren(tablerIcon("camera"));
-  closeCallPc();
+  stopCallMedia(true);
 }
 
 /* ══════════════════════════════════════════════

@@ -375,6 +375,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: #000;
   display: flex; justify-content: center; align-items: center;
 }
+/* Voice-only: keep remote video element for audio playback, hide picture */
+.call-overlay.voice-only #remoteVideo {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.call-overlay.voice-only #localVideo {
+  display: none !important;
+}
 #remoteVideo {
   width: 100%; height: 100%; object-fit: cover;
   position: absolute; inset: 0;
