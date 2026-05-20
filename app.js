@@ -783,10 +783,24 @@ function createPeerConnection() {
 
   pc.ondatachannel = ({ channel }) => { dataChannel = channel; setupDataChannel(); };
 
-  pc.ontrack = ({ streams }) => {
-    const stream = streams[0];
-    if (!stream || !inCall) return;
-    remoteVideo.srcObject = stream;
+  pc.ontrack = ({ track, streams }) => {
+    if (!inCall) return;
+
+    // Some browsers (Firefox, mobile Chrome) fire ontrack with an empty streams[]
+    // even when the track is valid. In that case build the stream manually.
+    if (streams && streams.length > 0) {
+      if (remoteVideo.srcObject !== streams[0]) {
+        remoteVideo.srcObject = streams[0];
+      }
+    } else {
+      // Fallback — manually collect tracks into a MediaStream
+      if (!(remoteVideo.srcObject instanceof MediaStream)) {
+        remoteVideo.srcObject = new MediaStream();
+      }
+      const existing = remoteVideo.srcObject.getTracks();
+      if (!existing.includes(track)) remoteVideo.srcObject.addTrack(track);
+    }
+
     remoteVideo.play().catch(() => {});
     callStatusLabel.textContent = t("callConnected");
   };
@@ -810,15 +824,27 @@ async function handleFullRenegotiation() {
 
 function waitForICEGathering(peerConn) {
   return new Promise(resolve => {
-    if (peerConn.iceGatheringState === "complete") return resolve();
-    const fn = () => {
-      if (peerConn.iceGatheringState === "complete") {
-        peerConn.removeEventListener("icegatheringstatechange", fn);
-        resolve();
-      }
+    // Do NOT check iceGatheringState immediately — after setLocalDescription, the
+    // browser may still show "complete" from the previous round while new gathering
+    // is about to start. Wait a tick first, then watch for the event.
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallback);
+      peerConn.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
     };
-    peerConn.addEventListener("icegatheringstatechange", fn);
-    setTimeout(() => { peerConn.removeEventListener("icegatheringstatechange", fn); resolve(); }, 5000);
+    const onChange = () => {
+      if (peerConn.iceGatheringState === "complete") finish();
+    };
+    peerConn.addEventListener("icegatheringstatechange", onChange);
+    // Hard timeout — always resolve after 5s regardless
+    const fallback = setTimeout(finish, 5000);
+    // After 250ms, check if state is already complete (no new gathering needed)
+    setTimeout(() => {
+      if (peerConn.iceGatheringState === "complete") finish();
+    }, 250);
   });
 }
 
@@ -1479,6 +1505,7 @@ async function attachCallMedia(withVideo) {
   });
   localVideo.srcObject = localStream;
   localVideo.muted = true;
+  localVideo.play().catch(() => {}); // explicit play — needed on some mobile browsers
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 }
 
@@ -1560,6 +1587,9 @@ function showCallOverlay(statusText, withVideo) {
   callStatusLabel.textContent = statusText;
   callOverlay.classList.remove("hidden");
   callOverlay.classList.toggle("voice-only", !withVideo);
+  // Show the peer name in voice-only avatar
+  const nameEl = document.getElementById("voiceCallPeerName");
+  if (nameEl) nameEl.textContent = currentSession?.sessionId || "";
   if (withVideo) {
     remoteVideo.classList.remove("hidden");
     localVideo.classList.remove("hidden");

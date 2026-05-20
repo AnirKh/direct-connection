@@ -130,6 +130,11 @@
     <div id="callOverlay" class="call-overlay hidden">
       <video id="remoteVideo" autoplay playsinline></video>
       <video id="localVideo"  autoplay playsinline muted></video>
+      <!-- Shown during voice-only calls instead of blank black screen -->
+      <div class="voice-only-avatar">
+        <div class="avatar-circle">🎙️</div>
+        <div class="avatar-name" id="voiceCallPeerName"></div>
+      </div>
       <div id="callStatusLabel" class="call-status-label"></div>
       <div class="call-controls">
         <button id="toggleMuteBtn" class="call-btn" aria-label="Mute">
