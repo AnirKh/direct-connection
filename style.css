@@ -1,7 +1,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── Tabler icons ──────────────────────────── */
-@import url("https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css");
+/* Tabler icons loaded via <link> in index.html — no @import needed here */
 
 :root {
   /* Slate Blue theme */
@@ -458,3 +457,53 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   .send-btn  { width: 38px; height: 38px; }
   .bubble-row { max-width: 92%; }
 }
+/* ── TOAST NOTIFICATIONS ───────────────────── */
+.dc-toast-container {
+  position: fixed;
+  bottom: calc(80px + var(--safe-bottom));
+  left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; z-index: 9999; pointer-events: none;
+  width: min(360px, 90vw);
+}
+.dc-toast {
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 14px; font-weight: 500;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  animation: toastIn 0.2s ease, toastOut 0.3s ease 3.7s forwards;
+  pointer-events: auto;
+  text-align: center;
+  max-width: 100%;
+}
+.dc-toast-info  { background: #1e40af; }
+.dc-toast-warn  { background: #92400e; }
+.dc-toast-error { background: #7f1d1d; }
+.dc-toast-ok    { background: #14532d; }
+@keyframes toastIn  { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform: translateY(0); } }
+@keyframes toastOut { from { opacity:1; } to { opacity:0; pointer-events:none; } }
+
+/* ── RECONNECT BUTTON ──────────────────────── */
+.reconnect-sys-wrap {
+  align-self: center; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; margin: 8px 0;
+}
+.reconnect-sys-btn {
+  width: auto; margin: 0; padding: 9px 22px;
+  font-size: 14px; min-height: 38px; border-radius: 10px;
+  background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--border);
+}
+.reconnect-sys-btn:hover:not(:disabled) { background: #3d4f66; color: var(--text); }
+
+/* ── INCOMING CALL MODAL ───────────────────── */
+#callRequestModal .modal { text-align: center; }
+#callRequestModal .call-modal-actions {
+  display: flex; gap: 10px; margin-top: 16px;
+}
+#callDeclineBtn {
+  background: var(--danger) !important;
+  color: #fff !important;
+}
+#callDeclineBtn:hover:not(:disabled) { background: #dc2626 !important; }

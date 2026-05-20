@@ -129,6 +129,13 @@ const I18N = {
     // Server wake
     serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
     serverReady:     "Сервер бэлэн боллоо.",
+    // P2P file size
+    fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
+    // Reconnect
+    reconnectBtn:    "← Лобби руу буцах",
+    // Incoming call modal
+    callAccept:      "Зөвшөөрөх",
+    callDecline:     "Татгалзах",
   },
   en: {
     modalTitle:      "Direct Connection",
@@ -221,6 +228,13 @@ const I18N = {
     // Server wake
     serverWaking:    "Server is waking up, please wait…",
     serverReady:     "Server is ready.",
+    // P2P file size
+    fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
+    // Reconnect
+    reconnectBtn:    "← Back to Lobby",
+    // Incoming call modal
+    callAccept:      "Accept",
+    callDecline:     "Decline",
   }
 };
 
@@ -314,6 +328,11 @@ const leaveFile        = document.getElementById("leaveFile");
 const leaveFileName    = document.getElementById("leaveFileName");
 const leaveSendBtn     = document.getElementById("leaveSendBtn");
 const leaveStatus      = document.getElementById("leaveStatus");
+const callRequestModal = document.getElementById("callRequestModal");
+const callRequestTitle = document.getElementById("callRequestTitle");
+const callRequestIcon  = document.getElementById("callRequestIcon");
+const callAcceptBtn    = document.getElementById("callAcceptBtn");
+const callDeclineBtn   = document.getElementById("callDeclineBtn");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
@@ -341,6 +360,42 @@ let peerTyping      = false;
 let _lastSessionList = [];  // cache for re-render on language change
 
 const recvBuffers = {};
+
+/* ── Blob URL memory management ─────────────
+   Every createObjectURL() is tracked here.
+   revokeTrackedBlobUrls() is called on leave
+   so memory is freed when the chat closes.     */
+const _trackedBlobUrls = [];
+function trackBlobUrl(url) { _trackedBlobUrls.push(url); return url; }
+function revokeTrackedBlobUrls() {
+  while (_trackedBlobUrls.length) URL.revokeObjectURL(_trackedBlobUrls.pop());
+}
+
+/* ── In-app toast (replaces alert()) ────────
+   type: "info" | "warn" | "error" | "ok"      */
+function showToast(msg, type = "info") {
+  const container = document.getElementById("dcToastContainer");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = `dc-toast dc-toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 4000);
+}
+
+/* ── Reconnect / back-to-lobby button ───────
+   Shown in chat when the peer disconnects.    */
+function showReconnectButton() {
+  const wrap = document.createElement("div");
+  wrap.className = "reconnect-sys-wrap";
+  const btn = document.createElement("button");
+  btn.className = "reconnect-sys-btn";
+  btn.textContent = t("reconnectBtn");
+  btn.onclick = () => leaveBtn.click();
+  wrap.appendChild(btn);
+  chatMessages.appendChild(wrap);
+  scrollBottom();
+}
 
 /* ══════════════════════════════════════════════
    E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
@@ -464,6 +519,7 @@ const SERVER_URL = window.DIRECT_CONNECTION_SERVER_URL ||
 const WS_URL = SERVER_URL.replace(/^http/, "ws");
 const CHUNK_SIZE    = 65536;
 const MAX_DC_MSG    = 200000;
+const MAX_P2P_FILE_BYTES = 150 * 1024 * 1024; // 150 MB hard cap for P2P transfers
 
 /** Max size for “leave a message” file; server may raise via /api/ping (Resend email ~40MB cap). */
 let maxLeaveAttachBytes = 28 * 1024 * 1024;
@@ -586,7 +642,11 @@ function connectWebSocket() {
       }, 10 * 60 * 1000);
     }
   };
-  ws.onclose   = () => setTimeout(connectWebSocket, 3000);
+  ws.onclose   = () => {
+    // Clear keep-alive so it doesn't stack when we reconnect
+    if (_keepAliveInterval) { clearInterval(_keepAliveInterval); _keepAliveInterval = null; }
+    setTimeout(connectWebSocket, 3000);
+  };
   ws.onerror   = (e) => console.error("WS error", e);
   ws.onmessage = (ev) => {
     try { handleSignaling(JSON.parse(ev.data)); }
@@ -653,7 +713,7 @@ function timeAgo(ts) {
 
 createBtn.onclick = () => {
   const sessionId = sessionIdInput.value.trim();
-  if (!sessionId) { alert(t("enterSessionName")); return; }
+  if (!sessionId) { showToast(t("enterSessionName"), "warn"); return; }
   if (isConnecting) return;
   isConnecting = true;
   createBtn.disabled = true;
@@ -779,6 +839,10 @@ function setupDataChannel() {
   dataChannel.onclose = () => {
     sendBtn.disabled = true;
     appendSys(t("sysClosed"));
+    // Clean up unacknowledged messages and incomplete transfers to free memory
+    for (const k of Object.keys(pendingAcks)) delete pendingAcks[k];
+    for (const k of Object.keys(recvBuffers)) delete recvBuffers[k];
+    showReconnectButton();
   };
 
   dataChannel.onerror = e => console.error("DC error", e);
@@ -947,6 +1011,7 @@ async function handleSignaling(data) {
       appendSys(t("sysPeerLeft"));
       endCall(false);
       closePeerConnection();
+      showReconnectButton();
       break;
 
     case "error":
@@ -959,7 +1024,7 @@ async function handleSignaling(data) {
         setLobbyButtons(false);
         isConnecting = false;
       } else {
-        alert(data.message);
+        showToast(data.message, "error");
         createInfo.textContent = "";
         createBtn.disabled = false;
         pinJoinBtn.disabled = false;
@@ -1018,6 +1083,7 @@ leaveBtn.onclick = () => {
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();
+  revokeTrackedBlobUrls(); // free all file/image/voice blob memory
   currentSession = null;
   isHost = false;
   isConnecting = false;
@@ -1207,6 +1273,13 @@ async function sendBinary(file, kind) {
   if (!dcReady()) return;
   if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
 
+  // File size limit — prevent OOM and very long transfers
+  const maxMb = Math.round(MAX_P2P_FILE_BYTES / 1024 / 1024);
+  if (file.size > MAX_P2P_FILE_BYTES) {
+    showToast(I18N[LANG].fileTooLargeP2P(maxMb), "warn");
+    return;
+  }
+
   const id = makeTransferId();
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
@@ -1216,7 +1289,7 @@ async function sendBinary(file, kind) {
     mimeType: file.type || "audio/webm", kind, totalChunks
   });
 
-  const localUrl = URL.createObjectURL(file);
+  const localUrl = trackBlobUrl(URL.createObjectURL(file));  // tracked — revoked on leave
   if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
   if (kind === "image") resolveImageNow("me", localUrl, file.name);
   if (kind === "voice") resolveVoiceNow("me", localUrl);
@@ -1260,7 +1333,7 @@ async function assembleTransfer(id) {
   } else {
     blob = new Blob(info.chunks, { type: info.mimeType });
   }
-  const url = URL.createObjectURL(blob);
+  const url = trackBlobUrl(URL.createObjectURL(blob));  // tracked — revoked on leave
 
   if (info.kind === "file")  resolveFileBubble(id, url, info.name);
   if (info.kind === "image") resolveImagePlaceholder(id, url, info.name);
@@ -1271,9 +1344,11 @@ async function assembleTransfer(id) {
 
 function drainBuffer() {
   return new Promise(resolve => {
+    const deadline = Date.now() + 30_000; // give up after 30s — don't freeze forever
     const check = () => {
-      if (!dataChannel || dataChannel.bufferedAmount < 262144) resolve();
-      else setTimeout(check, 50);
+      if (!dataChannel || dataChannel.bufferedAmount < 262144) { resolve(); return; }
+      if (Date.now() > deadline) { resolve(); return; } // channel stalled — proceed anyway
+      setTimeout(check, 50);
     };
     check();
   });
@@ -1340,7 +1415,7 @@ async function toggleVoiceRecord() {
       voiceRecordBtn.title = t("stopRecord");
 
     } catch (_) {
-      alert(t("micDenied"));
+      showToast(t("micDenied"), "warn");
     }
 
   } else {
@@ -1368,17 +1443,32 @@ function requestCall(withVideo) {
 
 function handleCallRequest(data) {
   const kind = data.withVideo ? t("incomingVideo") : t("incomingVoice");
-  const accept = confirm(I18N[LANG].incomingCall(kind));
-  if (!accept) { dcSendCallSignal({ type: "call-reject" }); return; }
-  if (!pc || !isChatLinkUp()) {
-    appendSys(t("callNeedLink"));
+  // Show a styled in-app modal instead of the browser's confirm() dialog
+  callRequestIcon.textContent = data.withVideo ? "📹" : "📞";
+  callRequestTitle.textContent = I18N[LANG].incomingCall(kind);
+  callAcceptBtn.textContent  = t("callAccept");
+  callDeclineBtn.textContent = t("callDecline");
+  callRequestModal.classList.remove("hidden");
+
+  const cleanup = () => callRequestModal.classList.add("hidden");
+
+  callDeclineBtn.onclick = () => {
+    cleanup();
     dcSendCallSignal({ type: "call-reject" });
-    return;
-  }
-  inCall = true;
-  pendingCallVideo = data.withVideo;
-  dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
-  showCallOverlay(t("connecting"), data.withVideo);
+  };
+
+  callAcceptBtn.onclick = () => {
+    cleanup();
+    if (!pc || !isChatLinkUp()) {
+      appendSys(t("callNeedLink"));
+      dcSendCallSignal({ type: "call-reject" });
+      return;
+    }
+    inCall = true;
+    pendingCallVideo = data.withVideo;
+    dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
+    showCallOverlay(t("connecting"), data.withVideo);
+  };
 }
 
 async function attachCallMedia(withVideo) {
@@ -1817,4 +1907,3 @@ function dcReady() {
 function dcSend(obj) {
   if (dcReady()) dataChannel.send(JSON.stringify(obj));
 }
-
