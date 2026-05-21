@@ -339,6 +339,7 @@ let ws              = null;
 let pc              = null;
 let dataChannel     = null;
 let inCall          = false;
+let _callIceMode    = false;   // true while call ICE is being gathered — routes onicecandidate to call-ice
 let pendingCallVideo = false;
 let currentSession  = null;
 let isConnecting    = false;
@@ -769,7 +770,13 @@ function createPeerConnection() {
   pc = new RTCPeerConnection(ICE_CONFIG);
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
+    if (!candidate) return;
+    if (_callIceMode) {
+      // Call renegotiation — send as call-ice so it doesn't contaminate the data iceQueue
+      wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
+    } else {
+      wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
+    }
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -784,25 +791,28 @@ function createPeerConnection() {
   pc.ondatachannel = ({ channel }) => { dataChannel = channel; setupDataChannel(); };
 
   pc.ontrack = ({ track, streams }) => {
-    if (!inCall) return;
-
-    // Some browsers (Firefox, mobile Chrome) fire ontrack with an empty streams[]
-    // even when the track is valid. In that case build the stream manually.
+    // Always store the stream even if inCall hasn't been set yet —
+    // the callee's ontrack fires during setRemoteDescription(offer),
+    // which happens before inCall = true on their side.
     if (streams && streams.length > 0) {
       if (remoteVideo.srcObject !== streams[0]) {
         remoteVideo.srcObject = streams[0];
       }
     } else {
-      // Fallback — manually collect tracks into a MediaStream
       if (!(remoteVideo.srcObject instanceof MediaStream)) {
         remoteVideo.srcObject = new MediaStream();
       }
       const existing = remoteVideo.srcObject.getTracks();
       if (!existing.includes(track)) remoteVideo.srcObject.addTrack(track);
     }
-
-    remoteVideo.play().catch(() => {});
-    callStatusLabel.textContent = t("callConnected");
+    // Play and update status only when the call is actually active
+    if (inCall) {
+      remoteVideo.play().catch(() => {});
+      callStatusLabel.textContent = t("callConnected");
+    } else {
+      // Store for later — play() is called again when inCall becomes true
+      remoteVideo._pendingPlay = true;
+    }
   };
 }
 
@@ -1025,11 +1035,22 @@ async function handleSignaling(data) {
     case "call-answer":
       if (pc && inCall) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        while (iceQueue.length) {
-          try { await pc.addIceCandidate(iceQueue.shift()); } catch (e) { console.error(e); }
-        }
+        // Do NOT drain iceQueue — those are data-channel ICE, not call ICE
         callStatusLabel.textContent = t("callConnected");
         appendSys(t("sysCallSecure"));
+        // If ontrack fired early and deferred play, do it now
+        if (remoteVideo._pendingPlay) {
+          remoteVideo._pendingPlay = false;
+          remoteVideo.play().catch(() => {});
+        }
+      }
+      break;
+
+    case "call-ice":
+      // Trickle ICE candidate for the call renegotiation — add directly to PC
+      if (pc && inCall) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        catch (e) { console.warn("call-ice add failed:", e); }
       }
       break;
 
@@ -1494,6 +1515,12 @@ function handleCallRequest(data) {
     pendingCallVideo = data.withVideo;
     dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
     showCallOverlay(t("connecting"), data.withVideo);
+    // If ontrack already fired and stored the remote stream, play it now
+    if (remoteVideo.srcObject && remoteVideo._pendingPlay) {
+      remoteVideo._pendingPlay = false;
+      remoteVideo.play().catch(() => {});
+      callStatusLabel.textContent = t("callConnected");
+    }
   };
 }
 
@@ -1514,9 +1541,10 @@ async function initiateCallOffer(withVideo) {
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
     await attachCallMedia(withVideo);
+    _callIceMode = true;   // from here, onicecandidate sends call-ice
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    await waitForICEGathering(pc);
+    // Send offer immediately — trickle ICE candidates will follow via call-ice messages
     wsSend({
       type: "call-offer",
       offer: pc.localDescription,
@@ -1524,6 +1552,7 @@ async function initiateCallOffer(withVideo) {
       sessionId: currentSession.sessionId
     });
   } catch (e) {
+    _callIceMode = false;
     console.error("Call offer error:", e);
     endCall(false);
     appendSys(I18N[LANG].sysCallFailed(e.message));
@@ -1535,14 +1564,16 @@ async function handleIncomingCallOffer(data) {
   const withVideo = Boolean(data.withVideo);
   showCallOverlay(t("connecting"), withVideo);
   try {
+    // setRemoteDescription fires ontrack immediately — stream is stored but
+    // not played yet (inCall may not be true here if WS delivered offer fast)
     await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-    while (iceQueue.length) {
-      try { await pc.addIceCandidate(iceQueue.shift()); } catch (e) { console.error(e); }
-    }
+    // Do NOT drain iceQueue here — those are data-channel ICE candidates,
+    // completely separate from call ICE. Applying them here corrupts call ICE state.
     await attachCallMedia(withVideo);
+    _callIceMode = true;   // from here, onicecandidate sends call-ice
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    await waitForICEGathering(pc);
+    // Send answer immediately — trickle ICE candidates follow via call-ice messages
     wsSend({
       type: "call-answer",
       answer: pc.localDescription,
@@ -1550,7 +1581,13 @@ async function handleIncomingCallOffer(data) {
     });
     callStatusLabel.textContent = t("callConnected");
     appendSys(t("sysCallSecure"));
+    // If ontrack already fired and stored a stream, play it now
+    if (remoteVideo._pendingPlay) {
+      remoteVideo._pendingPlay = false;
+      remoteVideo.play().catch(() => {});
+    }
   } catch (e) {
+    _callIceMode = false;
     console.error("Call answer error:", e);
     endCall(false);
     appendSys(I18N[LANG].sysCallFailed(e.message));
@@ -1626,7 +1663,9 @@ endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
   inCall = false;
+  _callIceMode = false;
   pendingCallVideo = false;
+  remoteVideo._pendingPlay = false;
   if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
   stopCallMedia(true);
 }
