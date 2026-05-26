@@ -588,9 +588,12 @@ function connectWebSocket() {
   };
   ws.onclose   = () => setTimeout(connectWebSocket, 3000);
   ws.onerror   = (e) => console.error("WS error", e);
+  let _signalQueue = Promise.resolve();
   ws.onmessage = (ev) => {
-    try { handleSignaling(JSON.parse(ev.data)); }
-    catch (e) { console.error("WS parse error", e); }
+    try {
+      const data = JSON.parse(ev.data);
+      _signalQueue = _signalQueue.then(() => handleSignaling(data).catch(e => console.error("WS signal error", e)));
+    } catch (e) { console.error("WS parse error", e); }
   };
 }
 
