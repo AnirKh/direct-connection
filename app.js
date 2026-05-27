@@ -1564,7 +1564,7 @@ function handleCallRequest(data) {
 }
 
 async function attachCallMedia(withVideo) {
-  stopCallMedia(false);
+  stopLocalCallMedia();
   localStream = await navigator.mediaDevices.getUserMedia({
     audio: true,
     video: withVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false
@@ -1572,10 +1572,27 @@ async function attachCallMedia(withVideo) {
   localVideo.srcObject = localStream;
   localVideo.muted = true;
   localVideo.play().catch(() => {}); // explicit play — needed on some mobile browsers
-  localStream.getTracks().forEach(track => attachCallTrack(track, localStream));
+  for (const track of localStream.getTracks()) {
+    await attachCallTrack(track, localStream);
+  }
 }
 
-function attachCallTrack(track, stream) {
+function stopLocalCallMedia() {
+  if (localStream) {
+    localStream.getTracks().forEach(tr => tr.stop());
+    localStream = null;
+  }
+  if (callPc) {
+    callPc.getSenders().forEach(sender => {
+      if (sender.track && (sender.track.kind === "audio" || sender.track.kind === "video")) {
+        try { callPc.removeTrack(sender); } catch (_) {}
+      }
+    });
+  }
+  localVideo.srcObject = null;
+}
+
+async function attachCallTrack(track, stream) {
   if (!callPc) return;
   const reusable = callPc.getTransceivers().find(transceiver =>
     transceiver.receiver?.track?.kind === track.kind &&
@@ -1585,7 +1602,7 @@ function attachCallTrack(track, stream) {
 
   if (reusable) {
     reusable.direction = "sendrecv";
-    reusable.sender.replaceTrack(track);
+    await reusable.sender.replaceTrack(track);
     return;
   }
 
@@ -1656,18 +1673,7 @@ async function handleIncomingCallOffer(data) {
 }
 
 function stopCallMedia(clearOverlay = true) {
-  if (localStream) {
-    localStream.getTracks().forEach(tr => tr.stop());
-    localStream = null;
-  }
-  if (callPc) {
-    callPc.getSenders().forEach(sender => {
-      if (sender.track && (sender.track.kind === "audio" || sender.track.kind === "video")) {
-        try { callPc.removeTrack(sender); } catch (_) {}
-      }
-    });
-  }
-  localVideo.srcObject = null;
+  stopLocalCallMedia();
   remoteVideo.srcObject = null;
   isMuted = false;
   isCamOff = false;
