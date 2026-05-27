@@ -345,6 +345,7 @@ let currentSession  = null;
 let isConnecting    = false;
 let isHost          = false;
 let iceQueue        = [];
+let callIceQueue    = [];
 
 let localStream     = null;
 let isMuted         = false;
@@ -755,6 +756,7 @@ function attemptJoin() {
 
 function closePeerConnection() {
   iceQueue = [];
+  callIceQueue = [];
   e2eKey = null;
   e2eKeyPair = null;
   e2eReady = false;
@@ -1038,7 +1040,7 @@ async function handleSignaling(data) {
     case "call-answer":
       if (pc && inCall) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        // Do NOT drain iceQueue — those are data-channel ICE, not call ICE
+        await drainCallIceQueue();
         callStatusLabel.textContent = t("callConnected");
         appendSys(t("sysCallSecure"));
         // If ontrack fired early and deferred play, do it now
@@ -1050,10 +1052,12 @@ async function handleSignaling(data) {
       break;
 
     case "call-ice":
-      // Trickle ICE candidate for the call renegotiation — add directly to PC
-      if (pc && inCall) {
+      if (!pc || !inCall) break;
+      if (pc.remoteDescription && pc.remoteDescription.type) {
         try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
         catch (e) { console.warn("call-ice add failed:", e); }
+      } else {
+        callIceQueue.push(data.candidate);
       }
       break;
 
@@ -1536,7 +1540,31 @@ async function attachCallMedia(withVideo) {
   localVideo.srcObject = localStream;
   localVideo.muted = true;
   localVideo.play().catch(() => {}); // explicit play — needed on some mobile browsers
-  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+  localStream.getTracks().forEach(track => attachCallTrack(track, localStream));
+}
+
+function attachCallTrack(track, stream) {
+  const reusable = pc.getTransceivers().find(transceiver =>
+    transceiver.receiver?.track?.kind === track.kind &&
+    !transceiver.sender?.track &&
+    !transceiver.stopped
+  );
+
+  if (reusable) {
+    reusable.direction = "sendrecv";
+    reusable.sender.replaceTrack(track);
+    return;
+  }
+
+  pc.addTrack(track, stream);
+}
+
+async function drainCallIceQueue() {
+  if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) return;
+  while (callIceQueue.length) {
+    try { await pc.addIceCandidate(new RTCIceCandidate(callIceQueue.shift())); }
+    catch (e) { console.warn("queued call-ice add failed:", e); }
+  }
 }
 
 async function initiateCallOffer(withVideo) {
@@ -1570,6 +1598,7 @@ async function handleIncomingCallOffer(data) {
     // setRemoteDescription fires ontrack immediately — stream is stored but
     // not played yet (inCall may not be true here if WS delivered offer fast)
     await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    await drainCallIceQueue();
     // Do NOT drain iceQueue here — those are data-channel ICE candidates,
     // completely separate from call ICE. Applying them here corrupts call ICE state.
     await attachCallMedia(withVideo);
@@ -1668,6 +1697,7 @@ function endCall(notify = true) {
   inCall = false;
   _callIceMode = false;
   pendingCallVideo = false;
+  callIceQueue = [];
   remoteVideo._pendingPlay = false;
   if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
   stopCallMedia(true);
