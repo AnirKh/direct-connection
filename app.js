@@ -337,9 +337,9 @@ const callDeclineBtn   = document.getElementById("callDeclineBtn");
 /* ── State ───────────────────────────────────── */
 let ws              = null;
 let pc              = null;
+let callPc          = null;
 let dataChannel     = null;
 let inCall          = false;
-let _callIceMode    = false;   // true while call ICE is being gathered — routes onicecandidate to call-ice
 let pendingCallVideo = false;
 let currentSession  = null;
 let isConnecting    = false;
@@ -766,6 +766,7 @@ function closePeerConnection() {
     pc.ondatachannel  = pc.ontrack = null;
     pc.close(); pc = null;
   }
+  closeCallPeerConnection();
   dataChannel = null;
   sendBtn.disabled = true;
 }
@@ -776,12 +777,7 @@ function createPeerConnection() {
 
   pc.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
-    if (_callIceMode) {
-      // Call renegotiation — send as call-ice so it doesn't contaminate the data iceQueue
-      wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
-    } else {
-      wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
-    }
+    wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -795,7 +791,30 @@ function createPeerConnection() {
 
   pc.ondatachannel = ({ channel }) => { dataChannel = channel; setupDataChannel(); };
 
-  pc.ontrack = ({ track, streams }) => {
+  pc.ontrack = null;
+}
+
+function createCallPeerConnection() {
+  closeCallPeerConnection();
+  callPc = new RTCPeerConnection(ICE_CONFIG);
+
+  callPc.onicecandidate = ({ candidate }) => {
+    if (!candidate || !currentSession) return;
+    wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
+  };
+
+  callPc.onconnectionstatechange = () => {
+    if (!callPc) return;
+    const state = callPc.connectionState;
+    if (state === "connected") {
+      callStatusLabel.textContent = t("callConnected");
+    }
+    if (state === "failed" || state === "closed") {
+      if (inCall) endCall(false);
+    }
+  };
+
+  callPc.ontrack = ({ track, streams }) => {
     // Always store the stream even if inCall hasn't been set yet —
     // the callee's ontrack fires during setRemoteDescription(offer),
     // which happens before inCall = true on their side.
@@ -819,6 +838,14 @@ function createPeerConnection() {
       remoteVideo._pendingPlay = true;
     }
   };
+}
+
+function closeCallPeerConnection() {
+  if (callPc) {
+    callPc.onicecandidate = callPc.onconnectionstatechange = callPc.ontrack = null;
+    callPc.close();
+    callPc = null;
+  }
 }
 
 function isChatLinkUp() {
@@ -1038,8 +1065,8 @@ async function handleSignaling(data) {
       break;
 
     case "call-answer":
-      if (pc && inCall) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      if (callPc && inCall) {
+        await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
         await drainCallIceQueue();
         callStatusLabel.textContent = t("callConnected");
         appendSys(t("sysCallSecure"));
@@ -1052,9 +1079,9 @@ async function handleSignaling(data) {
       break;
 
     case "call-ice":
-      if (!pc || !inCall) break;
-      if (pc.remoteDescription && pc.remoteDescription.type) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+      if (!data.candidate) break;
+      if (callPc && callPc.remoteDescription && callPc.remoteDescription.type) {
+        try { await callPc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
         catch (e) { console.warn("call-ice add failed:", e); }
       } else {
         callIceQueue.push(data.candidate);
@@ -1487,6 +1514,7 @@ voiceCallBtn.onclick = () => requestCall(false);
 videoCallBtn.onclick = () => requestCall(true);
 
 function requestCall(withVideo) {
+  if (inCall) return;
   if (!dcReady() || !pc) { appendSys(t("callNeedLink")); return; }
   if (!isChatLinkUp()) { appendSys(t("callNeedLink")); return; }
   inCall = true;
@@ -1496,6 +1524,10 @@ function requestCall(withVideo) {
 }
 
 function handleCallRequest(data) {
+  if (inCall) {
+    dcSendCallSignal({ type: "call-reject" });
+    return;
+  }
   const kind = data.withVideo ? t("incomingVideo") : t("incomingVoice");
   // Show a styled in-app modal instead of the browser's confirm() dialog
   callRequestIcon.textContent = data.withVideo ? "📹" : "📞";
@@ -1544,7 +1576,8 @@ async function attachCallMedia(withVideo) {
 }
 
 function attachCallTrack(track, stream) {
-  const reusable = pc.getTransceivers().find(transceiver =>
+  if (!callPc) return;
+  const reusable = callPc.getTransceivers().find(transceiver =>
     transceiver.receiver?.track?.kind === track.kind &&
     !transceiver.sender?.track &&
     !transceiver.stopped
@@ -1556,13 +1589,13 @@ function attachCallTrack(track, stream) {
     return;
   }
 
-  pc.addTrack(track, stream);
+  callPc.addTrack(track, stream);
 }
 
 async function drainCallIceQueue() {
-  if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) return;
+  if (!callPc || !callPc.remoteDescription || !callPc.remoteDescription.type) return;
   while (callIceQueue.length) {
-    try { await pc.addIceCandidate(new RTCIceCandidate(callIceQueue.shift())); }
+    try { await callPc.addIceCandidate(new RTCIceCandidate(callIceQueue.shift())); }
     catch (e) { console.warn("queued call-ice add failed:", e); }
   }
 }
@@ -1571,19 +1604,18 @@ async function initiateCallOffer(withVideo) {
   if (!pc || !currentSession) return;
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
+    createCallPeerConnection();
     await attachCallMedia(withVideo);
-    _callIceMode = true;   // from here, onicecandidate sends call-ice
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    const offer = await callPc.createOffer();
+    await callPc.setLocalDescription(offer);
     // Send offer immediately — trickle ICE candidates will follow via call-ice messages
     wsSend({
       type: "call-offer",
-      offer: pc.localDescription,
+      offer: callPc.localDescription,
       withVideo,
       sessionId: currentSession.sessionId
     });
   } catch (e) {
-    _callIceMode = false;
     console.error("Call offer error:", e);
     endCall(false);
     appendSys(I18N[LANG].sysCallFailed(e.message));
@@ -1595,20 +1627,18 @@ async function handleIncomingCallOffer(data) {
   const withVideo = Boolean(data.withVideo);
   showCallOverlay(t("connecting"), withVideo);
   try {
+    createCallPeerConnection();
     // setRemoteDescription fires ontrack immediately — stream is stored but
     // not played yet (inCall may not be true here if WS delivered offer fast)
-    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
     await drainCallIceQueue();
-    // Do NOT drain iceQueue here — those are data-channel ICE candidates,
-    // completely separate from call ICE. Applying them here corrupts call ICE state.
     await attachCallMedia(withVideo);
-    _callIceMode = true;   // from here, onicecandidate sends call-ice
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    const answer = await callPc.createAnswer();
+    await callPc.setLocalDescription(answer);
     // Send answer immediately — trickle ICE candidates follow via call-ice messages
     wsSend({
       type: "call-answer",
-      answer: pc.localDescription,
+      answer: callPc.localDescription,
       sessionId: currentSession.sessionId
     });
     callStatusLabel.textContent = t("callConnected");
@@ -1619,7 +1649,6 @@ async function handleIncomingCallOffer(data) {
       remoteVideo.play().catch(() => {});
     }
   } catch (e) {
-    _callIceMode = false;
     console.error("Call answer error:", e);
     endCall(false);
     appendSys(I18N[LANG].sysCallFailed(e.message));
@@ -1631,10 +1660,10 @@ function stopCallMedia(clearOverlay = true) {
     localStream.getTracks().forEach(tr => tr.stop());
     localStream = null;
   }
-  if (pc) {
-    pc.getSenders().forEach(sender => {
+  if (callPc) {
+    callPc.getSenders().forEach(sender => {
       if (sender.track && (sender.track.kind === "audio" || sender.track.kind === "video")) {
-        try { pc.removeTrack(sender); } catch (_) {}
+        try { callPc.removeTrack(sender); } catch (_) {}
       }
     });
   }
@@ -1695,12 +1724,13 @@ endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
   inCall = false;
-  _callIceMode = false;
   pendingCallVideo = false;
   callIceQueue = [];
   remoteVideo._pendingPlay = false;
+  callRequestModal.classList.add("hidden");
   if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
   stopCallMedia(true);
+  closeCallPeerConnection();
 }
 
 /* ══════════════════════════════════════════════
