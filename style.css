@@ -127,6 +127,71 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Back button */
 #leaveBtn { color: var(--muted); font-size: 20px; }
 
+.key-verify {
+  position: relative;
+  flex-shrink: 0;
+}
+.key-verify summary {
+  list-style: none;
+}
+.key-verify summary::-webkit-details-marker {
+  display: none;
+}
+.key-verify[open] summary {
+  color: var(--green);
+  background: rgba(74,222,128,0.1);
+}
+.key-verify-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 300;
+  width: min(300px, calc(100vw - 28px));
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+}
+.key-verify-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.key-verify-code {
+  padding: 10px;
+  border-radius: 6px;
+  background: #0b1220;
+  color: var(--green);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 15px;
+  text-align: center;
+  letter-spacing: 0;
+  user-select: all;
+}
+.key-verify-hint {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.key-verify input {
+  height: 38px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+.key-verify-status {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.key-verify-status.ok { color: var(--green); }
+.key-verify-status.bad { color: var(--danger); }
+
 /* ── LOBBY ─────────────────────────────────── */
 #lobbyScreen {
   display: flex; justify-content: center; align-items: flex-start;

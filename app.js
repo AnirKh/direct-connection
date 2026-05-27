@@ -121,9 +121,15 @@ const I18N = {
     sessionNotFound: "Өрөө олдсонгүй — хугацаа дуусч байж магадгүй.",
     sessionFull:     "Өрөө дүүрсэн байна.",
     // E2E encryption
-    sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Хурууны хээ: ${fp}`,
+    sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Баталгаажуулах код: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
     e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
+    verifyKeys:      "Түлхүүр шалгах",
+    verifyHint:      "Нөгөө хүний дэлгэц дээрх кодтой харьцуулна уу.",
+    verifyPlaceholder:"Баталгаажуулах код",
+    verifyMatch:     "Тохирлоо",
+    verifyMismatch:  "Тохирохгүй байна",
+    verifyPending:   "Шалгаагүй",
     sysCallSecure:   "Дуудлага холбогдлоо — аудио/видео WebRTC-ээр шифрлэгдэнэ (сервер уншихгүй).",
     callNeedLink:    "Эхлээд харилцагчтай холбогдохыг хүлээнэ үү (холбоос ногоон болмогц дахин оролдоно уу).",
     // Server wake
@@ -220,9 +226,15 @@ const I18N = {
     sessionNotFound: "Session not found — it may have expired.",
     sessionFull:     "Session is full.",
     // E2E encryption
-    sysE2eReady:     (fp) => `🔐 Encryption active · Fingerprint: ${fp}`,
+    sysE2eReady:     (fp) => `🔐 Encryption active · Verification code: ${fp}`,
     e2eWaiting:      "Setting up encryption…",
     e2eFailed:       "Encryption setup failed. Please reconnect.",
+    verifyKeys:      "Verify keys",
+    verifyHint:      "Compare this code with the code shown on your peer's screen.",
+    verifyPlaceholder:"Verification code",
+    verifyMatch:     "Matched",
+    verifyMismatch:  "Does not match",
+    verifyPending:   "Not verified",
     sysCallSecure:   "Call connected — audio/video encrypted by WebRTC (server cannot listen in).",
     callNeedLink:    "Wait until you are connected to your contact (green status), then try again.",
     // Server wake
@@ -333,6 +345,10 @@ const callRequestTitle = document.getElementById("callRequestTitle");
 const callRequestIcon  = document.getElementById("callRequestIcon");
 const callAcceptBtn    = document.getElementById("callAcceptBtn");
 const callDeclineBtn   = document.getElementById("callDeclineBtn");
+const keyVerifyDropdown = document.getElementById("keyVerifyDropdown");
+const keyVerifyCode  = document.getElementById("keyVerifyCode");
+const keyVerifyInput = document.getElementById("keyVerifyInput");
+const keyVerifyStatus= document.getElementById("keyVerifyStatus");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
@@ -403,8 +419,8 @@ function showReconnectButton() {
 /* ══════════════════════════════════════════════
    E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
    ─────────────────────────────────────────────
-   App-layer key (fingerprint shown in chat) for:
-     - text, photos, files, voice notes on the data channel
+   App-layer key (verification code shown in chat) for:
+     - text, photos, files, voice notes, and call signaling on the data channel
    Voice/video calls use WebRTC’s built-in DTLS-SRTP (reliable in all
    major browsers; the server still cannot decrypt call media).
    Flow:
@@ -416,14 +432,22 @@ function showReconnectButton() {
 let e2eKey      = null;   // CryptoKey AES-GCM 256 (derived)
 let e2eKeyPair  = null;   // ECDH ephemeral key pair
 let e2eReady    = false;
+let e2eVerifyCode = "";
+let e2eVerified = false;
+let e2eLocalPubRaw = null;
 
 async function e2eInit() {
+  e2eVerifyCode = "";
+  e2eVerified = false;
+  e2eLocalPubRaw = null;
+  updateKeyVerifyUi();
   e2eKeyPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     false,
     ["deriveKey"]
   );
   const pubJwk = await crypto.subtle.exportKey("jwk", e2eKeyPair.publicKey);
+  e2eLocalPubRaw = await crypto.subtle.exportKey("raw", e2eKeyPair.publicKey);
   // Send over already-open data channel (raw, not through dcSend so we bypass e2eReady guard)
   if (dataChannel && dataChannel.readyState === "open") {
     dataChannel.send(JSON.stringify({ type: "e2e-pubkey", key: pubJwk }));
@@ -447,18 +471,14 @@ async function e2eDeriveKey(peerPubJwk) {
     );
     e2eReady = true;
     sendBtn.disabled = false;
+    voiceCallBtn.disabled = false;
+    videoCallBtn.disabled = false;
 
-    // Compute a short fingerprint from the peer's raw public key
-    const raw  = await crypto.subtle.exportKey("raw", peerPub);
-    const hash = await crypto.subtle.digest("SHA-256", raw);
-    const fp   = Array.from(new Uint8Array(hash))
-      .map(b => b.toString(16).padStart(2, "0"))
-      .join("")
-      .slice(0, 16)
-      .replace(/(.{4})/g, "$1 ")
-      .trim();
+    const peerRaw = await crypto.subtle.exportKey("raw", peerPub);
+    e2eVerifyCode = await makeSharedVerificationCode(e2eLocalPubRaw, peerRaw);
+    updateKeyVerifyUi();
 
-    appendSys(I18N[LANG].sysE2eReady(fp));
+    appendSys(I18N[LANG].sysE2eReady(e2eVerifyCode));
   } catch (err) {
     console.error("E2E key derivation failed:", err);
     e2eReady = false;
@@ -507,11 +527,9 @@ async function dcSendE2e(obj) {
   return true;
 }
 
-/** Call signaling on the data channel (plain JSON — must arrive reliably). */
+/** Call signaling rides inside the E2E data-channel envelope. */
 function dcSendCallSignal(obj) {
-  if (!dcReady()) return false;
-  dcSend(obj);
-  return true;
+  return dcSendE2e(obj);
 }
 
 const DEFAULT_SERVER_URL = "https://direct-connection.onrender.com";
@@ -762,6 +780,10 @@ function closePeerConnection() {
   e2eKeyPair = null;
   e2eReady = false;
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+  e2eVerifyCode = "";
+  e2eVerified = false;
+  e2eLocalPubRaw = null;
+  updateKeyVerifyUi();
   if (pc) {
     pc.onicecandidate = pc.oniceconnectionstatechange =
     pc.ondatachannel  = pc.ontrack = null;
@@ -803,7 +825,7 @@ function createCallPeerConnection() {
 
   callPc.onicecandidate = ({ candidate }) => {
     if (!candidate || !currentSession) return;
-    wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
+    dcSendCallSignal({ type: "call-ice", candidate });
   };
 
   callPc.onconnectionstatechange = () => {
@@ -900,8 +922,8 @@ function setupDataChannel() {
 
   dataChannel.onopen = async () => {
     // sendBtn stays disabled until E2E key exchange completes (usually <100ms)
-    voiceCallBtn.disabled = false;
-    videoCallBtn.disabled = false;
+    voiceCallBtn.disabled = true;
+    videoCallBtn.disabled = true;
     appendSys(t("sysConnected"));
     appendSys(t("e2eWaiting"));
     e2eReady = false;
@@ -911,6 +933,8 @@ function setupDataChannel() {
 
   dataChannel.onclose = () => {
     sendBtn.disabled = true;
+    voiceCallBtn.disabled = true;
+    videoCallBtn.disabled = true;
     appendSys(t("sysClosed"));
     // Clean up unacknowledged messages and incomplete transfers to free memory
     for (const k of Object.keys(pendingAcks)) delete pendingAcks[k];
@@ -1070,27 +1094,11 @@ async function handleSignaling(data) {
       break;
 
     case "call-answer":
-      if (callPc && inCall) {
-        await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        await drainCallIceQueue();
-        callStatusLabel.textContent = t("callConnected");
-        appendSys(t("sysCallSecure"));
-        // If ontrack fired early and deferred play, do it now
-        if (remoteVideo._pendingPlay) {
-          remoteVideo._pendingPlay = false;
-          playRemoteCallMedia();
-        }
-      }
+      await handleCallAnswer(data);
       break;
 
     case "call-ice":
-      if (!data.candidate) break;
-      if (callPc && callPc.remoteDescription && callPc.remoteDescription.type) {
-        try { await callPc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-        catch (e) { console.warn("call-ice add failed:", e); }
-      } else {
-        callIceQueue.push(data.candidate);
-      }
+      await handleCallIce(data.candidate);
       break;
 
     case "peer-disconnected":
@@ -1341,6 +1349,18 @@ function handleTextMessage(data) {
     case "call-accept":
       initiateCallOffer(data.withVideo);
       break;
+
+    case "call-offer":
+      handleIncomingCallOffer(data);
+      break;
+
+    case "call-answer":
+      handleCallAnswer(data);
+      break;
+
+    case "call-ice":
+      handleCallIce(data.candidate);
+      break;
   }
 }
 
@@ -1521,6 +1541,7 @@ videoCallBtn.onclick = () => requestCall(true);
 function requestCall(withVideo) {
   if (inCall) return;
   if (!dcReady() || !pc) { appendSys(t("callNeedLink")); return; }
+  if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
   if (!isChatLinkUp()) { appendSys(t("callNeedLink")); return; }
   inCall = true;
   pendingCallVideo = withVideo;
@@ -1582,6 +1603,58 @@ async function attachCallMedia(withVideo) {
   }
 }
 
+async function makeSharedVerificationCode(localRaw, peerRaw) {
+  const local = new Uint8Array(localRaw);
+  const peer = new Uint8Array(peerRaw);
+  const first = compareBytes(local, peer) <= 0 ? local : peer;
+  const second = first === local ? peer : local;
+  const joined = new Uint8Array(first.length + second.length);
+  joined.set(first, 0);
+  joined.set(second, first.length);
+  const hash = await crypto.subtle.digest("SHA-256", joined);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 20)
+    .replace(/(.{4})/g, "$1 ")
+    .trim()
+    .toUpperCase();
+}
+
+function compareBytes(a, b) {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
+
+function normalizeVerifyCode(value) {
+  return String(value || "").replace(/[^a-fA-F0-9]/g, "").toUpperCase();
+}
+
+function updateKeyVerifyUi() {
+  if (!keyVerifyCode || !keyVerifyInput || !keyVerifyStatus) return;
+  keyVerifyCode.textContent = e2eVerifyCode || "----";
+  if (!e2eVerifyCode) keyVerifyInput.value = "";
+  keyVerifyStatus.textContent = e2eVerified ? t("verifyMatch") : t("verifyPending");
+  keyVerifyStatus.classList.toggle("ok", e2eVerified);
+  keyVerifyStatus.classList.toggle("bad", false);
+}
+
+if (keyVerifyInput) {
+  keyVerifyInput.addEventListener("input", () => {
+    const typed = normalizeVerifyCode(keyVerifyInput.value);
+    const expected = normalizeVerifyCode(e2eVerifyCode);
+    e2eVerified = Boolean(expected && typed && typed === expected);
+    keyVerifyStatus.textContent = e2eVerified
+      ? t("verifyMatch")
+      : (typed ? t("verifyMismatch") : t("verifyPending"));
+    keyVerifyStatus.classList.toggle("ok", e2eVerified);
+    keyVerifyStatus.classList.toggle("bad", Boolean(typed && !e2eVerified));
+  });
+}
+
 function ensureOutgoingCallTransceivers(withVideo) {
   if (!callPc) return;
   const hasAudio = callPc.getTransceivers().some(t => t.receiver?.track?.kind === "audio" && !t.stopped);
@@ -1630,6 +1703,28 @@ async function drainCallIceQueue() {
   }
 }
 
+async function handleCallAnswer(data) {
+  if (!callPc || !inCall) return;
+  await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
+  await drainCallIceQueue();
+  callStatusLabel.textContent = t("callConnected");
+  appendSys(t("sysCallSecure"));
+  if (remoteVideo._pendingPlay) {
+    remoteVideo._pendingPlay = false;
+    playRemoteCallMedia();
+  }
+}
+
+async function handleCallIce(candidate) {
+  if (!candidate) return;
+  if (callPc && callPc.remoteDescription && callPc.remoteDescription.type) {
+    try { await callPc.addIceCandidate(new RTCIceCandidate(candidate)); }
+    catch (e) { console.warn("call-ice add failed:", e); }
+  } else {
+    callIceQueue.push(candidate);
+  }
+}
+
 async function initiateCallOffer(withVideo) {
   if (!pc || !currentSession) return;
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
@@ -1640,11 +1735,10 @@ async function initiateCallOffer(withVideo) {
     const offer = await callPc.createOffer();
     await callPc.setLocalDescription(offer);
     // Send offer immediately — trickle ICE candidates will follow via call-ice messages
-    wsSend({
+    dcSendCallSignal({
       type: "call-offer",
       offer: callPc.localDescription,
-      withVideo,
-      sessionId: currentSession.sessionId
+      withVideo
     });
   } catch (e) {
     console.error("Call offer error:", e);
@@ -1667,10 +1761,9 @@ async function handleIncomingCallOffer(data) {
     const answer = await callPc.createAnswer();
     await callPc.setLocalDescription(answer);
     // Send answer immediately — trickle ICE candidates follow via call-ice messages
-    wsSend({
+    dcSendCallSignal({
       type: "call-answer",
-      answer: callPc.localDescription,
-      sessionId: currentSession.sessionId
+      answer: callPc.localDescription
     });
     callStatusLabel.textContent = t("callConnected");
     appendSys(t("sysCallSecure"));

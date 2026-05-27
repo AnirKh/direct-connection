@@ -159,6 +159,18 @@
         <div id="connectionQuality" class="quality-label">⬤ <span data-i18n="connecting">Холбогдож байна…</span></div>
       </div>
       <div class="chat-header-actions">
+        <details id="keyVerifyDropdown" class="key-verify">
+          <summary class="icon-btn" aria-label="Verify keys">
+            <i class="ti ti-shield-check" aria-hidden="true"></i>
+          </summary>
+          <div class="key-verify-panel">
+            <div class="key-verify-title" data-i18n="verifyKeys">Түлхүүр шалгах</div>
+            <div id="keyVerifyCode" class="key-verify-code">----</div>
+            <div class="key-verify-hint" data-i18n="verifyHint">Нөгөө хүний дэлгэц дээрх кодтой харьцуулна уу.</div>
+            <input id="keyVerifyInput" type="text" autocomplete="off" spellcheck="false" data-i18n-ph="verifyPlaceholder" placeholder="Баталгаажуулах код">
+            <div id="keyVerifyStatus" class="key-verify-status" data-i18n="verifyPending">Шалгаагүй</div>
+          </div>
+        </details>
         <button id="voiceCallBtn" class="icon-btn" aria-label="Voice call" disabled>
           <i class="ti ti-phone" aria-hidden="true"></i>
         </button>
