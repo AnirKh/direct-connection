@@ -42,6 +42,42 @@ body {
 .hidden { display: none !important; }
 .screen { width: 100%; height: 100dvh; height: -webkit-fill-available; }
 
+.lang-switcher {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 1001;
+  display: flex;
+  gap: 2px;
+  background: rgba(15,23,42,0.85);
+  border-radius: 8px;
+  padding: 3px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid #334155;
+}
+.lang-btn {
+  width: auto !important;
+  min-height: 26px !important;
+  padding: 0 10px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  color: #6b7280 !important;
+  margin: 0 !important;
+  letter-spacing: 0.5px;
+  transition: background 0.15s, color 0.15s !important;
+}
+.lang-btn.active {
+  background: #2563eb !important;
+  color: #fff !important;
+}
+.lang-btn:hover:not(.active) {
+  background: rgba(255,255,255,0.07) !important;
+  color: #e2e8f0 !important;
+}
+
 /* ── OVERLAY / MODAL ───────────────────────── */
 .overlay {
   position: fixed; inset: 0;

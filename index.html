@@ -3,46 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' blob: data:; media-src 'self' blob: mediastream:; connect-src 'self' https://direct-connection.onrender.com wss://direct-connection.onrender.com http://localhost:3000 ws://localhost:3000 http://127.0.0.1:3000 ws://127.0.0.1:3000; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; worker-src 'self' blob:">
   <title>Шууд холбоос</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="style.css">
-  <style>
-    .lang-switcher {
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      z-index: 1001;
-      display: flex;
-      gap: 2px;
-      background: rgba(15,23,42,0.85);
-      border-radius: 8px;
-      padding: 3px;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid #334155;
-    }
-    .lang-btn {
-      width: auto !important;
-      min-height: 26px !important;
-      padding: 0 10px !important;
-      font-size: 11px !important;
-      font-weight: 700 !important;
-      border-radius: 5px !important;
-      background: transparent !important;
-      color: #6b7280 !important;
-      margin: 0 !important;
-      letter-spacing: 0.5px;
-      transition: background 0.15s, color 0.15s !important;
-    }
-    .lang-btn.active {
-      background: #2563eb !important;
-      color: #fff !important;
-    }
-    .lang-btn:hover:not(.active) {
-      background: rgba(255,255,255,0.07) !important;
-      color: #e2e8f0 !important;
-    }
-  </style>
 </head>
 <body>
 

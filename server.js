@@ -33,6 +33,7 @@
 const express    = require("express");
 const http       = require("http");
 const crypto     = require("crypto");
+const path       = require("path");
 const WebSocket  = require("ws");
 const multer     = require("multer");
 const { Resend } = require("resend");
@@ -55,6 +56,35 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.
 
 const API_CLIENT_HEADER = "x-dc-client";
 const API_CLIENT_VALUE  = "1";
+const TABLER_CDN_ORIGIN = "https://cdn.jsdelivr.net";
+
+function wsOriginFor(origin) {
+  return origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+}
+
+function contentSecurityPolicy() {
+  const connectOrigins = new Set([
+    "'self'",
+    ...ALLOWED_ORIGINS,
+    ...ALLOWED_ORIGINS.map(wsOriginFor)
+  ]);
+
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    `style-src 'self' 'unsafe-inline' ${TABLER_CDN_ORIGIN}`,
+    `font-src 'self' ${TABLER_CDN_ORIGIN} data:`,
+    "img-src 'self' blob: data:",
+    "media-src 'self' blob: mediastream:",
+    `connect-src ${Array.from(connectOrigins).join(" ")}`,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "frame-src 'none'",
+    "worker-src 'self' blob:"
+  ].join("; ");
+}
 
 function getClientIp(req) {
   return (
@@ -112,8 +142,15 @@ const upload = multer({
 });
 
 app.use((req, res, next) => {
+  res.setHeader("Content-Security-Policy", contentSecurityPolicy());
   res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(), payment=(), usb=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  if (req.secure || req.headers["x-forwarded-proto"] === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
@@ -123,6 +160,14 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
+});
+
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+app.get(["/app.js", "/style.css"], (req, res) => {
+  res.sendFile(path.join(__dirname, req.path.slice(1)));
 });
 
 /* ── Ping endpoint — used by client to wake server ── */
@@ -265,7 +310,8 @@ function escapeHtml(str) {
     .replace(/&/g,  "&amp;")
     .replace(/</g,  "&lt;")
     .replace(/>/g,  "&gt;")
-    .replace(/"/g,  "&quot;");
+    .replace(/"/g,  "&quot;")
+    .replace(/'/g,  "&#39;");
 }
 
 /* ══════════════════════════════════════════════
