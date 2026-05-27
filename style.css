@@ -516,9 +516,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   position: absolute;
   bottom: calc(110px + var(--safe-bottom));
   right: calc(14px + var(--safe-right));
-  width: 120px;
-  height: 68px; /* 16:9 landscape — matches most webcams and rear cameras */
-  object-fit: cover;
+  width: min(34vw, 156px);
+  min-width: 86px;
+  max-height: min(28vh, 180px);
+  aspect-ratio: var(--local-video-aspect, 16 / 9);
+  height: auto;
+  object-fit: contain;
   border-radius: 10px;
   border: 2px solid rgba(255,255,255,0.25);
   z-index: 10;
@@ -572,7 +575,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   .bubble { font-size: 14px; padding: 8px 12px; }
   .bubble img { max-width: min(200px, 58vw); }
   .voice-bubble audio { width: min(160px, 45vw); }
-  #localVideo { width: 96px; height: 54px; }
+  #localVideo { width: min(36vw, 128px); min-width: 78px; }
   .call-controls { gap: 14px; }
   .call-btn { width: 52px; height: 52px; font-size: 20px; }
   .attach-menu button { padding: 13px 16px; font-size: 14px; }

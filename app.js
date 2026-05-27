@@ -1597,9 +1597,25 @@ async function attachCallMedia(withVideo) {
   });
   localVideo.srcObject = localStream;
   localVideo.muted = true;
+  updateLocalVideoAspect();
+  localVideo.onloadedmetadata = updateLocalVideoAspect;
+  localStream.getVideoTracks().forEach(track => {
+    track.onunmute = updateLocalVideoAspect;
+    track.onended = () => localVideo.style.removeProperty("--local-video-aspect");
+  });
   localVideo.play().catch(() => {}); // explicit play — needed on some mobile browsers
   for (const track of localStream.getTracks()) {
     await attachCallTrack(track, localStream);
+  }
+}
+
+function updateLocalVideoAspect() {
+  const videoTrack = localStream?.getVideoTracks()[0];
+  const settings = videoTrack?.getSettings?.() || {};
+  const width = localVideo.videoWidth || settings.width;
+  const height = localVideo.videoHeight || settings.height;
+  if (width && height) {
+    localVideo.style.setProperty("--local-video-aspect", `${width} / ${height}`);
   }
 }
 
@@ -1676,6 +1692,8 @@ function stopLocalCallMedia() {
     });
   }
   localVideo.srcObject = null;
+  localVideo.onloadedmetadata = null;
+  localVideo.style.removeProperty("--local-video-aspect");
 }
 
 async function attachCallTrack(track, stream) {
