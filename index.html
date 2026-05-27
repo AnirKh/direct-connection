@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Шууд холбоос</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="style.css">
   <style>
     .lang-switcher {
@@ -130,6 +130,11 @@
     <div id="callOverlay" class="call-overlay hidden">
       <video id="remoteVideo" autoplay playsinline></video>
       <video id="localVideo"  autoplay playsinline muted></video>
+      <!-- Shown during voice-only calls instead of blank black screen -->
+      <div class="voice-only-avatar">
+        <div class="avatar-circle">🎙️</div>
+        <div class="avatar-name" id="voiceCallPeerName"></div>
+      </div>
       <div id="callStatusLabel" class="call-status-label"></div>
       <div class="call-controls">
         <button id="toggleMuteBtn" class="call-btn" aria-label="Mute">
@@ -210,6 +215,21 @@
         <i class="ti ti-send" aria-hidden="true"></i>
       </button>
 
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="dcToastContainer" class="dc-toast-container"></div>
+
+  <!-- Incoming call modal -->
+  <div id="callRequestModal" class="overlay hidden">
+    <div class="modal">
+      <div class="modal-icon" id="callRequestIcon">📞</div>
+      <h2 id="callRequestTitle"></h2>
+      <div class="call-modal-actions">
+        <button id="callDeclineBtn"></button>
+        <button id="callAcceptBtn"></button>
+      </div>
     </div>
   </div>
 

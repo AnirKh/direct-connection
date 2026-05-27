@@ -129,6 +129,13 @@ const I18N = {
     // Server wake
     serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
     serverReady:     "Сервер бэлэн боллоо.",
+    // P2P file size
+    fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
+    // Reconnect
+    reconnectBtn:    "← Лобби руу буцах",
+    // Incoming call modal
+    callAccept:      "Зөвшөөрөх",
+    callDecline:     "Татгалзах",
   },
   en: {
     modalTitle:      "Direct Connection",
@@ -221,6 +228,13 @@ const I18N = {
     // Server wake
     serverWaking:    "Server is waking up, please wait…",
     serverReady:     "Server is ready.",
+    // P2P file size
+    fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
+    // Reconnect
+    reconnectBtn:    "← Back to Lobby",
+    // Incoming call modal
+    callAccept:      "Accept",
+    callDecline:     "Decline",
   }
 };
 
@@ -314,12 +328,18 @@ const leaveFile        = document.getElementById("leaveFile");
 const leaveFileName    = document.getElementById("leaveFileName");
 const leaveSendBtn     = document.getElementById("leaveSendBtn");
 const leaveStatus      = document.getElementById("leaveStatus");
+const callRequestModal = document.getElementById("callRequestModal");
+const callRequestTitle = document.getElementById("callRequestTitle");
+const callRequestIcon  = document.getElementById("callRequestIcon");
+const callAcceptBtn    = document.getElementById("callAcceptBtn");
+const callDeclineBtn   = document.getElementById("callDeclineBtn");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
 let pc              = null;
 let dataChannel     = null;
 let inCall          = false;
+let _callIceMode    = false;   // true while call ICE is being gathered — routes onicecandidate to call-ice
 let pendingCallVideo = false;
 let currentSession  = null;
 let isConnecting    = false;
@@ -341,6 +361,42 @@ let peerTyping      = false;
 let _lastSessionList = [];  // cache for re-render on language change
 
 const recvBuffers = {};
+
+/* ── Blob URL memory management ─────────────
+   Every createObjectURL() is tracked here.
+   revokeTrackedBlobUrls() is called on leave
+   so memory is freed when the chat closes.     */
+const _trackedBlobUrls = [];
+function trackBlobUrl(url) { _trackedBlobUrls.push(url); return url; }
+function revokeTrackedBlobUrls() {
+  while (_trackedBlobUrls.length) URL.revokeObjectURL(_trackedBlobUrls.pop());
+}
+
+/* ── In-app toast (replaces alert()) ────────
+   type: "info" | "warn" | "error" | "ok"      */
+function showToast(msg, type = "info") {
+  const container = document.getElementById("dcToastContainer");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = `dc-toast dc-toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 4000);
+}
+
+/* ── Reconnect / back-to-lobby button ───────
+   Shown in chat when the peer disconnects.    */
+function showReconnectButton() {
+  const wrap = document.createElement("div");
+  wrap.className = "reconnect-sys-wrap";
+  const btn = document.createElement("button");
+  btn.className = "reconnect-sys-btn";
+  btn.textContent = t("reconnectBtn");
+  btn.onclick = () => leaveBtn.click();
+  wrap.appendChild(btn);
+  chatMessages.appendChild(wrap);
+  scrollBottom();
+}
 
 /* ══════════════════════════════════════════════
    E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
@@ -464,6 +520,7 @@ const SERVER_URL = window.DIRECT_CONNECTION_SERVER_URL ||
 const WS_URL = SERVER_URL.replace(/^http/, "ws");
 const CHUNK_SIZE    = 65536;
 const MAX_DC_MSG    = 200000;
+const MAX_P2P_FILE_BYTES = 150 * 1024 * 1024; // 150 MB hard cap for P2P transfers
 
 /** Max size for “leave a message” file; server may raise via /api/ping (Resend email ~40MB cap). */
 let maxLeaveAttachBytes = 28 * 1024 * 1024;
@@ -586,7 +643,11 @@ function connectWebSocket() {
       }, 10 * 60 * 1000);
     }
   };
-  ws.onclose   = () => setTimeout(connectWebSocket, 3000);
+  ws.onclose   = () => {
+    // Clear keep-alive so it doesn't stack when we reconnect
+    if (_keepAliveInterval) { clearInterval(_keepAliveInterval); _keepAliveInterval = null; }
+    setTimeout(connectWebSocket, 3000);
+  };
   ws.onerror   = (e) => console.error("WS error", e);
   let _signalQueue = Promise.resolve();
   ws.onmessage = (ev) => {
@@ -656,7 +717,7 @@ function timeAgo(ts) {
 
 createBtn.onclick = () => {
   const sessionId = sessionIdInput.value.trim();
-  if (!sessionId) { alert(t("enterSessionName")); return; }
+  if (!sessionId) { showToast(t("enterSessionName"), "warn"); return; }
   if (isConnecting) return;
   isConnecting = true;
   createBtn.disabled = true;
@@ -712,7 +773,13 @@ function createPeerConnection() {
   pc = new RTCPeerConnection(ICE_CONFIG);
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
+    if (!candidate) return;
+    if (_callIceMode) {
+      // Call renegotiation — send as call-ice so it doesn't contaminate the data iceQueue
+      wsSend({ type: "call-ice", candidate, sessionId: currentSession.sessionId });
+    } else {
+      wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
+    }
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -726,12 +793,29 @@ function createPeerConnection() {
 
   pc.ondatachannel = ({ channel }) => { dataChannel = channel; setupDataChannel(); };
 
-  pc.ontrack = ({ streams }) => {
-    const stream = streams[0];
-    if (!stream || !inCall) return;
-    remoteVideo.srcObject = stream;
-    remoteVideo.play().catch(() => {});
-    callStatusLabel.textContent = t("callConnected");
+  pc.ontrack = ({ track, streams }) => {
+    // Always store the stream even if inCall hasn't been set yet —
+    // the callee's ontrack fires during setRemoteDescription(offer),
+    // which happens before inCall = true on their side.
+    if (streams && streams.length > 0) {
+      if (remoteVideo.srcObject !== streams[0]) {
+        remoteVideo.srcObject = streams[0];
+      }
+    } else {
+      if (!(remoteVideo.srcObject instanceof MediaStream)) {
+        remoteVideo.srcObject = new MediaStream();
+      }
+      const existing = remoteVideo.srcObject.getTracks();
+      if (!existing.includes(track)) remoteVideo.srcObject.addTrack(track);
+    }
+    // Play and update status only when the call is actually active
+    if (inCall) {
+      remoteVideo.play().catch(() => {});
+      callStatusLabel.textContent = t("callConnected");
+    } else {
+      // Store for later — play() is called again when inCall becomes true
+      remoteVideo._pendingPlay = true;
+    }
   };
 }
 
@@ -753,15 +837,27 @@ async function handleFullRenegotiation() {
 
 function waitForICEGathering(peerConn) {
   return new Promise(resolve => {
-    if (peerConn.iceGatheringState === "complete") return resolve();
-    const fn = () => {
-      if (peerConn.iceGatheringState === "complete") {
-        peerConn.removeEventListener("icegatheringstatechange", fn);
-        resolve();
-      }
+    // Do NOT check iceGatheringState immediately — after setLocalDescription, the
+    // browser may still show "complete" from the previous round while new gathering
+    // is about to start. Wait a tick first, then watch for the event.
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallback);
+      peerConn.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
     };
-    peerConn.addEventListener("icegatheringstatechange", fn);
-    setTimeout(() => { peerConn.removeEventListener("icegatheringstatechange", fn); resolve(); }, 5000);
+    const onChange = () => {
+      if (peerConn.iceGatheringState === "complete") finish();
+    };
+    peerConn.addEventListener("icegatheringstatechange", onChange);
+    // Hard timeout — always resolve after 5s regardless
+    const fallback = setTimeout(finish, 5000);
+    // After 250ms, check if state is already complete (no new gathering needed)
+    setTimeout(() => {
+      if (peerConn.iceGatheringState === "complete") finish();
+    }, 250);
   });
 }
 
@@ -782,6 +878,10 @@ function setupDataChannel() {
   dataChannel.onclose = () => {
     sendBtn.disabled = true;
     appendSys(t("sysClosed"));
+    // Clean up unacknowledged messages and incomplete transfers to free memory
+    for (const k of Object.keys(pendingAcks)) delete pendingAcks[k];
+    for (const k of Object.keys(recvBuffers)) delete recvBuffers[k];
+    showReconnectButton();
   };
 
   dataChannel.onerror = e => console.error("DC error", e);
@@ -938,11 +1038,22 @@ async function handleSignaling(data) {
     case "call-answer":
       if (pc && inCall) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        while (iceQueue.length) {
-          try { await pc.addIceCandidate(iceQueue.shift()); } catch (e) { console.error(e); }
-        }
+        // Do NOT drain iceQueue — those are data-channel ICE, not call ICE
         callStatusLabel.textContent = t("callConnected");
         appendSys(t("sysCallSecure"));
+        // If ontrack fired early and deferred play, do it now
+        if (remoteVideo._pendingPlay) {
+          remoteVideo._pendingPlay = false;
+          remoteVideo.play().catch(() => {});
+        }
+      }
+      break;
+
+    case "call-ice":
+      // Trickle ICE candidate for the call renegotiation — add directly to PC
+      if (pc && inCall) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        catch (e) { console.warn("call-ice add failed:", e); }
       }
       break;
 
@@ -950,6 +1061,7 @@ async function handleSignaling(data) {
       appendSys(t("sysPeerLeft"));
       endCall(false);
       closePeerConnection();
+      showReconnectButton();
       break;
 
     case "error":
@@ -962,7 +1074,7 @@ async function handleSignaling(data) {
         setLobbyButtons(false);
         isConnecting = false;
       } else {
-        alert(data.message);
+        showToast(data.message, "error");
         createInfo.textContent = "";
         createBtn.disabled = false;
         pinJoinBtn.disabled = false;
@@ -1021,6 +1133,7 @@ leaveBtn.onclick = () => {
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();
+  revokeTrackedBlobUrls(); // free all file/image/voice blob memory
   currentSession = null;
   isHost = false;
   isConnecting = false;
@@ -1210,6 +1323,13 @@ async function sendBinary(file, kind) {
   if (!dcReady()) return;
   if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
 
+  // File size limit — prevent OOM and very long transfers
+  const maxMb = Math.round(MAX_P2P_FILE_BYTES / 1024 / 1024);
+  if (file.size > MAX_P2P_FILE_BYTES) {
+    showToast(I18N[LANG].fileTooLargeP2P(maxMb), "warn");
+    return;
+  }
+
   const id = makeTransferId();
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
@@ -1219,7 +1339,7 @@ async function sendBinary(file, kind) {
     mimeType: file.type || "audio/webm", kind, totalChunks
   });
 
-  const localUrl = URL.createObjectURL(file);
+  const localUrl = trackBlobUrl(URL.createObjectURL(file));  // tracked — revoked on leave
   if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
   if (kind === "image") resolveImageNow("me", localUrl, file.name);
   if (kind === "voice") resolveVoiceNow("me", localUrl);
@@ -1263,7 +1383,7 @@ async function assembleTransfer(id) {
   } else {
     blob = new Blob(info.chunks, { type: info.mimeType });
   }
-  const url = URL.createObjectURL(blob);
+  const url = trackBlobUrl(URL.createObjectURL(blob));  // tracked — revoked on leave
 
   if (info.kind === "file")  resolveFileBubble(id, url, info.name);
   if (info.kind === "image") resolveImagePlaceholder(id, url, info.name);
@@ -1274,9 +1394,11 @@ async function assembleTransfer(id) {
 
 function drainBuffer() {
   return new Promise(resolve => {
+    const deadline = Date.now() + 30_000; // give up after 30s — don't freeze forever
     const check = () => {
-      if (!dataChannel || dataChannel.bufferedAmount < 262144) resolve();
-      else setTimeout(check, 50);
+      if (!dataChannel || dataChannel.bufferedAmount < 262144) { resolve(); return; }
+      if (Date.now() > deadline) { resolve(); return; } // channel stalled — proceed anyway
+      setTimeout(check, 50);
     };
     check();
   });
@@ -1343,7 +1465,7 @@ async function toggleVoiceRecord() {
       voiceRecordBtn.title = t("stopRecord");
 
     } catch (_) {
-      alert(t("micDenied"));
+      showToast(t("micDenied"), "warn");
     }
 
   } else {
@@ -1371,17 +1493,38 @@ function requestCall(withVideo) {
 
 function handleCallRequest(data) {
   const kind = data.withVideo ? t("incomingVideo") : t("incomingVoice");
-  const accept = confirm(I18N[LANG].incomingCall(kind));
-  if (!accept) { dcSendCallSignal({ type: "call-reject" }); return; }
-  if (!pc || !isChatLinkUp()) {
-    appendSys(t("callNeedLink"));
+  // Show a styled in-app modal instead of the browser's confirm() dialog
+  callRequestIcon.textContent = data.withVideo ? "📹" : "📞";
+  callRequestTitle.textContent = I18N[LANG].incomingCall(kind);
+  callAcceptBtn.textContent  = t("callAccept");
+  callDeclineBtn.textContent = t("callDecline");
+  callRequestModal.classList.remove("hidden");
+
+  const cleanup = () => callRequestModal.classList.add("hidden");
+
+  callDeclineBtn.onclick = () => {
+    cleanup();
     dcSendCallSignal({ type: "call-reject" });
-    return;
-  }
-  inCall = true;
-  pendingCallVideo = data.withVideo;
-  dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
-  showCallOverlay(t("connecting"), data.withVideo);
+  };
+
+  callAcceptBtn.onclick = () => {
+    cleanup();
+    if (!pc || !isChatLinkUp()) {
+      appendSys(t("callNeedLink"));
+      dcSendCallSignal({ type: "call-reject" });
+      return;
+    }
+    inCall = true;
+    pendingCallVideo = data.withVideo;
+    dcSendCallSignal({ type: "call-accept", withVideo: data.withVideo });
+    showCallOverlay(t("connecting"), data.withVideo);
+    // If ontrack already fired and stored the remote stream, play it now
+    if (remoteVideo.srcObject && remoteVideo._pendingPlay) {
+      remoteVideo._pendingPlay = false;
+      remoteVideo.play().catch(() => {});
+      callStatusLabel.textContent = t("callConnected");
+    }
+  };
 }
 
 async function attachCallMedia(withVideo) {
@@ -1392,6 +1535,7 @@ async function attachCallMedia(withVideo) {
   });
   localVideo.srcObject = localStream;
   localVideo.muted = true;
+  localVideo.play().catch(() => {}); // explicit play — needed on some mobile browsers
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 }
 
@@ -1400,9 +1544,10 @@ async function initiateCallOffer(withVideo) {
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
     await attachCallMedia(withVideo);
+    _callIceMode = true;   // from here, onicecandidate sends call-ice
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    await waitForICEGathering(pc);
+    // Send offer immediately — trickle ICE candidates will follow via call-ice messages
     wsSend({
       type: "call-offer",
       offer: pc.localDescription,
@@ -1410,6 +1555,7 @@ async function initiateCallOffer(withVideo) {
       sessionId: currentSession.sessionId
     });
   } catch (e) {
+    _callIceMode = false;
     console.error("Call offer error:", e);
     endCall(false);
     appendSys(I18N[LANG].sysCallFailed(e.message));
@@ -1421,14 +1567,16 @@ async function handleIncomingCallOffer(data) {
   const withVideo = Boolean(data.withVideo);
   showCallOverlay(t("connecting"), withVideo);
   try {
+    // setRemoteDescription fires ontrack immediately — stream is stored but
+    // not played yet (inCall may not be true here if WS delivered offer fast)
     await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-    while (iceQueue.length) {
-      try { await pc.addIceCandidate(iceQueue.shift()); } catch (e) { console.error(e); }
-    }
+    // Do NOT drain iceQueue here — those are data-channel ICE candidates,
+    // completely separate from call ICE. Applying them here corrupts call ICE state.
     await attachCallMedia(withVideo);
+    _callIceMode = true;   // from here, onicecandidate sends call-ice
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    await waitForICEGathering(pc);
+    // Send answer immediately — trickle ICE candidates follow via call-ice messages
     wsSend({
       type: "call-answer",
       answer: pc.localDescription,
@@ -1436,7 +1584,13 @@ async function handleIncomingCallOffer(data) {
     });
     callStatusLabel.textContent = t("callConnected");
     appendSys(t("sysCallSecure"));
+    // If ontrack already fired and stored a stream, play it now
+    if (remoteVideo._pendingPlay) {
+      remoteVideo._pendingPlay = false;
+      remoteVideo.play().catch(() => {});
+    }
   } catch (e) {
+    _callIceMode = false;
     console.error("Call answer error:", e);
     endCall(false);
     appendSys(I18N[LANG].sysCallFailed(e.message));
@@ -1473,6 +1627,9 @@ function showCallOverlay(statusText, withVideo) {
   callStatusLabel.textContent = statusText;
   callOverlay.classList.remove("hidden");
   callOverlay.classList.toggle("voice-only", !withVideo);
+  // Show the peer name in voice-only avatar
+  const nameEl = document.getElementById("voiceCallPeerName");
+  if (nameEl) nameEl.textContent = currentSession?.sessionId || "";
   if (withVideo) {
     remoteVideo.classList.remove("hidden");
     localVideo.classList.remove("hidden");
@@ -1509,7 +1666,9 @@ endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
   inCall = false;
+  _callIceMode = false;
   pendingCallVideo = false;
+  remoteVideo._pendingPlay = false;
   if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
   stopCallMedia(true);
 }
@@ -1820,4 +1979,3 @@ function dcReady() {
 function dcSend(obj) {
   if (dcReady()) dataChannel.send(JSON.stringify(obj));
 }
-

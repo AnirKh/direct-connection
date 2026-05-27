@@ -1,7 +1,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── Tabler icons ──────────────────────────── */
-@import url("https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css");
+/* Tabler icons loaded via <link> in index.html — no @import needed here */
 
 :root {
   /* Slate Blue theme */
@@ -385,17 +384,44 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .call-overlay.voice-only #localVideo {
   display: none !important;
 }
+/* Voice-only avatar shown in the centre of the overlay */
+.voice-only-avatar {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -60%);
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  z-index: 5;
+  pointer-events: none;
+}
+.voice-only-avatar .avatar-circle {
+  width: 96px; height: 96px; border-radius: 50%;
+  background: #1e293b;
+  border: 3px solid rgba(255,255,255,0.15);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 42px;
+}
+.voice-only-avatar .avatar-name {
+  font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.85);
+  letter-spacing: 0.3px;
+}
+/* Hide voice avatar in video calls */
+.call-overlay:not(.voice-only) .voice-only-avatar { display: none; }
 #remoteVideo {
-  width: 100%; height: 100%; object-fit: cover;
+  width: 100%; height: 100%; object-fit: contain; /* contain = show full frame, no cropping */
   position: absolute; inset: 0;
+  background: #000; /* black bars instead of cropping */
 }
 #localVideo {
   position: absolute;
   bottom: calc(110px + var(--safe-bottom));
   right: calc(14px + var(--safe-right));
-  width: 90px; height: 130px; object-fit: cover;
-  border-radius: 12px; border: 2px solid rgba(255,255,255,0.2);
+  width: 120px;
+  height: 68px; /* 16:9 landscape — matches most webcams and rear cameras */
+  object-fit: cover;
+  border-radius: 10px;
+  border: 2px solid rgba(255,255,255,0.25);
   z-index: 10;
+  background: #111;
 }
 .call-status-label {
   position: absolute;
@@ -445,7 +471,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   .bubble { font-size: 14px; padding: 8px 12px; }
   .bubble img { max-width: min(200px, 58vw); }
   .voice-bubble audio { width: min(160px, 45vw); }
-  #localVideo { width: 76px; height: 108px; }
+  #localVideo { width: 96px; height: 54px; }
   .call-controls { gap: 14px; }
   .call-btn { width: 52px; height: 52px; font-size: 20px; }
   .attach-menu button { padding: 13px 16px; font-size: 14px; }
@@ -458,3 +484,53 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   .send-btn  { width: 38px; height: 38px; }
   .bubble-row { max-width: 92%; }
 }
+/* ── TOAST NOTIFICATIONS ───────────────────── */
+.dc-toast-container {
+  position: fixed;
+  bottom: calc(80px + var(--safe-bottom));
+  left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; z-index: 9999; pointer-events: none;
+  width: min(360px, 90vw);
+}
+.dc-toast {
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 14px; font-weight: 500;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  animation: toastIn 0.2s ease, toastOut 0.3s ease 3.7s forwards;
+  pointer-events: auto;
+  text-align: center;
+  max-width: 100%;
+}
+.dc-toast-info  { background: #1e40af; }
+.dc-toast-warn  { background: #92400e; }
+.dc-toast-error { background: #7f1d1d; }
+.dc-toast-ok    { background: #14532d; }
+@keyframes toastIn  { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform: translateY(0); } }
+@keyframes toastOut { from { opacity:1; } to { opacity:0; pointer-events:none; } }
+
+/* ── RECONNECT BUTTON ──────────────────────── */
+.reconnect-sys-wrap {
+  align-self: center; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; margin: 8px 0;
+}
+.reconnect-sys-btn {
+  width: auto; margin: 0; padding: 9px 22px;
+  font-size: 14px; min-height: 38px; border-radius: 10px;
+  background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--border);
+}
+.reconnect-sys-btn:hover:not(:disabled) { background: #3d4f66; color: var(--text); }
+
+/* ── INCOMING CALL MODAL ───────────────────── */
+#callRequestModal .modal { text-align: center; }
+#callRequestModal .call-modal-actions {
+  display: flex; gap: 10px; margin-top: 16px;
+}
+#callDeclineBtn {
+  background: var(--danger) !important;
+  color: #fff !important;
+}
+#callDeclineBtn:hover:not(:disabled) { background: #dc2626 !important; }
