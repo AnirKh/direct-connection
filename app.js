@@ -348,6 +348,7 @@ let iceQueue        = [];
 let callIceQueue    = [];
 
 let localStream     = null;
+let remoteCallStream = null;
 let isMuted         = false;
 let isCamOff        = false;
 let mediaRecorder   = null;
@@ -796,6 +797,8 @@ function createPeerConnection() {
 
 function createCallPeerConnection() {
   closeCallPeerConnection();
+  remoteCallStream = new MediaStream();
+  remoteVideo.srcObject = remoteCallStream;
   callPc = new RTCPeerConnection(ICE_CONFIG);
 
   callPc.onicecandidate = ({ candidate }) => {
@@ -814,24 +817,20 @@ function createCallPeerConnection() {
     }
   };
 
-  callPc.ontrack = ({ track, streams }) => {
+  callPc.ontrack = ({ track }) => {
     // Always store the stream even if inCall hasn't been set yet —
     // the callee's ontrack fires during setRemoteDescription(offer),
     // which happens before inCall = true on their side.
-    if (streams && streams.length > 0) {
-      if (remoteVideo.srcObject !== streams[0]) {
-        remoteVideo.srcObject = streams[0];
-      }
-    } else {
-      if (!(remoteVideo.srcObject instanceof MediaStream)) {
-        remoteVideo.srcObject = new MediaStream();
-      }
-      const existing = remoteVideo.srcObject.getTracks();
-      if (!existing.includes(track)) remoteVideo.srcObject.addTrack(track);
+    if (!remoteCallStream) {
+      remoteCallStream = new MediaStream();
+      remoteVideo.srcObject = remoteCallStream;
     }
+    if (!remoteCallStream.getTracks().includes(track)) remoteCallStream.addTrack(track);
+    track.onunmute = () => playRemoteCallMedia();
+
     // Play and update status only when the call is actually active
     if (inCall) {
-      remoteVideo.play().catch(() => {});
+      playRemoteCallMedia();
       callStatusLabel.textContent = t("callConnected");
     } else {
       // Store for later — play() is called again when inCall becomes true
@@ -840,12 +839,18 @@ function createCallPeerConnection() {
   };
 }
 
+function playRemoteCallMedia() {
+  if (!remoteVideo.srcObject && remoteCallStream) remoteVideo.srcObject = remoteCallStream;
+  remoteVideo.play().catch(() => {});
+}
+
 function closeCallPeerConnection() {
   if (callPc) {
     callPc.onicecandidate = callPc.onconnectionstatechange = callPc.ontrack = null;
     callPc.close();
     callPc = null;
   }
+  remoteCallStream = null;
 }
 
 function isChatLinkUp() {
@@ -1073,7 +1078,7 @@ async function handleSignaling(data) {
         // If ontrack fired early and deferred play, do it now
         if (remoteVideo._pendingPlay) {
           remoteVideo._pendingPlay = false;
-          remoteVideo.play().catch(() => {});
+          playRemoteCallMedia();
         }
       }
       break;
@@ -1557,7 +1562,7 @@ function handleCallRequest(data) {
     // If ontrack already fired and stored the remote stream, play it now
     if (remoteVideo.srcObject && remoteVideo._pendingPlay) {
       remoteVideo._pendingPlay = false;
-      remoteVideo.play().catch(() => {});
+      playRemoteCallMedia();
       callStatusLabel.textContent = t("callConnected");
     }
   };
@@ -1575,6 +1580,14 @@ async function attachCallMedia(withVideo) {
   for (const track of localStream.getTracks()) {
     await attachCallTrack(track, localStream);
   }
+}
+
+function ensureOutgoingCallTransceivers(withVideo) {
+  if (!callPc) return;
+  const hasAudio = callPc.getTransceivers().some(t => t.receiver?.track?.kind === "audio" && !t.stopped);
+  const hasVideo = callPc.getTransceivers().some(t => t.receiver?.track?.kind === "video" && !t.stopped);
+  if (!hasAudio) callPc.addTransceiver("audio", { direction: "sendrecv" });
+  if (withVideo && !hasVideo) callPc.addTransceiver("video", { direction: "sendrecv" });
 }
 
 function stopLocalCallMedia() {
@@ -1622,6 +1635,7 @@ async function initiateCallOffer(withVideo) {
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
     createCallPeerConnection();
+    ensureOutgoingCallTransceivers(withVideo);
     await attachCallMedia(withVideo);
     const offer = await callPc.createOffer();
     await callPc.setLocalDescription(offer);
@@ -1663,7 +1677,7 @@ async function handleIncomingCallOffer(data) {
     // If ontrack already fired and stored a stream, play it now
     if (remoteVideo._pendingPlay) {
       remoteVideo._pendingPlay = false;
-      remoteVideo.play().catch(() => {});
+      playRemoteCallMedia();
     }
   } catch (e) {
     console.error("Call answer error:", e);
