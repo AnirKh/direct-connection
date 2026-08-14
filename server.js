@@ -10,6 +10,7 @@
   - Call offer/answer relay
   - Peer disconnect notification
   - Session cleanup on disconnect
+  - WebSocket heartbeat (30s ping/pong) drops clients that vanished silently
   - Stale session pruner (10 min)
   - PIN brute-force protection (3 attempts → 30s lockout per IP)
   - Per-room failed join throttling (mitigates distributed PIN guessing)
@@ -26,6 +27,7 @@
   Optional:
     ALLOWED_ORIGINS       Comma-separated browser origins (must include your static site origin)
     PUBLIC_SESSION_LIST   Set to "0" to never expose other users' room names in the lobby
+    HEARTBEAT_MS          Ping sweep interval, 1000–300000 (default 30000)
 */
 
 "use strict";
@@ -492,6 +494,10 @@ wss.on("connection", (ws, req) => {
   const clientIp = getClientIp(req);
 
   ws.clientIp = clientIp;
+  /* Heartbeat state — reset by every pong; see the sweep below. Browsers answer
+     protocol-level pings automatically, so no client-side change is needed. */
+  ws.isAlive  = true;
+  ws.on("pong", () => { ws.isAlive = true; });
   console.log(`Client connected ${ipLogId(clientIp)} | sessions: ${sessions.size}`);
 
   ws.on("close", () => { console.log(`Client disconnected ${ipLogId(clientIp)}`); cleanupClient(ws); });
@@ -667,12 +673,54 @@ wss.on("connection", (ws, req) => {
   });
 });
 
+/* ══════════════════════════════════════════════
+   HEARTBEAT
+   ─────────────────────────────────────────────
+   A phone that sleeps or drops off the network never sends a close frame, so
+   without this the socket looks connected forever: the room stays occupied,
+   its name stays taken, and the surviving peer is never told the other side
+   is gone. Ping every client each sweep; a client that did not answer the
+   previous sweep is terminated, which fires "close" → cleanupClient().
+   Detection takes between one and two sweeps.
+══════════════════════════════════════════════ */
+
+const HEARTBEAT_MS = (() => {
+  const parsed = parseInt(process.env.HEARTBEAT_MS || "", 10);
+  if (Number.isFinite(parsed) && parsed >= 1000 && parsed <= 300_000) return parsed;
+  return 30_000;
+})();
+
+const heartbeat = setInterval(() => {
+  wss.clients.forEach(ws => {
+    if (ws.isAlive === false) {
+      console.log(`Terminating unresponsive client ${ipLogId(ws.clientIp || "unknown")}`);
+      ws.terminate();          // fires "close" → cleanupClient frees the session
+      return;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (_) { ws.terminate(); }
+  });
+}, HEARTBEAT_MS);
+
+wss.on("close", () => clearInterval(heartbeat));
+
 /* ── Stale session pruner (10 min, host-only) ── */
 setInterval(() => {
   const TEN_MIN = 10 * 60 * 1000;
   const now = Date.now();
   let pruned = 0;
   for (const [id, s] of sessions) {
+    /* Host socket already gone — the room can never be used again, and its name
+       would stay reserved. Normally cleanupClient() has handled this on "close";
+       this is a backstop for a close event that never fired. */
+    if (!s.host || s.host.readyState !== WebSocket.OPEN) {
+      if (s.guest?.readyState === WebSocket.OPEN) {
+        s.guest.send(JSON.stringify({ type: "peer-disconnected" }));
+      }
+      sessions.delete(id);
+      pruned++;
+      continue;
+    }
     if (!s.guest && now - s.createdAt > TEN_MIN) {
       // Notify host if still connected
       if (s.host?.readyState === WebSocket.OPEN) {
