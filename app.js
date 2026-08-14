@@ -137,6 +137,7 @@ const I18N = {
     serverReady:     "Сервер бэлэн боллоо.",
     // P2P file size
     fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
+    transferFailed:  "Дамжуулалт тасарлаа — дахин илгээнэ үү",
     // Reconnect
     reconnectBtn:    "← Лобби руу буцах",
     // Incoming call modal
@@ -242,6 +243,7 @@ const I18N = {
     serverReady:     "Server is ready.",
     // P2P file size
     fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
+    transferFailed:  "Transfer incomplete — ask the sender to try again",
     // Reconnect
     reconnectBtn:    "← Back to Lobby",
     // Incoming call modal
@@ -379,6 +381,24 @@ let peerTyping      = false;
 let _lastSessionList = [];  // cache for re-render on language change
 
 const recvBuffers = {};
+
+/* ── Early-chunk parking ────────────────────
+   transfer-meta travels inside the encrypted e2e-dc envelope, so it is decrypted
+   asynchronously, while binary chunks are handled synchronously. A chunk can
+   therefore land before its metadata is registered. Park those here instead of
+   dropping them; transfer-meta adopts them the moment it lands.               */
+const orphanChunks     = {};
+let   orphanChunkCount = 0;
+const ORPHAN_CHUNK_MAX = 64;   // ~4 MB ceiling — the race window is a few chunks at most
+
+/** Removes and returns chunks parked for `id` (empty array if none). */
+function takeOrphanChunks(id) {
+  const early = orphanChunks[id];
+  if (!early) return [];
+  delete orphanChunks[id];
+  orphanChunkCount -= early.length;
+  return early;
+}
 
 /* ── Blob URL memory management ─────────────
    Every createObjectURL() is tracked here.
@@ -799,7 +819,9 @@ function createPeerConnection() {
   pc = new RTCPeerConnection(ICE_CONFIG);
 
   pc.onicecandidate = ({ candidate }) => {
-    if (!candidate) return;
+    // Null candidate = gathering finished. currentSession can already be gone if
+    // the user left mid-gathering — candidates now outlive the old blocking wait.
+    if (!candidate || !currentSession) return;
     wsSend({ type: "ice-candidate", candidate, sessionId: currentSession.sessionId });
   };
 
@@ -886,35 +908,9 @@ async function handleFullRenegotiation() {
   try {
     const offer = await pc.createOffer({ iceRestart: true });
     await pc.setLocalDescription(offer);
-    await waitForICEGathering(pc);
+    // Send immediately — restarted ICE candidates trickle in behind it
     wsSend({ type: "renegotiate-offer", offer: pc.localDescription, sessionId: currentSession.sessionId });
   } catch (e) { console.error("Renegotiation error:", e); }
-}
-
-function waitForICEGathering(peerConn) {
-  return new Promise(resolve => {
-    // Do NOT check iceGatheringState immediately — after setLocalDescription, the
-    // browser may still show "complete" from the previous round while new gathering
-    // is about to start. Wait a tick first, then watch for the event.
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(fallback);
-      peerConn.removeEventListener("icegatheringstatechange", onChange);
-      resolve();
-    };
-    const onChange = () => {
-      if (peerConn.iceGatheringState === "complete") finish();
-    };
-    peerConn.addEventListener("icegatheringstatechange", onChange);
-    // Hard timeout — always resolve after 5s regardless
-    const fallback = setTimeout(finish, 5000);
-    // After 250ms, check if state is already complete (no new gathering needed)
-    setTimeout(() => {
-      if (peerConn.iceGatheringState === "complete") finish();
-    }, 250);
-  });
 }
 
 function setupDataChannel() {
@@ -939,6 +935,8 @@ function setupDataChannel() {
     // Clean up unacknowledged messages and incomplete transfers to free memory
     for (const k of Object.keys(pendingAcks)) delete pendingAcks[k];
     for (const k of Object.keys(recvBuffers)) delete recvBuffers[k];
+    for (const k of Object.keys(orphanChunks)) delete orphanChunks[k];
+    orphanChunkCount = 0;
     showReconnectButton();
   };
 
@@ -1041,7 +1039,7 @@ async function handleSignaling(data) {
       {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await waitForICEGathering(pc);
+        // Send immediately — trickle ICE candidates follow via ice-candidate messages
         wsSend({ type: "offer", offer: pc.localDescription, sessionId: currentSession.sessionId });
       }
       break;
@@ -1054,7 +1052,7 @@ async function handleSignaling(data) {
       {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await waitForICEGathering(pc);
+        // Send immediately — trickle ICE candidates follow via ice-candidate messages
         wsSend({ type: "answer", answer: pc.localDescription, sessionId: currentSession.sessionId });
       }
       break;
@@ -1080,7 +1078,7 @@ async function handleSignaling(data) {
       {
         const ra = await pc.createAnswer();
         await pc.setLocalDescription(ra);
-        await waitForICEGathering(pc);
+        // Send immediately — trickle ICE candidates follow via ice-candidate messages
         wsSend({ type: "renegotiate-answer", answer: pc.localDescription, sessionId: currentSession.sessionId });
       }
       break;
@@ -1325,8 +1323,10 @@ function handleTextMessage(data) {
 
     case "transfer-meta":
       recvBuffers[data.id] = {
-        chunks: [], name: data.name, size: data.size,
-        mimeType: data.mimeType, kind: data.kind, e2e: true
+        chunks: takeOrphanChunks(data.id),   // adopt anything that outran this message
+        name: data.name, size: data.size,
+        mimeType: data.mimeType, kind: data.kind,
+        totalChunks: data.totalChunks, e2e: true
       };
       if (data.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
       if (data.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
@@ -1334,7 +1334,10 @@ function handleTextMessage(data) {
       break;
 
     case "transfer-done":
-      assembleTransfer(data.id).catch(err => console.error("Transfer assemble failed:", err));
+      assembleTransfer(data.id).catch(err => {
+        console.error("Transfer assemble failed:", err);
+        failTransfer(data.id);
+      });
       break;
 
     case "call-request":
@@ -1418,19 +1421,48 @@ async function sendBinary(file, kind) {
 
 function handleBinaryChunk(buffer) {
   const id = new TextDecoder().decode(new Uint8Array(buffer, 0, 36));
-  const chunkData = buffer.slice(36);
-  if (recvBuffers[id]) recvBuffers[id].chunks.push(new Uint8Array(chunkData));
+  const chunkData = new Uint8Array(buffer.slice(36));
+
+  const info = recvBuffers[id];
+  if (info) { info.chunks.push(chunkData); return; }
+
+  /* Metadata is still decrypting — hold the chunk rather than dropping it.
+     Past the cap we do drop, and assembleTransfer reports the gap. */
+  if (orphanChunkCount >= ORPHAN_CHUNK_MAX) return;
+  if (!orphanChunks[id]) orphanChunks[id] = [];
+  orphanChunks[id].push(chunkData);
+  orphanChunkCount++;
 }
 
 async function assembleTransfer(id) {
   const info = recvBuffers[id];
-  if (!info) return;
+  delete recvBuffers[id];
+  takeOrphanChunks(id);          // metadata never arrived for these, if any
+
+  if (!info) {
+    console.error(`Transfer ${id}: no metadata received`);
+    appendSys(t("transferFailed"));
+    return;
+  }
+
+  /* totalChunks is authoritative. A short count means chunks were lost, and a
+     silently truncated file is worse than a visible failure. Older peers may
+     omit the field — skip the check rather than fail their transfers. */
+  if (Number.isFinite(info.totalChunks) && info.chunks.length !== info.totalChunks) {
+    console.error(`Transfer ${id}: expected ${info.totalChunks} chunks, got ${info.chunks.length}`);
+    failTransfer(id);
+    return;
+  }
 
   let blob;
   if (info.e2e) {
     const parts = [];
     for (const packet of info.chunks) {
-      if (packet.byteLength < E2E_BIN_IV_LEN) continue;
+      /* Too short to hold an IV — the stream is corrupt, so fail loudly
+         (caught by the transfer-done handler) instead of skipping bytes. */
+      if (packet.byteLength < E2E_BIN_IV_LEN) {
+        throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
+      }
       const iv = packet.slice(0, E2E_BIN_IV_LEN);
       const ct = packet.slice(E2E_BIN_IV_LEN);
       parts.push(await e2eDecryptBytes(ct, iv));
@@ -1444,8 +1476,18 @@ async function assembleTransfer(id) {
   if (info.kind === "file")  resolveFileBubble(id, url, info.name);
   if (info.kind === "image") resolveImagePlaceholder(id, url, info.name);
   if (info.kind === "voice") resolveVoicePlaceholder(id, url);
+}
 
-  delete recvBuffers[id];
+/** Marks a receiving placeholder as failed rather than delivering a truncated file. */
+function failTransfer(id) {
+  const row     = chatMessages.querySelector(`[data-tid="${CSS.escape(id)}"]`);
+  const pending = row && row.querySelector(".transfer-pending");
+  if (!pending) { appendSys(t("transferFailed")); return; }
+  pending.textContent = `⚠️ ${t("transferFailed")}`;
+  pending.classList.remove("transfer-pending");
+  pending.classList.add("transfer-failed");
+  pending.style.color = "#f87171";   // beats the inline colour set on the placeholder
+  scrollBottom();
 }
 
 function drainBuffer() {
@@ -1937,6 +1979,7 @@ function appendImagePlaceholder(who, id, name) {
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   const label = document.createElement("div");
+  label.className = "transfer-pending";
   label.style.cssText = "color:#9ca3af;font-size:13px";
   label.textContent = `🖼️ ${name || t("image")} — ${t("receiving")}`;
   bubble.appendChild(label);
@@ -1990,7 +2033,7 @@ function appendFileBubble(who, url, name, size, id) {
     info.appendChild(link);
   } else {
     const pending = document.createElement("span");
-    pending.className = "file-pending";
+    pending.className = "file-pending transfer-pending";
     pending.style.cssText = "color:#94a3b8;font-size:12px";
     pending.textContent = t("receiving");
     info.appendChild(pending);
@@ -2030,6 +2073,7 @@ function appendVoicePlaceholder(who, id) {
   const mic = document.createElement("span");
   mic.textContent = "🎤";
   const pending = document.createElement("span");
+  pending.className = "transfer-pending";
   pending.style.cssText = "color:#9ca3af;font-size:12px";
   pending.textContent = t("receiving");
   vb.append(mic, pending);
