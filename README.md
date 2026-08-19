@@ -13,6 +13,41 @@ AnirKh.github.io/direct-connection
 
 Adding a string means adding it to **both** languages in `i18n.js` — `t()` falls back to the key name, so a missing translation shows up as raw text in the UI.
 
+## Invite links
+
+```
+https://host/path#<encoded room name>:<join token>:<room secret>
+                  └─ part 0 ─────────┘ └─ part 1 ─┘ └─ part 2 ─┘
+```
+
+| Part | Made by | Goes to the server? | Purpose |
+| --- | --- | --- | --- |
+| room name | the host, typed | **yes** | identifies the room |
+| join token | the **server** | **yes** | lets a guest in without typing the PIN |
+| room secret | the host's **browser** | **never** | authenticates the key exchange |
+
+Built and parsed only by `buildInviteHash` / `parseInviteHash` in `protocol.js`. The room name is URI-encoded, so a literal `:` becomes `%3A`; the token and secret are base64url. No part can therefore contain a `:`, which is what makes splitting on it unambiguous.
+
+### Why the secret is in the fragment
+
+Everything after `#` in a URL is **never sent in an HTTP request**. The browser keeps it. That is the entire reason it lives there.
+
+Plain ECDH cannot detect a man-in-the-middle: the signalling server relays both public keys and could substitute its own. The room secret is mixed into the key derivation (`deriveSharedKey`), so an attacker who never saw it derives a different key, fails the confirmation exchange, and the channel never opens. Users do nothing — they send the link they were sending anyway.
+
+This only works because the server never learns the secret. **The one rule: never put the room secret in a WebSocket message, a query string, a request body, or a log line.** Only `sessionId` and `token` may go over the wire. Breaking this silently removes the protection while everything still appears to work — no error, no failing test, just a guarantee that is quietly gone.
+
+### PIN joins have no secret
+
+Someone joining by typing the 6-digit PIN never received a link, so there is nothing to mix in. Those connections fall back to plain ECDH plus the manual verification code, and the UI shows a standing warning until the code is confirmed.
+
+The host cannot know in advance which way a guest will arrive, so it derives **both** candidate keys and adopts whichever one opens the guest's confirmation packet. That is why an attacker forcing the weaker path is visible — the warning banner appears — rather than silent.
+
+The PIN and token cannot substitute for the room secret: the server generates both, so it already knows them.
+
+### Lifetime
+
+Links are short-lived by nature. A room exists only in the server's memory and disappears when **either** participant disconnects, after ten minutes with nobody having joined, or whenever the server restarts. An "old" link points at a room that no longer exists and simply reports *session not found* — so there is no population of stale links to worry about.
+
 ## Tests
 
 ```
