@@ -313,6 +313,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .chat-header-actions { display: flex; gap: 2px; flex-shrink: 0; }
 
+/* ── VERIFICATION WARNING ──────────────────── */
+.verify-banner {
+  background: rgba(239,68,68,0.15);
+  border-bottom: 1px solid rgba(239,68,68,0.35);
+  color: #fca5a5; font-size: 12px; line-height: 1.4;
+  padding: 7px 14px; flex-shrink: 0; text-align: center;
+}
+
 /* ── STATS BAR ─────────────────────────────── */
 .stats-bar {
   background: rgba(0,0,0,0.3); font-size: 11px; color: var(--muted);

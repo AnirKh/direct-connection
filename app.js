@@ -9,12 +9,19 @@
 "use strict";
 
 /* ── Read hash immediately ───────────────────── */
+/* Invite link: #<encoded room name>:<join token>:<room secret>
+   The room name is URI-encoded (a literal ":" becomes %3A) and both the token
+   and the secret are base64url, so none of the three parts can contain ":" —
+   splitting on it is unambiguous.
+   The room secret is generated in the host's browser and is NEVER sent to the
+   server: URL fragments are not transmitted in HTTP requests, and we only ever
+   put sessionId + token on the WebSocket. It authenticates the key exchange, so
+   a malicious signaling server cannot substitute its own keys unnoticed. */
 const _hash          = location.hash.slice(1);
-// FIX: use indexOf(":") instead of split(":") so session names with colons work,
-//      and decodeURIComponent so encoded names (spaces, Unicode, etc.) round-trip correctly.
-const _colonIdx      = _hash.indexOf(":");
-const _autoSessionId = _colonIdx > -1 ? decodeURIComponent(_hash.slice(0, _colonIdx)) : null;
-const _autoToken     = _colonIdx > -1 ? _hash.slice(_colonIdx + 1) : null;
+const _hashParts     = _hash ? _hash.split(":") : [];
+const _autoSessionId = _hashParts.length >= 2 ? decodeURIComponent(_hashParts[0]) : null;
+const _autoToken     = _hashParts.length >= 2 ? _hashParts[1] : null;
+const _autoSecret    = _hashParts.length >= 3 ? _hashParts[2] : null;
 const _isAutoJoin    = Boolean(_autoSessionId && _autoToken);
 if (_isAutoJoin) history.replaceState({}, "", location.pathname);
 
@@ -124,6 +131,10 @@ const I18N = {
     sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Баталгаажуулах код: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
     e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
+    sysE2eAuto:      "🔒 Шифрлэлт идэвхжлээ · Урилгын холбоосоор автоматаар баталгаажлаа",
+    e2eMismatch:     "⚠️ Шифрлэлтийн шалгалт амжилтгүй — холболт хөндлөнгөөс саатсан байж болзошгүй. Мэдээлэл битгий илгээ.",
+    verifyAuto:      "Автоматаар баталгаажсан",
+    verifyBannerWarn:"Баталгаажаагүй холболт — доорх кодыг нөгөө талтайгаа тулгана уу",
     verifyKeys:      "Түлхүүр шалгах",
     verifyHint:      "Нөгөө хүний дэлгэц дээрх кодтой харьцуулна уу.",
     verifyPlaceholder:"Баталгаажуулах код",
@@ -230,6 +241,10 @@ const I18N = {
     sysE2eReady:     (fp) => `🔐 Encryption active · Verification code: ${fp}`,
     e2eWaiting:      "Setting up encryption…",
     e2eFailed:       "Encryption setup failed. Please reconnect.",
+    sysE2eAuto:      "🔒 Encryption active · verified automatically via the invite link",
+    e2eMismatch:     "⚠️ Encryption check failed — this connection may be intercepted. Do not send anything.",
+    verifyAuto:      "Verified automatically",
+    verifyBannerWarn:"Unverified connection — compare the code with your peer",
     verifyKeys:      "Verify keys",
     verifyHint:      "Compare this code with the code shown on your peer's screen.",
     verifyPlaceholder:"Verification code",
@@ -437,34 +452,75 @@ function showReconnectButton() {
 }
 
 /* ══════════════════════════════════════════════
-   E2E ENCRYPTION  (ECDH P-256 → AES-GCM 256)
+   E2E ENCRYPTION  (ECDH P-256 → HKDF → AES-GCM 256)
    ─────────────────────────────────────────────
-   App-layer key (verification code shown in chat) for:
-     - text, photos, files, voice notes, and call signaling on the data channel
-   Voice/video calls use WebRTC’s built-in DTLS-SRTP (reliable in all
-   major browsers; the server still cannot decrypt call media).
+   App-layer key for text, photos, files, voice notes and call signaling on the
+   data channel. Voice/video media rides WebRTC's own DTLS-SRTP.
+
+   Plain ECDH alone cannot detect a man-in-the-middle: the signaling server sees
+   both public keys and could swap in its own. Two defences:
+
+     Link joins  — the host's browser mints a random room secret, carries it in
+                   the invite-link fragment (never sent to the server) and mixes
+                   it into HKDF. An attacker without the secret derives a
+                   different key, so the confirmation below fails and the chat
+                   never opens. No user action required.
+     PIN joins   — no shared secret exists, so we fall back to plain ECDH and the
+                   manual verification code. The UI says plainly which one you
+                   got, so a forced downgrade is visible rather than silent.
+
+   The host cannot know in advance how the guest will join, so it derives BOTH
+   candidate keys and lets the guest's confirmation packet select one.
+
    Flow:
      1. dataChannel.onopen → e2eInit() → e2e-pubkey exchange
-     2. e2eDeriveKey() → shared AES-GCM key + fingerprint
-     3. Text: {type:"text", ct, iv}; other DC JSON via {type:"e2e-dc", ct, iv}
+     2. both sides derive; guest sends e2e-confirm sealed with its key
+     3. host tries each candidate, adopts the one that opens it, confirms back
+     4. neither opens → e2e-fail, channel stays shut
 ══════════════════════════════════════════════ */
 
-let e2eKey      = null;   // CryptoKey AES-GCM 256 (derived)
+let e2eKey      = null;   // CryptoKey AES-GCM 256 (derived, after confirmation)
 let e2eKeyPair  = null;   // ECDH ephemeral key pair
 let e2eReady    = false;
 let e2eVerifyCode = "";
 let e2eVerified = false;
 let e2eLocalPubRaw = null;
 
+let roomSecret       = null;   // host: minted locally; guest: read from invite link
+let pendingRoomSecret = null;  // secret for the join currently in flight
+let e2eCandidates    = null;   // host only: { secure, plain } awaiting selection
+let e2eKeyPending    = null;   // guest only: key awaiting the host's confirmation
+let e2eSecureMode    = false;  // true = room secret authenticated this exchange
+let e2ePendingConfirm = null;  // confirm that landed before derivation finished
+let e2eConfirmTimer  = null;
+
+const E2E_INFO = new TextEncoder().encode("direct-connection/e2e/v2");
+const E2E_CONFIRM_TIMEOUT_MS = 15_000;
+
+function b64urlBytes(bytes) {
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Fresh room secret for a newly created room. 32 bytes — far too much to guess,
+    so plain HKDF mixing suffices and no password-style exchange is needed. */
+function makeRoomSecret() {
+  return b64urlBytes(crypto.getRandomValues(new Uint8Array(32)));
+}
+
 async function e2eInit() {
   e2eVerifyCode = "";
   e2eVerified = false;
+  e2eSecureMode = false;
   e2eLocalPubRaw = null;
+  e2eCandidates = null;
+  e2eKeyPending = null;
+  e2ePendingConfirm = null;
   updateKeyVerifyUi();
   e2eKeyPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     false,
-    ["deriveKey"]
+    ["deriveKey", "deriveBits"]
   );
   const pubJwk = await crypto.subtle.exportKey("jwk", e2eKeyPair.publicKey);
   e2eLocalPubRaw = await crypto.subtle.exportKey("raw", e2eKeyPair.publicKey);
@@ -472,6 +528,75 @@ async function e2eInit() {
   if (dataChannel && dataChannel.readyState === "open") {
     dataChannel.send(JSON.stringify({ type: "e2e-pubkey", key: pubJwk }));
   }
+}
+
+/** ECDH → HKDF → AES-GCM. `secret` (or its absence) changes the resulting key. */
+async function deriveKeyWith(peerPub, secret) {
+  const bits = await crypto.subtle.deriveBits(
+    { name: "ECDH", public: peerPub }, e2eKeyPair.privateKey, 256);
+  const hkdf = await crypto.subtle.importKey("raw", bits, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {
+      name: "HKDF", hash: "SHA-256",
+      salt: secret ? new TextEncoder().encode(secret) : new Uint8Array(0),
+      info: E2E_INFO
+    },
+    hkdf, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+/* The confirmation carries the verification code, binding it to both public
+   keys — a relayed copy from a different exchange will not match. */
+async function sealConfirm(key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const pt = new TextEncoder().encode(JSON.stringify({ v: "confirm-1", code: e2eVerifyCode }));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, pt);
+  return {
+    type: "e2e-confirm",
+    ct: btoa(String.fromCharCode(...new Uint8Array(ct))),
+    iv: btoa(String.fromCharCode(...iv))
+  };
+}
+
+async function opensConfirm(key, ctB64, ivB64) {
+  try {
+    const from64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: from64(ivB64) }, key, from64(ctB64));
+    const obj = JSON.parse(new TextDecoder().decode(pt));
+    return Boolean(obj) && obj.v === "confirm-1" && obj.code === e2eVerifyCode;
+  } catch (_) { return false; }
+}
+
+function armConfirmTimeout() {
+  clearTimeout(e2eConfirmTimer);
+  e2eConfirmTimer = setTimeout(() => { if (!e2eReady) e2eFailClosed(); }, E2E_CONFIRM_TIMEOUT_MS);
+}
+
+/** Adopt the agreed key and open the chat. `secure` = room secret authenticated it. */
+function e2eActivate(key, secure) {
+  clearTimeout(e2eConfirmTimer);
+  e2eKey        = key;
+  e2eReady      = true;
+  e2eSecureMode = secure;
+  e2eVerified   = secure;   // the link secret already proves there is no middleman
+  sendBtn.disabled      = false;
+  voiceCallBtn.disabled = false;
+  videoCallBtn.disabled = false;
+  updateKeyVerifyUi();
+  appendSys(secure ? t("sysE2eAuto") : I18N[LANG].sysE2eReady(e2eVerifyCode));
+}
+
+/** Refuse to open the channel. Better a dead chat than a silently readable one. */
+function e2eFailClosed() {
+  clearTimeout(e2eConfirmTimer);
+  e2eKey = null; e2eKeyPending = null; e2eCandidates = null; e2ePendingConfirm = null;
+  e2eReady = false; e2eVerified = false; e2eSecureMode = false;
+  sendBtn.disabled      = true;
+  voiceCallBtn.disabled = true;
+  videoCallBtn.disabled = true;
+  updateKeyVerifyUi();
+  appendSys(t("e2eMismatch"));
+  showToast(t("e2eMismatch"), "error");
 }
 
 async function e2eDeriveKey(peerPubJwk) {
@@ -482,28 +607,64 @@ async function e2eDeriveKey(peerPubJwk) {
       true,   // extractable only to compute fingerprint
       []
     );
-    e2eKey = await crypto.subtle.deriveKey(
-      { name: "ECDH", public: peerPub },
-      e2eKeyPair.privateKey,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"]
-    );
-    e2eReady = true;
-    sendBtn.disabled = false;
-    voiceCallBtn.disabled = false;
-    videoCallBtn.disabled = false;
-
     const peerRaw = await crypto.subtle.exportKey("raw", peerPub);
     e2eVerifyCode = await makeSharedVerificationCode(e2eLocalPubRaw, peerRaw);
     updateKeyVerifyUi();
 
-    appendSys(I18N[LANG].sysE2eReady(e2eVerifyCode));
+    if (isHost) {
+      /* Guest may hold the room secret (invite link) or not (PIN). Prepare both. */
+      e2eCandidates = {
+        secure: roomSecret ? await deriveKeyWith(peerPub, roomSecret) : null,
+        plain:  await deriveKeyWith(peerPub, null)
+      };
+    } else {
+      e2eKeyPending = await deriveKeyWith(peerPub, roomSecret);
+      e2eSecureMode = Boolean(roomSecret);
+      dataChannel.send(JSON.stringify(await sealConfirm(e2eKeyPending)));
+    }
+    armConfirmTimeout();
+
+    /* A confirm can arrive while the derivation above is still running. */
+    if (e2ePendingConfirm) {
+      const queued = e2ePendingConfirm;
+      e2ePendingConfirm = null;
+      await handleE2eConfirm(queued);
+    }
   } catch (err) {
     console.error("E2E key derivation failed:", err);
     e2eReady = false;
     sendBtn.disabled = true;
     appendSys(t("e2eFailed"));
+  }
+}
+
+async function handleE2eConfirm(data) {
+  if (e2eReady) return;
+
+  if (isHost) {
+    if (!e2eCandidates) { e2ePendingConfirm = data; return; }
+    const { secure, plain } = e2eCandidates;
+    if (secure && await opensConfirm(secure, data.ct, data.iv)) {
+      e2eCandidates = null;
+      e2eActivate(secure, true);
+    } else if (await opensConfirm(plain, data.ct, data.iv)) {
+      e2eCandidates = null;
+      e2eActivate(plain, false);
+    } else {
+      /* Neither key opens it: a middleman swapped keys, or the peer is running
+         an incompatible build. Either way, do not open the channel. */
+      e2eCandidates = null;
+      dcSend({ type: "e2e-fail" });
+      e2eFailClosed();
+      return;
+    }
+    dataChannel.send(JSON.stringify(await sealConfirm(e2eKey)));
+  } else {
+    if (!e2eKeyPending) { e2ePendingConfirm = data; return; }
+    const key = e2eKeyPending;
+    e2eKeyPending = null;
+    if (await opensConfirm(key, data.ct, data.iv)) e2eActivate(key, e2eSecureMode);
+    else e2eFailClosed();
   }
 }
 
@@ -646,6 +807,7 @@ function checkAutoJoin() {
   if (!_isAutoJoin || _autoJoinSent) return;
   _autoJoinSent = true;
   isConnecting = true;
+  pendingRoomSecret = _autoSecret;   // link join — carries the room secret
   setLobbyButtons(true);
   const msg = document.createElement("span");
   msg.style.color = "#7dd3fc";
@@ -786,6 +948,7 @@ function attemptJoin() {
   if (pin.length !== 6) { pinError.textContent = t("pinMustBe6"); return; }
   pinError.textContent = "";
   pinJoinBtn.disabled = true;
+  pendingRoomSecret = null;   // PIN join — no shared secret, manual verification applies
   wsSend({ type: "join-session", sessionId: pendingJoinId, pin });
 }
 
@@ -803,6 +966,11 @@ function closePeerConnection() {
   e2eVerifyCode = "";
   e2eVerified = false;
   e2eLocalPubRaw = null;
+  e2eSecureMode = false;
+  e2eCandidates = null;
+  e2eKeyPending = null;
+  e2ePendingConfirm = null;
+  clearTimeout(e2eConfirmTimer);
   updateKeyVerifyUi();
   if (pc) {
     pc.onicecandidate = pc.oniceconnectionstatechange =
@@ -966,8 +1134,10 @@ async function handleSignaling(data) {
     case "session-created": {
       isHost = true;
       currentSession = { sessionId: data.sessionId, token: data.token };
+      /* Minted here, in the browser — the server never learns it. */
+      roomSecret = makeRoomSecret();
 
-      const shareUrl = `${location.origin}${location.pathname}#${encodeURIComponent(data.sessionId)}:${data.token}`;
+      const shareUrl = `${location.origin}${location.pathname}#${encodeURIComponent(data.sessionId)}:${data.token}:${roomSecret}`;
 
       createInfo.style.textAlign = "left";
       const ready = document.createElement("div");
@@ -1025,6 +1195,9 @@ async function handleSignaling(data) {
     case "session-joined":
       isHost = false;
       currentSession = { sessionId: data.sessionId };
+      /* Present only when this join came from an invite link. */
+      roomSecret = pendingRoomSecret;
+      pendingRoomSecret = null;
       pinOverlay.classList.add("hidden");
       switchToChat(data.sessionId);
       createPeerConnection();
@@ -1177,6 +1350,8 @@ leaveBtn.onclick = () => {
   closePeerConnection();
   revokeTrackedBlobUrls(); // free all file/image/voice blob memory
   currentSession = null;
+  roomSecret = null;
+  pendingRoomSecret = null;
   isHost = false;
   isConnecting = false;
   chatScreen.classList.add("hidden");
@@ -1302,6 +1477,17 @@ function handleTextMessage(data) {
 
     case "e2e-pubkey":
       e2eDeriveKey(data.key);
+      break;
+
+    case "e2e-confirm":
+      handleE2eConfirm(data).catch(err => {
+        console.error("E2E confirmation failed:", err);
+        e2eFailClosed();
+      });
+      break;
+
+    case "e2e-fail":
+      e2eFailClosed();
       break;
 
     case "ack":
@@ -1691,12 +1877,30 @@ function normalizeVerifyCode(value) {
   return String(value || "").replace(/[^a-fA-F0-9]/g, "").toUpperCase();
 }
 
+/** Warn only when the link is up but unauthenticated — precisely the case where
+    a man-in-the-middle would otherwise be invisible. */
+function updateVerifyBanner() {
+  const banner = document.getElementById("verifyBanner");
+  if (!banner) return;
+  const nag = e2eReady && !e2eSecureMode && !e2eVerified;
+  banner.textContent = nag ? `⚠️ ${t("verifyBannerWarn")}` : "";
+  banner.classList.toggle("hidden", !nag);
+}
+
 function updateKeyVerifyUi() {
+  updateVerifyBanner();
   if (!keyVerifyCode || !keyVerifyInput || !keyVerifyStatus) return;
   keyVerifyCode.textContent = e2eVerifyCode || "----";
   if (!e2eVerifyCode) keyVerifyInput.value = "";
-  keyVerifyStatus.textContent = e2eVerified ? t("verifyMatch") : t("verifyPending");
-  keyVerifyStatus.classList.toggle("ok", e2eVerified);
+  if (e2eSecureMode) {
+    /* Authenticated by the invite-link secret — nothing for the user to compare. */
+    keyVerifyInput.classList.add("hidden");
+    keyVerifyStatus.textContent = t("verifyAuto");
+  } else {
+    keyVerifyInput.classList.remove("hidden");
+    keyVerifyStatus.textContent = e2eVerified ? t("verifyMatch") : t("verifyPending");
+  }
+  keyVerifyStatus.classList.toggle("ok", e2eVerified || e2eSecureMode);
   keyVerifyStatus.classList.toggle("bad", false);
 }
 
@@ -1710,6 +1914,7 @@ if (keyVerifyInput) {
       : (typed ? t("verifyMismatch") : t("verifyPending"));
     keyVerifyStatus.classList.toggle("ok", e2eVerified);
     keyVerifyStatus.classList.toggle("bad", Boolean(typed && !e2eVerified));
+    updateVerifyBanner();
   });
 }
 
