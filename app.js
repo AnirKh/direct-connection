@@ -1507,17 +1507,16 @@ function handleTextMessage(data) {
       typingIndicator.classList.add("hidden");
       break;
 
-    case "transfer-meta":
-      recvBuffers[data.id] = {
-        chunks: takeOrphanChunks(data.id),   // adopt anything that outran this message
-        name: data.name, size: data.size,
-        mimeType: data.mimeType, kind: data.kind,
-        totalChunks: data.totalChunks, e2e: true
-      };
+    case "transfer-meta": {
+      const info = newRecvBuffer(data);
+      recvBuffers[data.id] = info;
       if (data.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
       if (data.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
       if (data.kind === "voice") appendVoicePlaceholder("peer", data.id);
+      /* Chunks that outran this message: feed them through in arrival order. */
+      for (const early of takeOrphanChunks(data.id)) acceptChunk(info, data.id, early);
       break;
+    }
 
     case "transfer-done":
       assembleTransfer(data.id).catch(err => {
@@ -1588,11 +1587,15 @@ async function sendBinary(file, kind) {
   if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
   if (kind === "image") resolveImageNow("me", localUrl, file.name);
   if (kind === "voice") resolveVoiceNow("me", localUrl);
+  attachSendProgress(id);
 
   const idBytes = new TextEncoder().encode(id);
-  const ab = await file.arrayBuffer();
+  let lastPct = -1;
   for (let i = 0; i < totalChunks; i++) {
-    const chunk = ab.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    /* Read one slice at a time. file.arrayBuffer() would pull the whole file
+       into the JS heap — 150 MB of it in the worst case — when only 64 KB is
+       needed; the File itself stays backed by disk. */
+    const chunk = await file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE).arrayBuffer();
     const { iv, ct } = await e2eEncryptBytes(chunk);
     const packet = new Uint8Array(36 + E2E_BIN_IV_LEN + ct.byteLength);
     packet.set(idBytes, 0);
@@ -1600,9 +1603,58 @@ async function sendBinary(file, kind) {
     packet.set(ct, 36 + E2E_BIN_IV_LEN);
     await drainBuffer();
     dataChannel.send(packet.buffer);
+
+    const pct = Math.floor(((i + 1) / totalChunks) * 100);
+    if (pct !== lastPct) { lastPct = pct; setTransferProgress(id, pct, "sending"); }
   }
 
+  clearSendProgress(id);
   await dcSendE2e({ type: "transfer-done", id });
+}
+
+/* Plaintext chunks are folded into a Blob every DECRYPT_BATCH, so the JS heap
+   holds at most one batch instead of the whole file. Blobs of this size get
+   spilled to disk by the browser rather than kept in the heap. */
+const DECRYPT_BATCH = 32;   // ~2 MB of plaintext per fold
+
+/** Fresh receive state for one incoming transfer. */
+function newRecvBuffer(meta) {
+  return {
+    blobParts: [],            // decrypted batches, already out of the heap
+    pending:   [],            // decrypted chunks awaiting the next fold
+    received:  0,
+    failed:    false,
+    lastPct:   -1,
+    chain:     Promise.resolve(),   // serialises decryption so order is preserved
+    name: meta.name, size: meta.size, mimeType: meta.mimeType,
+    kind: meta.kind, totalChunks: meta.totalChunks
+  };
+}
+
+/** Decrypt on arrival rather than hoarding ciphertext until transfer-done. */
+function acceptChunk(info, id, packet) {
+  info.received++;
+  info.chain = info.chain
+    .then(async () => {
+      if (info.failed) return;
+      /* Too short to hold an IV — the stream is corrupt, so fail the transfer
+         instead of skipping bytes and delivering a damaged file. */
+      if (packet.byteLength < E2E_BIN_IV_LEN) {
+        throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
+      }
+      const iv = packet.slice(0, E2E_BIN_IV_LEN);
+      const ct = packet.slice(E2E_BIN_IV_LEN);
+      info.pending.push(await e2eDecryptBytes(ct, iv));
+      if (info.pending.length >= DECRYPT_BATCH) {
+        info.blobParts.push(new Blob(info.pending));
+        info.pending = [];
+      }
+    })
+    .catch(err => {
+      info.failed = true;
+      console.error(`Transfer ${id}: chunk could not be decrypted —`, err);
+    });
+  reportTransferProgress(id, info);
 }
 
 function handleBinaryChunk(buffer) {
@@ -1610,7 +1662,7 @@ function handleBinaryChunk(buffer) {
   const chunkData = new Uint8Array(buffer.slice(36));
 
   const info = recvBuffers[id];
-  if (info) { info.chunks.push(chunkData); return; }
+  if (info) { acceptChunk(info, id, chunkData); return; }
 
   /* Metadata is still decrypting — hold the chunk rather than dropping it.
      Past the cap we do drop, and assembleTransfer reports the gap. */
@@ -1618,6 +1670,42 @@ function handleBinaryChunk(buffer) {
   if (!orphanChunks[id]) orphanChunks[id] = [];
   orphanChunks[id].push(chunkData);
   orphanChunkCount++;
+}
+
+/* ── Transfer progress ──────────────────────── */
+
+function setTransferProgress(id, pct, mode) {
+  const row = chatMessages.querySelector(`[data-tid="${CSS.escape(id)}"]`);
+  const el  = row && row.querySelector(".transfer-pending");
+  if (el) el.textContent = `${t(mode)} ${pct}%`;
+}
+
+function reportTransferProgress(id, info) {
+  if (!Number.isFinite(info.totalChunks) || info.totalChunks <= 0) return;
+  /* Hold at 99% until assembly finishes, so 100% means genuinely done. */
+  const pct = Math.min(99, Math.floor((info.received / info.totalChunks) * 100));
+  if (pct === info.lastPct) return;
+  info.lastPct = pct;
+  setTransferProgress(id, pct, "receiving");
+}
+
+/** Tag the just-appended local bubble so the sender sees progress too. */
+function attachSendProgress(id) {
+  const row = chatMessages.lastElementChild;
+  if (!row || !row.classList.contains("bubble-row")) return;
+  row.dataset.tid = id;
+  const host = row.querySelector(".bubble") || row;
+  const line = document.createElement("div");
+  line.className = "transfer-pending send-progress";
+  line.style.cssText = "color:#94a3b8;font-size:11px;margin-top:4px";
+  line.textContent = `${t("sending")} 0%`;
+  host.appendChild(line);
+}
+
+function clearSendProgress(id) {
+  const row = chatMessages.querySelector(`[data-tid="${CSS.escape(id)}"]`);
+  const line = row && row.querySelector(".send-progress");
+  if (line) line.remove();
 }
 
 async function assembleTransfer(id) {
@@ -1631,32 +1719,25 @@ async function assembleTransfer(id) {
     return;
   }
 
+  await info.chain;   // let any still-queued decryptions finish
+
+  if (info.failed) { failTransfer(id); return; }
+
   /* totalChunks is authoritative. A short count means chunks were lost, and a
      silently truncated file is worse than a visible failure. Older peers may
      omit the field — skip the check rather than fail their transfers. */
-  if (Number.isFinite(info.totalChunks) && info.chunks.length !== info.totalChunks) {
-    console.error(`Transfer ${id}: expected ${info.totalChunks} chunks, got ${info.chunks.length}`);
+  if (Number.isFinite(info.totalChunks) && info.received !== info.totalChunks) {
+    console.error(`Transfer ${id}: expected ${info.totalChunks} chunks, got ${info.received}`);
     failTransfer(id);
     return;
   }
 
-  let blob;
-  if (info.e2e) {
-    const parts = [];
-    for (const packet of info.chunks) {
-      /* Too short to hold an IV — the stream is corrupt, so fail loudly
-         (caught by the transfer-done handler) instead of skipping bytes. */
-      if (packet.byteLength < E2E_BIN_IV_LEN) {
-        throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
-      }
-      const iv = packet.slice(0, E2E_BIN_IV_LEN);
-      const ct = packet.slice(E2E_BIN_IV_LEN);
-      parts.push(await e2eDecryptBytes(ct, iv));
-    }
-    blob = new Blob(parts, { type: info.mimeType });
-  } else {
-    blob = new Blob(info.chunks, { type: info.mimeType });
+  if (info.pending.length) {
+    info.blobParts.push(new Blob(info.pending));
+    info.pending = [];
   }
+  const blob = new Blob(info.blobParts, { type: info.mimeType });
+  info.blobParts = [];
   const url = trackBlobUrl(URL.createObjectURL(blob));  // tracked — revoked on leave
 
   if (info.kind === "file")  resolveFileBubble(id, url, info.name);
