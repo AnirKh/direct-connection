@@ -36,21 +36,22 @@ const express    = require("express");
 const http       = require("http");
 const crypto     = require("crypto");
 const path       = require("path");
+const fs         = require("fs");
 const WebSocket  = require("ws");
 const multer     = require("multer");
 const { Resend } = require("resend");
+
+/* Policy lives in csp.js so the header here and the meta tag in index.html
+   cannot drift apart unnoticed. See that file before editing either. */
+const {
+  buildCsp, DEFAULT_ALLOWED_ORIGINS, META_CSP, META_TAG_PATTERN
+} = require("./csp");
 
 const app    = express();
 const server = http.createServer(app);
 
 const PUBLIC_SESSION_LIST = process.env.PUBLIC_SESSION_LIST !== "0";
 
-const DEFAULT_ALLOWED_ORIGINS = [
-  "https://direct-connection.onrender.com",
-  "https://anirkh.github.io",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000"
-];
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(","))
   .split(",")
   .map(origin => origin.trim())
@@ -58,34 +59,25 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.
 
 const API_CLIENT_HEADER = "x-dc-client";
 const API_CLIENT_VALUE  = "1";
-const TABLER_CDN_ORIGIN = "https://cdn.jsdelivr.net";
 
-function wsOriginFor(origin) {
-  return origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
-}
+/* Built once — ALLOWED_ORIGINS cannot change while the process is running. */
+const CSP_HEADER = buildCsp(ALLOWED_ORIGINS, { asHeader: true });
 
-function contentSecurityPolicy() {
-  const connectOrigins = new Set([
-    "'self'",
-    ...ALLOWED_ORIGINS,
-    ...ALLOWED_ORIGINS.map(wsOriginFor)
-  ]);
-
-  return [
-    "default-src 'self'",
-    "script-src 'self'",
-    `style-src 'self' 'unsafe-inline' ${TABLER_CDN_ORIGIN}`,
-    `font-src 'self' ${TABLER_CDN_ORIGIN} data:`,
-    "img-src 'self' blob: data:",
-    "media-src 'self' blob: mediastream:",
-    `connect-src ${Array.from(connectOrigins).join(" ")}`,
-    "object-src 'none'",
-    "base-uri 'self'",
-    "form-action 'self'",
-    "frame-ancestors 'none'",
-    "frame-src 'none'",
-    "worker-src 'self' blob:"
-  ].join("; ");
+/* index.html carries its own copy of the policy for the static (GitHub Pages)
+   deployment, which cannot set headers. Nothing at runtime keeps the two in
+   step, so say so loudly rather than letting the static build ship a stale one. */
+function warnIfCspDrifted() {
+  try {
+    const html  = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+    const match = html.match(META_TAG_PATTERN);
+    if (!match) {
+      console.warn("CSP: index.html has no Content-Security-Policy meta tag");
+    } else if (match[2] !== META_CSP) {
+      console.warn("CSP: index.html meta tag has drifted from csp.js — run `npm run sync-csp`");
+    }
+  } catch (err) {
+    console.warn(`CSP: could not verify index.html — ${err.message}`);
+  }
 }
 
 function getClientIp(req) {
@@ -144,7 +136,7 @@ const upload = multer({
 });
 
 app.use((req, res, next) => {
-  res.setHeader("Content-Security-Policy", contentSecurityPolicy());
+  res.setHeader("Content-Security-Policy", CSP_HEADER);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -735,4 +727,7 @@ setInterval(() => {
 
 /* ── Start ─────────────────────────────────── */
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  warnIfCspDrifted();
+  console.log(`Server running on port ${PORT}`);
+});

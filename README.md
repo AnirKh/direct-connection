@@ -1,5 +1,20 @@
 AnirKh.github.io/direct-connection
 
+## Content-Security-Policy
+
+The policy is defined once, in **`csp.js`**. It reaches the browser two ways and both are needed:
+
+- `server.js` sends it as a response header (Render deployment; also the only form that can carry `frame-ancestors`)
+- `index.html` carries a `<meta>` copy, because GitHub Pages serves static files and cannot set headers
+
+After editing `csp.js`, regenerate the meta tag:
+
+```
+npm run sync-csp
+```
+
+`npm run check-csp` reports drift and exits non-zero without changing anything — worth running before a deploy, since a stale meta tag only affects the static build and the Render deployment will look fine. The server also warns on startup if the two have drifted.
+
 ## Server configuration (Render or self-hosted)
 
 Set **`ALLOWED_ORIGINS`** to a comma-separated list of every **browser origin** that loads the app and talks to this API (WebSocket + `fetch`). Examples:
