@@ -68,6 +68,23 @@ Node's built-in runner, no dependencies. Three files:
 
 Not covered: the WebRTC and UI code in `app.js`, which needs a browser and two peers. Changes there still want a manual two-tab check.
 
+### Git hooks
+
+Tracked in `.githooks/` and wired up by `npm install` (via the `prepare` script). To enable them by hand after a fresh clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+| Hook | Runs | Takes |
+| --- | --- | --- |
+| `pre-commit` | `check-csp` + `npm run test:fast` | ~0.4s |
+| `pre-push` | `npm test` (adds the server integration tests) | ~7s |
+
+The split keeps committing instant — a hook slow enough to be annoying is a hook you start bypassing. The slower half runs before code leaves the machine, which is the last moment a failure is free: pushing redeploys Render and republishes GitHub Pages.
+
+Bypass a single run with `git commit --no-verify` or `git push --no-verify`.
+
 ## Content-Security-Policy
 
 The policy is defined once, in **`csp.js`**. It reaches the browser two ways and both are needed:

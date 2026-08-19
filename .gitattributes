@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings. With core.autocrlf=true (the default on
+# Windows) a checkout would otherwise give them CRLF, and `#!/bin/sh` followed
+# by a carriage return fails with "bad interpreter" — a broken hook on a fresh
+# clone, which is exactly when nobody is looking for one.
+.githooks/* text eol=lf

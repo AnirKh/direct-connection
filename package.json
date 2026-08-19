@@ -4,7 +4,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "prepare": "git config core.hooksPath .githooks || exit 0",
     "test": "node --test \"test/*.test.js\"",
+    "test:fast": "node --test \"test/protocol.test.js\" \"test/csp.test.js\" \"test/client-source.test.js\"",
     "sync-csp": "node tools/sync-csp.js",
     "check-csp": "node tools/sync-csp.js --check"
   },

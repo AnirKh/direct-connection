@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# pre-commit — the fast checks (~0.4s)
+#
+# The server integration tests spawn a real server and wait on heartbeat
+# sweeps, which takes about seven seconds. That runs in pre-push instead, so
+# committing stays instant and there is no incentive to start skipping hooks.
+#
+# Bypass once with:  git commit --no-verify
+#
+
+if ! npm run --silent check-csp; then
+  echo ""
+  echo "pre-commit: index.html's CSP has drifted from csp.js."
+  echo "            A stale meta tag only affects the GitHub Pages build, so"
+  echo "            the Render deployment would look fine."
+  echo "            Fix with:  npm run sync-csp"
+  exit 1
+fi
+
+if ! npm run --silent test:fast; then
+  echo ""
+  echo "pre-commit: fast tests failed."
+  echo "            Run 'npm test' for the full suite and detail."
+  exit 1
+fi
