@@ -1260,17 +1260,11 @@ async function handleSignaling(data) {
       await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
       break;
 
-    case "call-offer":
-      await handleIncomingCallOffer(data);
-      break;
-
-    case "call-answer":
-      await handleCallAnswer(data);
-      break;
-
-    case "call-ice":
-      await handleCallIce(data.candidate);
-      break;
+    /* No call-offer / call-answer / call-ice cases here on purpose. Call
+       signaling arrives only through the encrypted data channel (see
+       handleTextMessage). Accepting it from the WebSocket would let the
+       signaling server inject a call offer and start getUserMedia without the
+       peer ever asking, bypassing the end-to-end channel entirely. */
 
     case "peer-disconnected":
       appendSys(t("sysPeerLeft"));

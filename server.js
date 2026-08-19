@@ -652,9 +652,10 @@ wss.on("connection", (ws, req) => {
       case "ice-candidate":      relayToOther(ws, data.sessionId, { type: "ice-candidate",      candidate: data.candidate }); break;
       case "renegotiate-offer":  relayToOther(ws, data.sessionId, { type: "renegotiate-offer",  offer:     data.offer });    break;
       case "renegotiate-answer": relayToOther(ws, data.sessionId, { type: "renegotiate-answer", answer:    data.answer });   break;
-      case "call-offer":         relayToOther(ws, data.sessionId, { type: "call-offer",         offer:     data.offer, withVideo: data.withVideo }); break;
-      case "call-answer":        relayToOther(ws, data.sessionId, { type: "call-answer",        answer:    data.answer }); break;
-      case "call-ice":           relayToOther(ws, data.sessionId, { type: "call-ice",           candidate: data.candidate }); break;
+
+      /* Call signaling deliberately has no relay here: offers, answers and
+         candidates travel inside the end-to-end encrypted data channel, so the
+         server cannot read or inject them. Do not add one back. */
 
       case "leave-session": cleanupClient(ws); break;
 
