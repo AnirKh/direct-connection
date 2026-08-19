@@ -1,5 +1,32 @@
 AnirKh.github.io/direct-connection
 
+## Layout
+
+| File | What it holds |
+| --- | --- |
+| `index.html` | Markup. Loads `protocol.js`, `i18n.js`, `app.js` **in that order** — `app.js` reads `DCProtocol`, `LANG` and `I18N` while parsing. |
+| `protocol.js` | Pure wire-protocol logic: invite links, ECDH→HKDF key derivation, verification code, binary chunk framing. No DOM, no sockets, no state — loaded as `window.DCProtocol` in the browser and `require`d by the tests. |
+| `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
+| `app.js` | Everything stateful: WebRTC, data channel, calls, chat UI. |
+| `csp.js` | The Content-Security-Policy, defined once (see below). |
+| `server.js` | Signaling, PIN/token auth, rate limits, `/api/send-message`. |
+
+Adding a string means adding it to **both** languages in `i18n.js` — `t()` falls back to the key name, so a missing translation shows up as raw text in the UI.
+
+## Tests
+
+```
+npm test
+```
+
+Node's built-in runner, no dependencies. Three files:
+
+- `test/protocol.test.js` — invite-link parsing (including malformed input, which must not throw at page load), room secrets, key derivation, and the framing. Includes a man-in-the-middle case asserting that an attacker who substitutes both public keys cannot reach a working key without the room secret.
+- `test/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
+- `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`.
+
+Not covered: the WebRTC and UI code in `app.js`, which needs a browser and two peers. Changes there still want a manual two-tab check.
+
 ## Content-Security-Policy
 
 The policy is defined once, in **`csp.js`**. It reaches the browser two ways and both are needed:

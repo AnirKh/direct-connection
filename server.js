@@ -160,7 +160,7 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-app.get(["/app.js", "/style.css"], (req, res) => {
+app.get(["/app.js", "/protocol.js", "/i18n.js", "/style.css"], (req, res) => {
   res.sendFile(path.join(__dirname, req.path.slice(1)));
 });
 

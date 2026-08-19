@@ -1,0 +1,257 @@
+/*
+  ─────────────────────────────────────────────
+  Direct Connection — i18n.js
+  ─────────────────────────────────────────────
+
+  All user-visible strings, Mongolian (default) and English. Pure data with no
+  behaviour, which is why it lives here rather than occupying the first tenth of
+  app.js. Loaded as a plain script before app.js; LANG and I18N are top-level
+  script bindings, so app.js reads and reassigns them directly.
+
+  Adding a string means adding it to BOTH languages — t() falls back to the key
+  name, so a missing translation surfaces as raw text in the UI.
+*/
+
+"use strict";
+
+/* ══════════════════════════════════════════════
+   I18N
+══════════════════════════════════════════════ */
+
+let LANG = localStorage.getItem("lang") || "mn";
+
+const I18N = {
+  mn: {
+    // Modal
+    modalTitle:      "Шууд холбоос",
+    modalDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
+    modalBtn:        "Зөвшөөрөх & үргэлжлүүлэх",
+    // Lobby
+    lobbyTitle:      "Шууд холбогдох хэсэг",
+    createLabel:     "Шинээр өрөө үүсгэх",
+    sessionPlaceholder: "Өрөөний нэр оруулах",
+    createBtnLabel:  "Өрөөг үүсгэх",
+    roomsLabel:      "Идэвхтэй байгаа өрөөнүүд",
+    refreshBtnLabel: "Ахин хайх",
+    noRooms:         "Идэвхтэй өрөө байхгүй",
+    joinBtn:         "Орох",
+    sessionMeta:     (ago) => `${ago} өмнө үүсгэсэн`,
+    timeS:           (n) => `${n}с`,
+    timeM:           (n) => `${n}м`,
+    timeH:           (n) => `${n}ц`,
+    // Leave a message
+    leaveLabel:      "Захиа шууд и-мэйлрүү явуулах",
+    leaveHint:       (mb) => `Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно. Хавсралтын дээд хэмжээ ~${mb} МБ.`,
+    senderPlaceholder: "Таны нэр (эсвэл холбоо барих мэдээлэл)",
+    msgPlaceholder:  "Энд явуулах мэдээллээ бичнэ үү",
+    attachFile:      "Файл хавсаргах",
+    changeFile:      "Файл солих",
+    leaveSendLabel:  "Захиаг явуулах",
+    // PIN modal
+    pinTitle:        "Өрөөрүү нэвтрэх код",
+    pinPlaceholder:  "6 оронтой PIN",
+    pinCancel:       "Цуцлах",
+    pinJoin:         "Нэгдэх",
+    pinMustBe6:      "PIN 6 оронтой байх ёстой",
+    sessionLabel:    (id) => `Өрөө: ${id}`,
+    // Connection quality
+    connecting:      "Холбогдож байна…",
+    connected:       "Холбогдсон",
+    fair:            "Дунд зэрэг",
+    poor:            "Муу",
+    reconnecting:    "Ахин холбогдож байна…",
+    connFailed:      "Бүтсэнгүй — ахин оролдож байна…",
+    connClosed:      "Холбоо тасарсан",
+    // Attach menu / chat
+    photoImage:      "Зураг / Фото",
+    fileUpload:      "Файл",
+    voiceHint:       "Дуу бичихийн тулд микрофон дарна уу",
+    peerTyping:      "Бичиж байна…",
+    chatPlaceholder: "Мэдээлэл…",
+    // System messages
+    sysConnected:    "Шууд холбоос тогтлоо 🔒 Мессеж/файл — аппын түлхүүр. Дуудлага — WebRTC шифрлэлт.",
+    sysClosed:       "Холбоос хаагдлаа",
+    sysPeerLeft:     "Харилцагч гарлаа",
+    sysCallEnded:    "Дуудлага дууслаа",
+    sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
+    // Creating room
+    creating:        "Үүсгэж байна…",
+    enterSessionName: "Өрөөний нэр оруулна уу",
+    joiningSession:  (id) => `⏳ "${id}" өрөөнд нэвтэрч байна…`,
+    roomReady:       "✅ Өрөө бэлэн боллоо.",
+    pinCode:         "КОД",
+    pinCodeHint:     "Харилцах хүн энэ КОД-ыг хийж өрөөнд нэвтэрнэ",
+    linkHint:        "Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой (КОД шаардахгүй):",
+    copyBtn:         "Хуулах",
+    copiedBtn:       "✓ Хуулагдсан!",
+    // Call
+    videoCallingOut: "📹 Видео дуудлага хийж байна…",
+    voiceCallingOut: "📞 Дуудлага хийж байна…",
+    videoConnecting: "📹 Холбогдож байна…",
+    voiceConnecting: "📞 Холбогдож байна…",
+    callConnected:   "Холбогдсон",
+    incomingVideo:   "Видео",
+    incomingVoice:   "Дуу",
+    incomingCall:    (kind) => `Ирж буй ${kind} дуудлага — зөвшөөрөх үү?`,
+    // Voice record
+    recordVoice:     "Дуу бичих",
+    stopRecord:      "Зогсоох & илгээх",
+    micDenied:       "Микрофон ашиглах эрхийг татгалзлаа",
+    // Leave message status
+    writeFirst:      "Эхлэн мэдээлэл бичнэ үү.",
+    sending:         "Илгээж байна…",
+    msgSent:         "✓ Мэдээлэл илгээгдлээ!",
+    networkErr:      "Сүлжээний алдаа. Холболтоо шалгана уу.",
+    leaveFileTooBig: (mb) => `Файлын хэмжээ ${mb} МБ-аас их байна. Жижиг файл эсвэл шахсан хувилбар ашиглана уу.`,
+    // Binary transfer
+    receiving:       "Хүлээн авч байна…",
+    download:        "Татах",
+    image:           "Зураг",
+    // Auto-join errors
+    couldNotJoin:    (msg) => `❌ Нэгдэж чадсангүй: ${msg}`,
+    sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
+    // PIN rate limit
+    pinRateLimited:  (s) => `Олон удаа оролдлоо. ${s} секундын дараа дахин оролдоно уу.`,
+    sessionJoinLocked: (s) => `Энэ өрөөнд олон удаа буруу оролдсон. ${s} секундын дараа дахин оролдоно уу.`,
+    pinAttemptsLeft: (n) => `Буруу PIN. ${n} оролдлого үлдлээ.`,
+    sessionNotFound: "Өрөө олдсонгүй — хугацаа дуусч байж магадгүй.",
+    sessionFull:     "Өрөө дүүрсэн байна.",
+    // E2E encryption
+    sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Баталгаажуулах код: ${fp}`,
+    e2eWaiting:      "Шифрлэлт тохируулж байна…",
+    e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
+    sysE2eAuto:      "🔒 Шифрлэлт идэвхжлээ · Урилгын холбоосоор автоматаар баталгаажлаа",
+    e2eMismatch:     "⚠️ Шифрлэлтийн шалгалт амжилтгүй — холболт хөндлөнгөөс саатсан байж болзошгүй. Мэдээлэл битгий илгээ.",
+    verifyAuto:      "Автоматаар баталгаажсан",
+    verifyBannerWarn:"Баталгаажаагүй холболт — доорх кодыг нөгөө талтайгаа тулгана уу",
+    verifyKeys:      "Түлхүүр шалгах",
+    verifyHint:      "Нөгөө хүний дэлгэц дээрх кодтой харьцуулна уу.",
+    verifyPlaceholder:"Баталгаажуулах код",
+    verifyMatch:     "Тохирлоо",
+    verifyMismatch:  "Тохирохгүй байна",
+    verifyPending:   "Шалгаагүй",
+    sysCallSecure:   "Дуудлага холбогдлоо — аудио/видео WebRTC-ээр шифрлэгдэнэ (сервер уншихгүй).",
+    callNeedLink:    "Эхлээд харилцагчтай холбогдохыг хүлээнэ үү (холбоос ногоон болмогц дахин оролдоно уу).",
+    // Server wake
+    serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
+    serverReady:     "Сервер бэлэн боллоо.",
+    // P2P file size
+    fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
+    transferFailed:  "Дамжуулалт тасарлаа — дахин илгээнэ үү",
+    // Reconnect
+    reconnectBtn:    "← Лобби руу буцах",
+    // Incoming call modal
+    callAccept:      "Зөвшөөрөх",
+    callDecline:     "Татгалзах",
+  },
+  en: {
+    modalTitle:      "Direct Connection",
+    modalDesc:       "This link was created to communicate without sharing your information through any third party.",
+    modalBtn:        "Approve & Continue",
+    lobbyTitle:      "Direct Connection",
+    createLabel:     "Create a New Room",
+    sessionPlaceholder: "Enter room name",
+    createBtnLabel:  "Create Room",
+    roomsLabel:      "Active Rooms",
+    refreshBtnLabel: "Refresh",
+    noRooms:         "No active rooms",
+    joinBtn:         "Join",
+    sessionMeta:     (ago) => `Created ${ago} ago`,
+    timeS:           (n) => `${n}s`,
+    timeM:           (n) => `${n}m`,
+    timeH:           (n) => `${n}h`,
+    leaveLabel:      "Send a Message to Email",
+    leaveHint:       (mb) => `If direct connection is unavailable, you can send a message to my email. Attachments up to about ${mb} MB.`,
+    senderPlaceholder: "Your name (or contact info)",
+    msgPlaceholder:  "Write your message here",
+    attachFile:      "Attach file",
+    changeFile:      "Change file",
+    leaveSendLabel:  "Send Message",
+    pinTitle:        "Room Access Code",
+    pinPlaceholder:  "6-digit PIN",
+    pinCancel:       "Cancel",
+    pinJoin:         "Join",
+    pinMustBe6:      "PIN must be 6 digits",
+    sessionLabel:    (id) => `Session: ${id}`,
+    connecting:      "Connecting…",
+    connected:       "Connected",
+    fair:            "Fair",
+    poor:            "Poor",
+    reconnecting:    "Reconnecting…",
+    connFailed:      "Failed — retrying…",
+    connClosed:      "Disconnected",
+    photoImage:      "Photo / Image",
+    fileUpload:      "File",
+    voiceHint:       "Tap mic to record voice",
+    peerTyping:      "Peer is typing…",
+    chatPlaceholder: "Message…",
+    sysConnected:    "Direct link ready 🔒 Messages/files use app key. Calls use WebRTC encryption.",
+    sysClosed:       "Connection closed",
+    sysPeerLeft:     "Peer disconnected",
+    sysCallEnded:    "Call ended",
+    sysCallFailed:   (msg) => `Call failed — ${msg}`,
+    creating:        "Creating…",
+    enterSessionName: "Enter a session name",
+    joiningSession:  (id) => `⏳ Joining session "${id}"…`,
+    roomReady:       "✅ Room is ready.",
+    pinCode:         "PIN",
+    pinCodeHint:     "Share this PIN with your contact to enter the room",
+    linkHint:        "Or send this link for direct access (no PIN needed):",
+    copyBtn:         "Copy",
+    copiedBtn:       "✓ Copied!",
+    videoCallingOut: "📹 Video calling…",
+    voiceCallingOut: "📞 Voice calling…",
+    videoConnecting: "📹 Connecting…",
+    voiceConnecting: "📞 Connecting…",
+    callConnected:   "Connected",
+    incomingVideo:   "Video",
+    incomingVoice:   "Voice",
+    incomingCall:    (kind) => `Incoming ${kind} call — accept?`,
+    recordVoice:     "Record voice",
+    stopRecord:      "Tap to stop & send",
+    micDenied:       "Microphone access denied",
+    writeFirst:      "Please write a message first.",
+    sending:         "Sending…",
+    msgSent:         "✓ Message sent!",
+    networkErr:      "Network error. Check connection.",
+    leaveFileTooBig: (mb) => `File is too large (max about ${mb} MB). Try a smaller file or a zip.`,
+    receiving:       "Receiving…",
+    download:        "Download",
+    image:           "Image",
+    couldNotJoin:    (msg) => `❌ Could not join: ${msg}`,
+    sessionExpired:  "The session may have expired.",
+    // PIN rate limit
+    pinRateLimited:  (s) => `Too many attempts. Try again in ${s}s.`,
+    sessionJoinLocked: (s) => `Too many failed join attempts for this room. Try again in ${s}s.`,
+    pinAttemptsLeft: (n) => `Wrong PIN. ${n} attempt(s) remaining.`,
+    sessionNotFound: "Session not found — it may have expired.",
+    sessionFull:     "Session is full.",
+    // E2E encryption
+    sysE2eReady:     (fp) => `🔐 Encryption active · Verification code: ${fp}`,
+    e2eWaiting:      "Setting up encryption…",
+    e2eFailed:       "Encryption setup failed. Please reconnect.",
+    sysE2eAuto:      "🔒 Encryption active · verified automatically via the invite link",
+    e2eMismatch:     "⚠️ Encryption check failed — this connection may be intercepted. Do not send anything.",
+    verifyAuto:      "Verified automatically",
+    verifyBannerWarn:"Unverified connection — compare the code with your peer",
+    verifyKeys:      "Verify keys",
+    verifyHint:      "Compare this code with the code shown on your peer's screen.",
+    verifyPlaceholder:"Verification code",
+    verifyMatch:     "Matched",
+    verifyMismatch:  "Does not match",
+    verifyPending:   "Not verified",
+    sysCallSecure:   "Call connected — audio/video encrypted by WebRTC (server cannot listen in).",
+    callNeedLink:    "Wait until you are connected to your contact (green status), then try again.",
+    // Server wake
+    serverWaking:    "Server is waking up, please wait…",
+    serverReady:     "Server is ready.",
+    // P2P file size
+    fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
+    transferFailed:  "Transfer incomplete — ask the sender to try again",
+    // Reconnect
+    reconnectBtn:    "← Back to Lobby",
+    // Incoming call modal
+    callAccept:      "Accept",
+    callDecline:     "Decline",
+  }
+};

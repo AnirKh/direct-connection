@@ -4,6 +4,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test \"test/*.test.js\"",
     "sync-csp": "node tools/sync-csp.js",
     "check-csp": "node tools/sync-csp.js --check"
   },

@@ -8,264 +8,18 @@
 
 "use strict";
 
+/* Wire-protocol primitives — invite links, key derivation, chunk framing.
+   See protocol.js; it is loaded before this file and covered by test/. */
+const DC = window.DCProtocol;
+
 /* ── Read hash immediately ───────────────────── */
-/* Invite link: #<encoded room name>:<join token>:<room secret>
-   The room name is URI-encoded (a literal ":" becomes %3A) and both the token
-   and the secret are base64url, so none of the three parts can contain ":" —
-   splitting on it is unambiguous.
-   The room secret is generated in the host's browser and is NEVER sent to the
-   server: URL fragments are not transmitted in HTTP requests, and we only ever
-   put sessionId + token on the WebSocket. It authenticates the key exchange, so
-   a malicious signaling server cannot substitute its own keys unnoticed. */
-const _hash          = location.hash.slice(1);
-const _hashParts     = _hash ? _hash.split(":") : [];
-const _autoSessionId = _hashParts.length >= 2 ? decodeURIComponent(_hashParts[0]) : null;
-const _autoToken     = _hashParts.length >= 2 ? _hashParts[1] : null;
-const _autoSecret    = _hashParts.length >= 3 ? _hashParts[2] : null;
-const _isAutoJoin    = Boolean(_autoSessionId && _autoToken);
+const _invite        = DC.parseInviteHash(location.hash);
+const _autoSessionId = _invite.sessionId;
+const _autoToken     = _invite.token;
+const _autoSecret    = _invite.secret;
+const _isAutoJoin    = _invite.isInvite;
 if (_isAutoJoin) history.replaceState({}, "", location.pathname);
 
-/* ══════════════════════════════════════════════
-   I18N
-══════════════════════════════════════════════ */
-
-let LANG = localStorage.getItem("lang") || "mn";
-
-const I18N = {
-  mn: {
-    // Modal
-    modalTitle:      "Шууд холбоос",
-    modalDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
-    modalBtn:        "Зөвшөөрөх & үргэлжлүүлэх",
-    // Lobby
-    lobbyTitle:      "Шууд холбогдох хэсэг",
-    createLabel:     "Шинээр өрөө үүсгэх",
-    sessionPlaceholder: "Өрөөний нэр оруулах",
-    createBtnLabel:  "Өрөөг үүсгэх",
-    roomsLabel:      "Идэвхтэй байгаа өрөөнүүд",
-    refreshBtnLabel: "Ахин хайх",
-    noRooms:         "Идэвхтэй өрөө байхгүй",
-    joinBtn:         "Орох",
-    sessionMeta:     (ago) => `${ago} өмнө үүсгэсэн`,
-    timeS:           (n) => `${n}с`,
-    timeM:           (n) => `${n}м`,
-    timeH:           (n) => `${n}ц`,
-    // Leave a message
-    leaveLabel:      "Захиа шууд и-мэйлрүү явуулах",
-    leaveHint:       (mb) => `Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно. Хавсралтын дээд хэмжээ ~${mb} МБ.`,
-    senderPlaceholder: "Таны нэр (эсвэл холбоо барих мэдээлэл)",
-    msgPlaceholder:  "Энд явуулах мэдээллээ бичнэ үү",
-    attachFile:      "Файл хавсаргах",
-    changeFile:      "Файл солих",
-    leaveSendLabel:  "Захиаг явуулах",
-    // PIN modal
-    pinTitle:        "Өрөөрүү нэвтрэх код",
-    pinPlaceholder:  "6 оронтой PIN",
-    pinCancel:       "Цуцлах",
-    pinJoin:         "Нэгдэх",
-    pinMustBe6:      "PIN 6 оронтой байх ёстой",
-    sessionLabel:    (id) => `Өрөө: ${id}`,
-    // Connection quality
-    connecting:      "Холбогдож байна…",
-    connected:       "Холбогдсон",
-    fair:            "Дунд зэрэг",
-    poor:            "Муу",
-    reconnecting:    "Ахин холбогдож байна…",
-    connFailed:      "Бүтсэнгүй — ахин оролдож байна…",
-    connClosed:      "Холбоо тасарсан",
-    // Attach menu / chat
-    photoImage:      "Зураг / Фото",
-    fileUpload:      "Файл",
-    voiceHint:       "Дуу бичихийн тулд микрофон дарна уу",
-    peerTyping:      "Бичиж байна…",
-    chatPlaceholder: "Мэдээлэл…",
-    // System messages
-    sysConnected:    "Шууд холбоос тогтлоо 🔒 Мессеж/файл — аппын түлхүүр. Дуудлага — WebRTC шифрлэлт.",
-    sysClosed:       "Холбоос хаагдлаа",
-    sysPeerLeft:     "Харилцагч гарлаа",
-    sysCallEnded:    "Дуудлага дууслаа",
-    sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
-    // Creating room
-    creating:        "Үүсгэж байна…",
-    enterSessionName: "Өрөөний нэр оруулна уу",
-    joiningSession:  (id) => `⏳ "${id}" өрөөнд нэвтэрч байна…`,
-    roomReady:       "✅ Өрөө бэлэн боллоо.",
-    pinCode:         "КОД",
-    pinCodeHint:     "Харилцах хүн энэ КОД-ыг хийж өрөөнд нэвтэрнэ",
-    linkHint:        "Эсвэл харилцах хүнд энэ холбоосыг явуулж шууд нэвтрэх боломжтой (КОД шаардахгүй):",
-    copyBtn:         "Хуулах",
-    copiedBtn:       "✓ Хуулагдсан!",
-    // Call
-    videoCallingOut: "📹 Видео дуудлага хийж байна…",
-    voiceCallingOut: "📞 Дуудлага хийж байна…",
-    videoConnecting: "📹 Холбогдож байна…",
-    voiceConnecting: "📞 Холбогдож байна…",
-    callConnected:   "Холбогдсон",
-    incomingVideo:   "Видео",
-    incomingVoice:   "Дуу",
-    incomingCall:    (kind) => `Ирж буй ${kind} дуудлага — зөвшөөрөх үү?`,
-    // Voice record
-    recordVoice:     "Дуу бичих",
-    stopRecord:      "Зогсоох & илгээх",
-    micDenied:       "Микрофон ашиглах эрхийг татгалзлаа",
-    // Leave message status
-    writeFirst:      "Эхлэн мэдээлэл бичнэ үү.",
-    sending:         "Илгээж байна…",
-    msgSent:         "✓ Мэдээлэл илгээгдлээ!",
-    networkErr:      "Сүлжээний алдаа. Холболтоо шалгана уу.",
-    leaveFileTooBig: (mb) => `Файлын хэмжээ ${mb} МБ-аас их байна. Жижиг файл эсвэл шахсан хувилбар ашиглана уу.`,
-    // Binary transfer
-    receiving:       "Хүлээн авч байна…",
-    download:        "Татах",
-    image:           "Зураг",
-    // Auto-join errors
-    couldNotJoin:    (msg) => `❌ Нэгдэж чадсангүй: ${msg}`,
-    sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
-    // PIN rate limit
-    pinRateLimited:  (s) => `Олон удаа оролдлоо. ${s} секундын дараа дахин оролдоно уу.`,
-    sessionJoinLocked: (s) => `Энэ өрөөнд олон удаа буруу оролдсон. ${s} секундын дараа дахин оролдоно уу.`,
-    pinAttemptsLeft: (n) => `Буруу PIN. ${n} оролдлого үлдлээ.`,
-    sessionNotFound: "Өрөө олдсонгүй — хугацаа дуусч байж магадгүй.",
-    sessionFull:     "Өрөө дүүрсэн байна.",
-    // E2E encryption
-    sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Баталгаажуулах код: ${fp}`,
-    e2eWaiting:      "Шифрлэлт тохируулж байна…",
-    e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
-    sysE2eAuto:      "🔒 Шифрлэлт идэвхжлээ · Урилгын холбоосоор автоматаар баталгаажлаа",
-    e2eMismatch:     "⚠️ Шифрлэлтийн шалгалт амжилтгүй — холболт хөндлөнгөөс саатсан байж болзошгүй. Мэдээлэл битгий илгээ.",
-    verifyAuto:      "Автоматаар баталгаажсан",
-    verifyBannerWarn:"Баталгаажаагүй холболт — доорх кодыг нөгөө талтайгаа тулгана уу",
-    verifyKeys:      "Түлхүүр шалгах",
-    verifyHint:      "Нөгөө хүний дэлгэц дээрх кодтой харьцуулна уу.",
-    verifyPlaceholder:"Баталгаажуулах код",
-    verifyMatch:     "Тохирлоо",
-    verifyMismatch:  "Тохирохгүй байна",
-    verifyPending:   "Шалгаагүй",
-    sysCallSecure:   "Дуудлага холбогдлоо — аудио/видео WebRTC-ээр шифрлэгдэнэ (сервер уншихгүй).",
-    callNeedLink:    "Эхлээд харилцагчтай холбогдохыг хүлээнэ үү (холбоос ногоон болмогц дахин оролдоно уу).",
-    // Server wake
-    serverWaking:    "Сервер асаж байна, түр хүлээнэ үү…",
-    serverReady:     "Сервер бэлэн боллоо.",
-    // P2P file size
-    fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
-    transferFailed:  "Дамжуулалт тасарлаа — дахин илгээнэ үү",
-    // Reconnect
-    reconnectBtn:    "← Лобби руу буцах",
-    // Incoming call modal
-    callAccept:      "Зөвшөөрөх",
-    callDecline:     "Татгалзах",
-  },
-  en: {
-    modalTitle:      "Direct Connection",
-    modalDesc:       "This link was created to communicate without sharing your information through any third party.",
-    modalBtn:        "Approve & Continue",
-    lobbyTitle:      "Direct Connection",
-    createLabel:     "Create a New Room",
-    sessionPlaceholder: "Enter room name",
-    createBtnLabel:  "Create Room",
-    roomsLabel:      "Active Rooms",
-    refreshBtnLabel: "Refresh",
-    noRooms:         "No active rooms",
-    joinBtn:         "Join",
-    sessionMeta:     (ago) => `Created ${ago} ago`,
-    timeS:           (n) => `${n}s`,
-    timeM:           (n) => `${n}m`,
-    timeH:           (n) => `${n}h`,
-    leaveLabel:      "Send a Message to Email",
-    leaveHint:       (mb) => `If direct connection is unavailable, you can send a message to my email. Attachments up to about ${mb} MB.`,
-    senderPlaceholder: "Your name (or contact info)",
-    msgPlaceholder:  "Write your message here",
-    attachFile:      "Attach file",
-    changeFile:      "Change file",
-    leaveSendLabel:  "Send Message",
-    pinTitle:        "Room Access Code",
-    pinPlaceholder:  "6-digit PIN",
-    pinCancel:       "Cancel",
-    pinJoin:         "Join",
-    pinMustBe6:      "PIN must be 6 digits",
-    sessionLabel:    (id) => `Session: ${id}`,
-    connecting:      "Connecting…",
-    connected:       "Connected",
-    fair:            "Fair",
-    poor:            "Poor",
-    reconnecting:    "Reconnecting…",
-    connFailed:      "Failed — retrying…",
-    connClosed:      "Disconnected",
-    photoImage:      "Photo / Image",
-    fileUpload:      "File",
-    voiceHint:       "Tap mic to record voice",
-    peerTyping:      "Peer is typing…",
-    chatPlaceholder: "Message…",
-    sysConnected:    "Direct link ready 🔒 Messages/files use app key. Calls use WebRTC encryption.",
-    sysClosed:       "Connection closed",
-    sysPeerLeft:     "Peer disconnected",
-    sysCallEnded:    "Call ended",
-    sysCallFailed:   (msg) => `Call failed — ${msg}`,
-    creating:        "Creating…",
-    enterSessionName: "Enter a session name",
-    joiningSession:  (id) => `⏳ Joining session "${id}"…`,
-    roomReady:       "✅ Room is ready.",
-    pinCode:         "PIN",
-    pinCodeHint:     "Share this PIN with your contact to enter the room",
-    linkHint:        "Or send this link for direct access (no PIN needed):",
-    copyBtn:         "Copy",
-    copiedBtn:       "✓ Copied!",
-    videoCallingOut: "📹 Video calling…",
-    voiceCallingOut: "📞 Voice calling…",
-    videoConnecting: "📹 Connecting…",
-    voiceConnecting: "📞 Connecting…",
-    callConnected:   "Connected",
-    incomingVideo:   "Video",
-    incomingVoice:   "Voice",
-    incomingCall:    (kind) => `Incoming ${kind} call — accept?`,
-    recordVoice:     "Record voice",
-    stopRecord:      "Tap to stop & send",
-    micDenied:       "Microphone access denied",
-    writeFirst:      "Please write a message first.",
-    sending:         "Sending…",
-    msgSent:         "✓ Message sent!",
-    networkErr:      "Network error. Check connection.",
-    leaveFileTooBig: (mb) => `File is too large (max about ${mb} MB). Try a smaller file or a zip.`,
-    receiving:       "Receiving…",
-    download:        "Download",
-    image:           "Image",
-    couldNotJoin:    (msg) => `❌ Could not join: ${msg}`,
-    sessionExpired:  "The session may have expired.",
-    // PIN rate limit
-    pinRateLimited:  (s) => `Too many attempts. Try again in ${s}s.`,
-    sessionJoinLocked: (s) => `Too many failed join attempts for this room. Try again in ${s}s.`,
-    pinAttemptsLeft: (n) => `Wrong PIN. ${n} attempt(s) remaining.`,
-    sessionNotFound: "Session not found — it may have expired.",
-    sessionFull:     "Session is full.",
-    // E2E encryption
-    sysE2eReady:     (fp) => `🔐 Encryption active · Verification code: ${fp}`,
-    e2eWaiting:      "Setting up encryption…",
-    e2eFailed:       "Encryption setup failed. Please reconnect.",
-    sysE2eAuto:      "🔒 Encryption active · verified automatically via the invite link",
-    e2eMismatch:     "⚠️ Encryption check failed — this connection may be intercepted. Do not send anything.",
-    verifyAuto:      "Verified automatically",
-    verifyBannerWarn:"Unverified connection — compare the code with your peer",
-    verifyKeys:      "Verify keys",
-    verifyHint:      "Compare this code with the code shown on your peer's screen.",
-    verifyPlaceholder:"Verification code",
-    verifyMatch:     "Matched",
-    verifyMismatch:  "Does not match",
-    verifyPending:   "Not verified",
-    sysCallSecure:   "Call connected — audio/video encrypted by WebRTC (server cannot listen in).",
-    callNeedLink:    "Wait until you are connected to your contact (green status), then try again.",
-    // Server wake
-    serverWaking:    "Server is waking up, please wait…",
-    serverReady:     "Server is ready.",
-    // P2P file size
-    fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
-    transferFailed:  "Transfer incomplete — ask the sender to try again",
-    // Reconnect
-    reconnectBtn:    "← Back to Lobby",
-    // Incoming call modal
-    callAccept:      "Accept",
-    callDecline:     "Decline",
-  }
-};
 
 /** Get a plain string from the current language */
 function t(key) {
@@ -494,19 +248,9 @@ let e2eSecureMode    = false;  // true = room secret authenticated this exchange
 let e2ePendingConfirm = null;  // confirm that landed before derivation finished
 let e2eConfirmTimer  = null;
 
-const E2E_INFO = new TextEncoder().encode("direct-connection/e2e/v2");
 const E2E_CONFIRM_TIMEOUT_MS = 15_000;
 
-function b64urlBytes(bytes) {
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-/** Fresh room secret for a newly created room. 32 bytes — far too much to guess,
-    so plain HKDF mixing suffices and no password-style exchange is needed. */
-function makeRoomSecret() {
-  return b64urlBytes(crypto.getRandomValues(new Uint8Array(32)));
-}
+const makeRoomSecret = DC.makeRoomSecret;
 
 async function e2eInit() {
   e2eVerifyCode = "";
@@ -531,17 +275,8 @@ async function e2eInit() {
 }
 
 /** ECDH → HKDF → AES-GCM. `secret` (or its absence) changes the resulting key. */
-async function deriveKeyWith(peerPub, secret) {
-  const bits = await crypto.subtle.deriveBits(
-    { name: "ECDH", public: peerPub }, e2eKeyPair.privateKey, 256);
-  const hkdf = await crypto.subtle.importKey("raw", bits, "HKDF", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    {
-      name: "HKDF", hash: "SHA-256",
-      salt: secret ? new TextEncoder().encode(secret) : new Uint8Array(0),
-      info: E2E_INFO
-    },
-    hkdf, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+function deriveKeyWith(peerPub, secret) {
+  return DC.deriveSharedKey(e2eKeyPair.privateKey, peerPub, secret);
 }
 
 /* The confirmation carries the verification code, binding it to both public
@@ -698,7 +433,7 @@ async function e2eDecryptBytes(ct, iv) {
   return new Uint8Array(plain);
 }
 
-const E2E_BIN_IV_LEN = 12;
+const E2E_BIN_IV_LEN = DC.E2E_BIN_IV_LEN;
 
 /** Send JSON over the data channel inside the same E2E envelope as text. */
 async function dcSendE2e(obj) {
@@ -1137,7 +872,7 @@ async function handleSignaling(data) {
       /* Minted here, in the browser — the server never learns it. */
       roomSecret = makeRoomSecret();
 
-      const shareUrl = `${location.origin}${location.pathname}#${encodeURIComponent(data.sessionId)}:${data.token}:${roomSecret}`;
+      const shareUrl = `${location.origin}${location.pathname}#${DC.buildInviteHash(data.sessionId, data.token, roomSecret)}`;
 
       createInfo.style.textAlign = "left";
       const ready = document.createElement("div");
@@ -1550,12 +1285,7 @@ function handleTextMessage(data) {
    BINARY TRANSFER PROTOCOL
 ══════════════════════════════════════════════ */
 
-function makeTransferId() {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-    const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
-    return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
-  });
-}
+const makeTransferId = DC.makeTransferId;
 
 async function sendBinary(file, kind) {
   if (!dcReady()) return;
@@ -1591,10 +1321,7 @@ async function sendBinary(file, kind) {
        needed; the File itself stays backed by disk. */
     const chunk = await file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE).arrayBuffer();
     const { iv, ct } = await e2eEncryptBytes(chunk);
-    const packet = new Uint8Array(36 + E2E_BIN_IV_LEN + ct.byteLength);
-    packet.set(idBytes, 0);
-    packet.set(iv, 36);
-    packet.set(ct, 36 + E2E_BIN_IV_LEN);
+    const packet = DC.packChunk(idBytes, iv, ct);
     await drainBuffer();
     dataChannel.send(packet.buffer);
 
@@ -1633,12 +1360,9 @@ function acceptChunk(info, id, packet) {
       if (info.failed) return;
       /* Too short to hold an IV — the stream is corrupt, so fail the transfer
          instead of skipping bytes and delivering a damaged file. */
-      if (packet.byteLength < E2E_BIN_IV_LEN) {
-        throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
-      }
-      const iv = packet.slice(0, E2E_BIN_IV_LEN);
-      const ct = packet.slice(E2E_BIN_IV_LEN);
-      info.pending.push(await e2eDecryptBytes(ct, iv));
+      const split = DC.splitChunkBody(packet);
+      if (!split) throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
+      info.pending.push(await e2eDecryptBytes(split.ct, split.iv));
       if (info.pending.length >= DECRYPT_BATCH) {
         info.blobParts.push(new Blob(info.pending));
         info.pending = [];
@@ -1652,8 +1376,7 @@ function acceptChunk(info, id, packet) {
 }
 
 function handleBinaryChunk(buffer) {
-  const id = new TextDecoder().decode(new Uint8Array(buffer, 0, 36));
-  const chunkData = new Uint8Array(buffer.slice(36));
+  const { id, body: chunkData } = DC.unpackChunk(buffer);
 
   const info = recvBuffers[id];
   if (info) { acceptChunk(info, id, chunkData); return; }
@@ -1922,35 +1645,8 @@ function updateLocalVideoAspect() {
   }
 }
 
-async function makeSharedVerificationCode(localRaw, peerRaw) {
-  const local = new Uint8Array(localRaw);
-  const peer = new Uint8Array(peerRaw);
-  const first = compareBytes(local, peer) <= 0 ? local : peer;
-  const second = first === local ? peer : local;
-  const joined = new Uint8Array(first.length + second.length);
-  joined.set(first, 0);
-  joined.set(second, first.length);
-  const hash = await crypto.subtle.digest("SHA-256", joined);
-  return Array.from(new Uint8Array(hash))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 20)
-    .replace(/(.{4})/g, "$1 ")
-    .trim()
-    .toUpperCase();
-}
-
-function compareBytes(a, b) {
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    if (a[i] !== b[i]) return a[i] - b[i];
-  }
-  return a.length - b.length;
-}
-
-function normalizeVerifyCode(value) {
-  return String(value || "").replace(/[^a-fA-F0-9]/g, "").toUpperCase();
-}
+const makeSharedVerificationCode = DC.makeSharedVerificationCode;
+const normalizeVerifyCode        = DC.normalizeVerifyCode;
 
 /** Warn only when the link is up but unauthenticated — precisely the case where
     a man-in-the-middle would otherwise be invisible. */
