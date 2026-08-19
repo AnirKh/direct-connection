@@ -602,7 +602,25 @@ let _keepAliveInterval = null;
 connectWebSocket();
 wakeServer();
 
+/* Every place a room secret can be held. The join is sent while the secret is
+   still in pendingRoomSecret — roomSecret is only assigned once the server
+   confirms — so checking roomSecret alone would leave the guard inert during
+   exactly the message most likely to leak it. */
+function roomSecretsInPlay() {
+  return [roomSecret, pendingRoomSecret, _autoSecret];
+}
+
 function wsSend(obj) {
+  /* The room secret must never reach the server — see README, "Invite links".
+     Refuse rather than send: dropping one signaling message is recoverable,
+     whereas leaking the secret silently removes the man-in-the-middle
+     protection with nothing appearing to be wrong. */
+  for (const secret of roomSecretsInPlay()) {
+    if (DC.payloadLeaksSecret(obj, secret)) {
+      console.error(`Refusing to send "${obj && obj.type}": payload contains the room secret`);
+      return;
+    }
+  }
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 

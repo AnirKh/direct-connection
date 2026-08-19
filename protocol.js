@@ -86,6 +86,35 @@
     return { sessionId, token, secret, isInvite: Boolean(sessionId && token) };
   }
 
+  /**
+   * Guards the invariant the whole man-in-the-middle defence rests on: the room
+   * secret must never leave the browser. Returns true if `payload` contains it
+   * anywhere — nested or in an array counts, since a secret one level down
+   * leaks exactly as thoroughly as one at the top.
+   *
+   * Worth enforcing rather than merely documenting: adding the secret to an
+   * outgoing message would remove the protection while everything carried on
+   * working, with no error and nothing visibly wrong.
+   */
+  function payloadLeaksSecret(payload, secret) {
+    if (!secret) return false;
+    const seen = new Set();
+    let found = false;
+    (function walk(value) {
+      if (found || value === null || value === undefined) return;
+      if (typeof value === "string") {
+        if (value.includes(secret)) found = true;
+        return;
+      }
+      if (typeof value !== "object") return;
+      if (seen.has(value)) return;        // tolerate cycles
+      seen.add(value);
+      if (Array.isArray(value)) { value.forEach(walk); return; }
+      for (const key of Object.keys(value)) walk(value[key]);
+    })(payload);
+    return found;
+  }
+
   /* ══════════════════════════════════════════
      Key agreement
   ══════════════════════════════════════════ */
@@ -184,7 +213,7 @@
   return {
     TRANSFER_ID_LEN, E2E_BIN_IV_LEN, E2E_INFO_LABEL, ROOM_SECRET_BYTES,
     b64urlBytes, makeRoomSecret,
-    buildInviteHash, parseInviteHash,
+    buildInviteHash, parseInviteHash, payloadLeaksSecret,
     deriveSharedKey,
     compareBytes, makeSharedVerificationCode, normalizeVerifyCode,
     packChunk, unpackChunk, splitChunkBody, makeTransferId

@@ -84,6 +84,63 @@ test("room secrets are 32 bytes of base64url and never repeat", () => {
 });
 
 /* ══════════════════════════════════════════
+   The room secret must never leave the browser
+
+   Everything in "Why the secret is in the fragment" (README) depends on the
+   server never seeing it. Nothing about a leak would look broken at runtime,
+   so it is guarded rather than merely documented.
+══════════════════════════════════════════ */
+
+test("a payload carrying the secret at the top level is caught", () => {
+  const secret = DC.makeRoomSecret();
+  assert.equal(DC.payloadLeaksSecret({ type: "join-session", secret }, secret), true);
+});
+
+test("a payload carrying the secret nested or in an array is caught", () => {
+  const secret = DC.makeRoomSecret();
+  assert.equal(DC.payloadLeaksSecret({ a: { b: { c: secret } } }, secret), true);
+  assert.equal(DC.payloadLeaksSecret({ list: ["x", secret] }, secret), true);
+  assert.equal(DC.payloadLeaksSecret([{ deep: [{ deeper: secret }] }], secret), true);
+});
+
+test("a secret embedded inside a longer string is caught", () => {
+  /* e.g. someone builds a share URL and sends it for logging. */
+  const secret = DC.makeRoomSecret();
+  assert.equal(
+    DC.payloadLeaksSecret({ url: `https://x/y#room:tok:${secret}` }, secret), true);
+});
+
+test("the messages the client actually sends are not flagged", () => {
+  const secret = DC.makeRoomSecret();
+  const real = [
+    { type: "create-session", sessionId: "room" },
+    { type: "join-session", sessionId: "room", pin: "123456" },
+    { type: "join-session", sessionId: "room", token: "TOKEN" },
+    { type: "offer", offer: { type: "offer", sdp: "v=0..." }, sessionId: "room" },
+    { type: "ice-candidate", candidate: { candidate: "candidate:1 ..." }, sessionId: "room" },
+    { type: "list-sessions" },
+    { type: "leave-session", sessionId: "room" }
+  ];
+  for (const msg of real) {
+    assert.equal(DC.payloadLeaksSecret(msg, secret), false, `false positive on ${msg.type}`);
+  }
+});
+
+test("the guard is inert when there is no secret (PIN joins)", () => {
+  assert.equal(DC.payloadLeaksSecret({ anything: "here" }, null), false);
+  assert.equal(DC.payloadLeaksSecret({ anything: "here" }, ""), false);
+});
+
+test("the guard terminates on a cyclic payload", () => {
+  const secret = DC.makeRoomSecret();
+  const cyclic = { type: "x" };
+  cyclic.self = cyclic;
+  assert.equal(DC.payloadLeaksSecret(cyclic, secret), false);
+  cyclic.leak = secret;
+  assert.equal(DC.payloadLeaksSecret(cyclic, secret), true);
+});
+
+/* ══════════════════════════════════════════
    Key agreement — the heart of the MITM defence
 ══════════════════════════════════════════ */
 
