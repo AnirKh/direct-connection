@@ -47,6 +47,10 @@ const {
   buildCsp, DEFAULT_ALLOWED_ORIGINS, META_CSP, META_TAG_PATTERN
 } = require("./csp");
 
+/* Every rate limit below keys on the client address, so it is only as strong
+   as this is hard to forge. See clientip.js. */
+const { getClientIp, isLoopbackIp, TRUSTED_PROXY_HOPS } = require("./clientip");
+
 const app    = express();
 const server = http.createServer(app);
 
@@ -80,17 +84,6 @@ function warnIfCspDrifted() {
   }
 }
 
-function getClientIp(req) {
-  return (
-    (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
-    req.socket.remoteAddress ||
-    "unknown"
-  );
-}
-
-function isLoopbackIp(ip) {
-  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
-}
 
 /** WebSocket upgrade: Origin must match allowlist (browsers always send Origin). */
 function isAllowedWebSocketOrigin(req) {
@@ -730,5 +723,11 @@ setInterval(() => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   warnIfCspDrifted();
+  console.log(`Trusting ${TRUSTED_PROXY_HOPS} proxy hop(s) for client addresses`);
+  if (TRUSTED_PROXY_HOPS > 0 && process.env.TRUSTED_PROXY_HOPS === undefined) {
+    console.log("  (default: correct behind Render/Fly/Heroku/nginx.");
+    console.log("   Set TRUSTED_PROXY_HOPS=0 if this process is exposed directly,");
+    console.log("   otherwise clients can forge their address and evade rate limits.)");
+  }
   console.log(`Server running on port ${PORT}`);
 });

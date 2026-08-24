@@ -19,6 +19,12 @@ const path   = require("node:path");
 
 const appSrc = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 
+/** Comments mention the same identifiers as the code, which throws off any
+    check about ordering — strip them before reasoning about statements. */
+function withoutComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 /** Every `wsSend({ ... })` literal in app.js. Payloads here are flat objects. */
 function wsSendPayloads() {
   return Array.from(appSrc.matchAll(/wsSend\(\s*\{[^}]*\}/g)).map(m => m[0]);
@@ -75,6 +81,29 @@ test("the guard covers every variable a room secret can live in", () => {
   for (const holder of [...holders, "_autoSecret"]) {
     assert.ok(guarded[0].includes(holder), `roomSecretsInPlay omits ${holder}`);
   }
+});
+
+test("an incoming call offer is refused unless a call was accepted", () => {
+  /* attachCallMedia() calls getUserMedia. Without this guard a peer could skip
+     call-request and open the camera and microphone with no prompt shown —
+     inCall is what the accept button sets. */
+  const fn = withoutComments(appSrc)
+    .match(/async function handleIncomingCallOffer\(data\)[\s\S]*?\n\}/);
+  assert.ok(fn, "handleIncomingCallOffer not found");
+  assert.ok(/if\s*\(!inCall\)/.test(fn[0]), "missing the !inCall consent guard");
+  assert.ok(
+    fn[0].indexOf("!inCall") < fn[0].indexOf("attachCallMedia"),
+    "the guard must run before any media is captured");
+});
+
+test("transfer ids reach a selector through exactly one escaped helper", () => {
+  /* The id comes from transfer-meta, so the peer picks it. Unescaped it can
+     break the selector or steer it at another message's bubble. */
+  const builders = Array.from(appSrc.matchAll(/\[data-tid="\$\{([^}]*)\}"\]/g))
+    .map(m => m[1]);
+  assert.equal(builders.length, 1,
+    `expected one place building this selector, found ${builders.length} — route them through findTransferRow()`);
+  assert.ok(/CSS\.escape/.test(builders[0]), "the selector must escape the id");
 });
 
 test("call signaling never goes over the WebSocket", () => {

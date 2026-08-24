@@ -1409,8 +1409,16 @@ function handleBinaryChunk(buffer) {
 
 /* ── Transfer progress ──────────────────────── */
 
+/** The one place a transfer id becomes a selector.
+    The id arrives in transfer-meta, so the peer chooses it: unescaped, a
+    crafted value could break the selector or steer it at a different message's
+    bubble. Every lookup goes through here so no call site can forget. */
+function findTransferRow(id) {
+  return chatMessages.querySelector(`[data-tid="${CSS.escape(String(id))}"]`);
+}
+
 function setTransferProgress(id, pct, mode) {
-  const row = chatMessages.querySelector(`[data-tid="${CSS.escape(id)}"]`);
+  const row = findTransferRow(id);
   const el  = row && row.querySelector(".transfer-pending");
   if (el) el.textContent = `${t(mode)} ${pct}%`;
 }
@@ -1438,7 +1446,7 @@ function attachSendProgress(id) {
 }
 
 function clearSendProgress(id) {
-  const row = chatMessages.querySelector(`[data-tid="${CSS.escape(id)}"]`);
+  const row = findTransferRow(id);
   const line = row && row.querySelector(".send-progress");
   if (line) line.remove();
 }
@@ -1482,7 +1490,7 @@ async function assembleTransfer(id) {
 
 /** Marks a receiving placeholder as failed rather than delivering a truncated file. */
 function failTransfer(id) {
-  const row     = chatMessages.querySelector(`[data-tid="${CSS.escape(id)}"]`);
+  const row     = findTransferRow(id);
   const pending = row && row.querySelector(".transfer-pending");
   if (!pending) { appendSys(t("transferFailed")); return; }
   pending.textContent = `⚠️ ${t("transferFailed")}`;
@@ -1803,12 +1811,22 @@ async function initiateCallOffer(withVideo) {
 
 async function handleIncomingCallOffer(data) {
   if (!pc || !currentSession) return;
+  /* An offer is only legitimate after call-request → the user pressing accept,
+     which is what sets inCall. Without this check a peer could skip straight to
+     call-offer and attachCallMedia() would open the camera and microphone with
+     no prompt shown. (Call signaling arrives only over the encrypted data
+     channel now, so the sender is always the peer.) */
+  if (!inCall) {
+    console.warn("Ignoring unsolicited call offer — no call was accepted");
+    dcSendCallSignal({ type: "call-reject" });
+    return;
+  }
   const withVideo = Boolean(data.withVideo);
   showCallOverlay(t("connecting"), withVideo);
   try {
     createCallPeerConnection();
-    // setRemoteDescription fires ontrack immediately — stream is stored but
-    // not played yet (inCall may not be true here if WS delivered offer fast)
+    // setRemoteDescription fires ontrack immediately, before the local media is
+    // attached below, so the stream is stored and played once we are ready
     await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
     await drainCallIceQueue();
     await attachCallMedia(withVideo);
@@ -1987,7 +2005,7 @@ function appendImagePlaceholder(who, id, name) {
 }
 
 function resolveImagePlaceholder(id, url, name) {
-  const row = chatMessages.querySelector(`[data-tid="${id}"]`);
+  const row = findTransferRow(id);
   if (!row) return;
   const bubble = row.querySelector(".bubble");
   const img = document.createElement("img");
@@ -2044,7 +2062,7 @@ function appendFileBubble(who, url, name, size, id) {
 }
 
 function resolveFileBubble(id, url, name) {
-  const row = chatMessages.querySelector(`[data-tid="${id}"]`);
+  const row = findTransferRow(id);
   if (!row) return;
   const pending = row.querySelector(".file-pending");
   if (pending) {
@@ -2082,7 +2100,7 @@ function appendVoicePlaceholder(who, id) {
 }
 
 function resolveVoicePlaceholder(id, url) {
-  const row = chatMessages.querySelector(`[data-tid="${id}"]`);
+  const row = findTransferRow(id);
   if (!row) return;
   const vb = row.querySelector(".voice-bubble");
   if (!vb) return;
