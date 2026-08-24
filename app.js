@@ -1206,20 +1206,24 @@ function handleTextMessage(data) {
       break;
 
     case "text":
-      if (data.ct && e2eReady) {
-        e2eDecrypt(data.ct, data.iv)
-          .then(plain => {
-            appendBubble("peer", plain);
-            dcSend({ type: "ack", msgId: data.msgId });
-          })
-          .catch(err => {
-            console.error("Decrypt failed:", err);
-            appendBubble("peer", "⚠️ [decrypt error]");
-          });
-      } else {
-        appendBubble("peer", data.text ?? "");
-        dcSend({ type: "ack", msgId: data.msgId });
+      /* Only ever show a message the agreed key opened. sendTextMessage refuses
+         to send until e2eReady, so an unencrypted body is never a real peer —
+         and rendering one would undo e2eFailClosed(): that disables sending, but
+         a middleman caught swapping keys could still write into this window.
+         Same rule, and same silent drop, as the e2e-dc envelope above. */
+      if (!e2eReady || !data.ct) {
+        console.warn("Dropping a text message that was not end-to-end encrypted");
+        break;
       }
+      e2eDecrypt(data.ct, data.iv)
+        .then(plain => {
+          appendBubble("peer", plain);
+          dcSend({ type: "ack", msgId: data.msgId });
+        })
+        .catch(err => {
+          console.error("Decrypt failed:", err);
+          appendBubble("peer", "⚠️ [decrypt error]");
+        });
       break;
 
     case "e2e-pubkey":
@@ -1641,6 +1645,19 @@ function handleCallRequest(data) {
   };
 }
 
+/** How much capture the user actually agreed to.
+
+    pendingCallVideo is set the moment they press a call button or Accept, so it
+    is the only record of what they consented to. The peer's withVideo flag rides
+    in on every later message and cannot be trusted on its own: answering a voice
+    call with `withVideo: true` would otherwise turn the camera on.
+
+    The peer may still ask for less — no camera on their side is a fair reason to
+    answer a video call with audio only — so this is an AND, not an override. */
+function consentedVideo(peerWantsVideo) {
+  return Boolean(pendingCallVideo) && Boolean(peerWantsVideo);
+}
+
 async function attachCallMedia(withVideo) {
   stopLocalCallMedia();
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -1787,8 +1804,19 @@ async function handleCallIce(candidate) {
   }
 }
 
-async function initiateCallOffer(withVideo) {
+async function initiateCallOffer(peerWantsVideo) {
   if (!pc || !currentSession) return;
+  /* Reached only by the peer answering a call we placed, which is what set
+     inCall in requestCall(). Without this check a peer could send call-accept
+     out of the blue and attachCallMedia() below would open the camera and
+     microphone with nothing on screen having asked. Mirrors the guard in
+     handleIncomingCallOffer — both doors reach the same getUserMedia. */
+  if (!inCall) {
+    console.warn("Ignoring unsolicited call-accept — no call was placed");
+    dcSendCallSignal({ type: "call-reject" });
+    return;
+  }
+  const withVideo = consentedVideo(peerWantsVideo);
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
     createCallPeerConnection();
@@ -1821,7 +1849,7 @@ async function handleIncomingCallOffer(data) {
     dcSendCallSignal({ type: "call-reject" });
     return;
   }
-  const withVideo = Boolean(data.withVideo);
+  const withVideo = consentedVideo(data.withVideo);
   showCallOverlay(t("connecting"), withVideo);
   try {
     createCallPeerConnection();

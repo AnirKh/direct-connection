@@ -25,6 +25,16 @@ function withoutComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/** Top-level function declarations, by name. Bodies end at a closing brace in
+    column 0, which is how every function in app.js is written. */
+function topLevelFunctions(src) {
+  const found = new Map();
+  for (const m of src.matchAll(/^(?:async\s+)?function (\w+)\s*\([^)]*\)\s*\{[\s\S]*?^\}/gm)) {
+    found.set(m[1], m[0]);
+  }
+  return found;
+}
+
 /** Every `wsSend({ ... })` literal in app.js. Payloads here are flat objects. */
 function wsSendPayloads() {
   return Array.from(appSrc.matchAll(/wsSend\(\s*\{[^}]*\}/g)).map(m => m[0]);
@@ -83,17 +93,53 @@ test("the guard covers every variable a room secret can live in", () => {
   }
 });
 
-test("an incoming call offer is refused unless a call was accepted", () => {
-  /* attachCallMedia() calls getUserMedia. Without this guard a peer could skip
-     call-request and open the camera and microphone with no prompt shown —
-     inCall is what the accept button sets. */
-  const fn = withoutComments(appSrc)
-    .match(/async function handleIncomingCallOffer\(data\)[\s\S]*?\n\}/);
-  assert.ok(fn, "handleIncomingCallOffer not found");
-  assert.ok(/if\s*\(!inCall\)/.test(fn[0]), "missing the !inCall consent guard");
-  assert.ok(
-    fn[0].indexOf("!inCall") < fn[0].indexOf("attachCallMedia"),
-    "the guard must run before any media is captured");
+test("every path to the camera checks that a call was agreed to first", () => {
+  /* attachCallMedia() calls getUserMedia. inCall is what the call buttons and
+     the Accept button set, so without this guard a peer can send call-offer or
+     call-accept cold and open the camera and microphone with no prompt shown.
+
+     Written against whichever functions reach attachCallMedia rather than
+     against a fixed pair of names: the guard was added to one of the two doors
+     first and the other went unnoticed. A third door must not be able to. */
+  const reaching = Array.from(topLevelFunctions(withoutComments(appSrc)))
+    .filter(([name, body]) => name !== "attachCallMedia" && body.includes("attachCallMedia("));
+
+  assert.ok(reaching.length >= 2,
+    `expected the call-offer and call-accept paths, found ${reaching.length}`);
+
+  for (const [name, body] of reaching) {
+    assert.ok(/if\s*\(!inCall\)/.test(body), `${name} is missing the !inCall consent guard`);
+    assert.ok(
+      body.indexOf("!inCall") < body.indexOf("attachCallMedia("),
+      `${name} must check consent before capturing media`);
+  }
+});
+
+test("the peer cannot add video to a call the user asked to keep voice-only", () => {
+  /* withVideo rides in on the peer's messages; pendingCallVideo is what the
+     user actually pressed. Answering a voice call with withVideo:true would
+     otherwise switch the camera on. */
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  for (const name of ["initiateCallOffer", "handleIncomingCallOffer"]) {
+    const body = fns.get(name);
+    assert.ok(body, `${name} not found`);
+    assert.ok(body.includes("consentedVideo("),
+      `${name} must gate video on what the user agreed to, not on the peer's flag`);
+  }
+  const helper = fns.get("consentedVideo");
+  assert.ok(helper, "consentedVideo not found");
+  assert.ok(helper.includes("pendingCallVideo"), "consentedVideo must read the user's choice");
+});
+
+test("a text message is only displayed when the agreed key opened it", () => {
+  /* A plaintext fallback would undo e2eFailClosed(): that disables sending, but
+     a middleman caught swapping keys could still write into the chat window. */
+  const handler = topLevelFunctions(withoutComments(appSrc)).get("handleTextMessage");
+  assert.ok(handler, "handleTextMessage not found");
+  assert.ok(!/data\.text\b/.test(handler),
+    "handleTextMessage must not render an unencrypted message body");
+  assert.ok(/if\s*\(!e2eReady\s*\|\|\s*!data\.ct\)/.test(handler),
+    "the text case must drop anything that was not encrypted");
 });
 
 test("transfer ids reach a selector through exactly one escaped helper", () => {

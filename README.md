@@ -55,6 +55,21 @@ The PIN and token cannot substitute for the room secret: the server generates bo
 
 Links are short-lived by nature. A room exists only in the server's memory and disappears when **either** participant disconnects, after ten minutes with nobody having joined, or whenever the server restarts. An "old" link points at a room that no longer exists and simply reports *session not found* — so there is no population of stale links to worry about.
 
+## Calls: consent is local, never taken from the wire
+
+Two rules, both enforced in `test/client-source.test.js`:
+
+- **`getUserMedia` runs only when `inCall` is already true.** `inCall` is set by pressing a call button or Accept — nothing a peer sends can set it. Every function that reaches `attachCallMedia()` must check it first, or the peer can skip the prompt and open the camera by sending `call-offer` or `call-accept` cold.
+- **`pendingCallVideo` decides whether the camera is used, not the peer's `withVideo` flag.** That flag rides in on every call message; `consentedVideo()` ANDs the two, so the peer may answer a video call with audio only but can never add video to a call you asked to keep voice-only.
+
+The test walks whichever functions call `attachCallMedia` rather than a fixed list of names, because the guard was added to one of the two paths first and the second went unnoticed for a release.
+
+## Text messages are shown only if the agreed key opened them
+
+`handleTextMessage` drops any `text` that arrives without ciphertext or before the key exchange completes. `sendTextMessage` never sends one, so an unencrypted body is never a real peer.
+
+This matters because `e2eFailClosed()` only disables **sending**. Rendering a plaintext body would leave a middleman who was just caught swapping keys still able to write into the chat window.
+
 ## Tests
 
 ```
