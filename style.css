@@ -3,18 +3,35 @@
 /* Tabler icons loaded via <link> in index.html — no @import needed here */
 
 :root {
-  /* Slate Blue theme */
-  --bg:          #0f172a;
-  --card:        #1e293b;
-  --input-bg:    #334155;
-  --border:      #334155;
-  --accent:      #06b6d4;
-  --accent-dark: #0891b2;
-  --text:        #e2e8f0;
-  --muted:       #94a3b8;
-  --danger:      #ef4444;
-  --green:       #4ade80;
-  --orange:      #fb923c;
+  /* ── Paper, after dark ──────────────────────
+     A light, document-like palette inverted rather than translated: a calm
+     near-black ground, warm off-white text, and one soft ink blue that appears
+     only where something is actionable or worth reading.
+
+     Every colour the app uses lives here. app.js styles some elements inline
+     and those declarations read these variables too — nothing may hard-code a
+     hex, or it will keep the old palette while everything around it changes.
+     (framebust.js is the one exception, and says why in the file.) */
+
+  --bg:          #15151a;   /* app ground */
+  --card:        #1d1d24;   /* panels lifted off it */
+  --sunken:      #101014;   /* recessed: PIN box, invite-link field */
+  --input-bg:    #22222a;
+  --border:      #2c2c36;
+
+  --accent:      #7fa8d4;   /* soft ink blue — buttons, active state */
+  --accent-dark: #6b95c4;   /* hover */
+  --accent-text: #8fb4de;   /* the accent as text on a dark ground */
+  --on-accent:   #12121a;   /* what sits on top of --accent */
+
+  --text:        #e8e5de;   /* warm off-white — the paper carried over */
+  --muted:       #9b98a4;
+
+  --danger:      #e5484d;
+  --danger-dark: #c93a3f;   /* hover on a danger fill */
+  --danger-text: #f08a8d;   /* lighter, for error text rather than fills */
+  --green:       #6fbf8b;
+  --orange:      #d9a441;
 
   --safe-top:    env(safe-area-inset-top,    0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -31,6 +48,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  line-height: 1.55;
   height: 100dvh;
   height: -webkit-fill-available;
   overflow: hidden;
@@ -49,12 +67,12 @@ body {
   z-index: 1001;
   display: flex;
   gap: 2px;
-  background: rgba(15,23,42,0.85);
+  background: rgba(21,21,26,0.85);
   border-radius: 8px;
   padding: 3px;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid #334155;
+  border: 1px solid var(--border);
 }
 .lang-btn {
   width: auto !important;
@@ -64,18 +82,18 @@ body {
   font-weight: 700 !important;
   border-radius: 5px !important;
   background: transparent !important;
-  color: #6b7280 !important;
+  color: var(--muted) !important;
   margin: 0 !important;
   letter-spacing: 0.5px;
   transition: background 0.15s, color 0.15s !important;
 }
 .lang-btn.active {
-  background: #2563eb !important;
-  color: #fff !important;
+  background: var(--accent) !important;
+  color: var(--on-accent) !important;
 }
 .lang-btn:hover:not(.active) {
   background: rgba(255,255,255,0.07) !important;
-  color: #e2e8f0 !important;
+  color: var(--text) !important;
 }
 
 /* ── OVERLAY / MODAL ───────────────────────── */
@@ -90,13 +108,13 @@ body {
   width: 100%; max-width: 420px;
   background: var(--card);
   padding: 32px 24px;
-  border-radius: 18px;
+  border-radius: 16px;
   text-align: center;
-  box-shadow: 0 0 60px rgba(0,0,0,0.6);
+  box-shadow: 0 0 60px rgba(0,0,0,0.55);
 }
 .modal-icon { font-size: 34px; margin-bottom: 12px; }
 .modal h2   { margin-bottom: 10px; font-size: 19px; }
-.modal p    { color: #cbd5e1; line-height: 1.6; margin-bottom: 22px; font-size: 14px; }
+.modal p    { color: var(--text); line-height: 1.6; margin-bottom: 22px; font-size: 14px; }
 
 /* ── INPUTS ────────────────────────────────── */
 input[type="text"], textarea {
@@ -104,7 +122,7 @@ input[type="text"], textarea {
   padding: 13px 14px;
   background: var(--input-bg);
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--text);
   font-size: 16px;
   outline: none;
@@ -121,9 +139,9 @@ input:disabled { opacity: 0.45; cursor: not-allowed; }
 button {
   padding: 13px 18px;
   background: var(--accent);
-  color: #000;
-  border: none; border-radius: 10px;
-  cursor: pointer; font-size: 15px; font-weight: 500;
+  color: var(--on-accent);
+  border: none; border-radius: 12px;
+  cursor: pointer; font-size: 15px; font-weight: 550;
   transition: background 0.18s, opacity 0.18s;
   width: 100%; margin-top: 10px;
   min-height: 44px;
@@ -157,8 +175,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Call buttons — accent colored */
 #voiceCallBtn { color: var(--green); }
 #videoCallBtn { color: var(--accent); }
-#voiceCallBtn:hover:not(:disabled) { background: rgba(74,222,128,0.1); }
-#videoCallBtn:hover:not(:disabled) { background: rgba(6,182,212,0.1);  }
+#voiceCallBtn:hover:not(:disabled) { background: rgba(111,191,139,0.12); }
+#videoCallBtn:hover:not(:disabled) { background: rgba(127,168,212,0.12); }
 
 /* Back button */
 #leaveBtn { color: var(--muted); font-size: 20px; }
@@ -175,7 +193,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .key-verify[open] summary {
   color: var(--green);
-  background: rgba(74,222,128,0.1);
+  background: rgba(111,191,139,0.12);
 }
 .key-verify-panel {
   position: absolute;
@@ -197,7 +215,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .key-verify-code {
   padding: 10px;
   border-radius: 6px;
-  background: #0b1220;
+  background: var(--sunken);
   color: var(--green);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 15px;
@@ -278,7 +296,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border-radius: 8px; background: var(--input-bg); border: 1px solid var(--border);
   color: var(--text); flex-shrink: 0;
 }
-.leave-attach-btn:hover:not(:disabled) { background: #3d4f66; }
+.leave-attach-btn:hover:not(:disabled) { background: rgba(255,255,255,0.07); }
 .leave-file-name { font-size: 12px; color: var(--accent); word-break: break-all; flex: 1; }
 .leave-status { margin-top: 10px; font-size: 13px; min-height: 20px; text-align: center; transition: color 0.3s; }
 .leave-status.ok      { color: var(--green); }
@@ -315,9 +333,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── VERIFICATION WARNING ──────────────────── */
 .verify-banner {
-  background: rgba(239,68,68,0.15);
-  border-bottom: 1px solid rgba(239,68,68,0.35);
-  color: #fca5a5; font-size: 12px; line-height: 1.4;
+  background: rgba(229,72,77,0.14);
+  border-bottom: 1px solid rgba(229,72,77,0.34);
+  color: var(--danger-text); font-size: 12px; line-height: 1.4;
   padding: 7px 14px; flex-shrink: 0; text-align: center;
 }
 
@@ -359,7 +377,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Me — tail bottom-right */
 .bubble-row.me   .bubble {
   background: var(--accent);
-  color: #000;
+  color: var(--on-accent);
   border-radius: 18px 18px 4px 18px;
 }
 /* Peer — tail bottom-left */
@@ -438,7 +456,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   margin: 0; padding: 0; border-radius: 50%;
   font-size: 18px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  background: var(--accent); color: #000;
+  background: var(--accent); color: var(--on-accent);
 }
 .send-btn:hover:not(:disabled) { background: var(--accent-dark); }
 
@@ -450,8 +468,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   animation: pulse 1s infinite;
 }
 @keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
-  70%  { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+  0%   { box-shadow: 0 0 0 0 rgba(229,72,77,0.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(229,72,77,0); }
   100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
 }
 
@@ -504,7 +522,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .voice-only-avatar .avatar-circle {
   width: 96px; height: 96px; border-radius: 50%;
-  background: #1e293b;
+  background: var(--card);
   border: 3px solid rgba(255,255,255,0.15);
   display: flex; align-items: center; justify-content: center;
   font-size: 42px;
@@ -616,10 +634,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   text-align: center;
   max-width: 100%;
 }
-.dc-toast-info  { background: #1e40af; }
-.dc-toast-warn  { background: #92400e; }
-.dc-toast-error { background: #7f1d1d; }
-.dc-toast-ok    { background: #14532d; }
+.dc-toast-info  { background: #2f4f75; }
+.dc-toast-warn  { background: #6d5220; }
+.dc-toast-error { background: #6e2a2c; }
+.dc-toast-ok    { background: #2c5340; }
 @keyframes toastIn  { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform: translateY(0); } }
 @keyframes toastOut { from { opacity:1; } to { opacity:0; pointer-events:none; } }
 
@@ -634,7 +652,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--input-bg); color: var(--text);
   border: 1px solid var(--border);
 }
-.reconnect-sys-btn:hover:not(:disabled) { background: #3d4f66; color: var(--text); }
+.reconnect-sys-btn:hover:not(:disabled) { background: rgba(255,255,255,0.07); color: var(--text); }
 
 /* ── INCOMING CALL MODAL ───────────────────── */
 #callRequestModal .modal { text-align: center; }
@@ -645,4 +663,4 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--danger) !important;
   color: #fff !important;
 }
-#callDeclineBtn:hover:not(:disabled) { background: #dc2626 !important; }
+#callDeclineBtn:hover:not(:disabled) { background: var(--danger-dark) !important; }

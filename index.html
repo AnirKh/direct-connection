@@ -20,7 +20,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202608241400"></script>
+  <script src="framebust.js?v=202608261200"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -108,13 +108,13 @@
   <div id="pinOverlay" class="overlay hidden">
     <div class="modal">
       <h2 data-i18n="pinTitle">Өрөөрүү нэвтрэх код</h2>
-      <p id="pinSessionLabel" style="color:#06b6d4;margin:0 0 16px"></p>
+      <p id="pinSessionLabel" style="color:var(--accent-text);margin:0 0 16px"></p>
       <input id="pinInput" type="text" maxlength="6" data-i18n-ph="pinPlaceholder" placeholder="6 оронтой PIN">
       <div style="display:flex;gap:10px;margin-top:12px">
-        <button id="pinCancelBtn" style="background:#334155;color:#e2e8f0" data-i18n="pinCancel">Цуцлах</button>
+        <button id="pinCancelBtn" style="background:var(--input-bg);color:var(--text)" data-i18n="pinCancel">Цуцлах</button>
         <button id="pinJoinBtn" data-i18n="pinJoin">Нэгдэх</button>
       </div>
-      <div id="pinError" style="color:#ef4444;margin-top:10px;min-height:20px;font-size:13px"></div>
+      <div id="pinError" style="color:var(--danger-text);margin-top:10px;min-height:20px;font-size:13px"></div>
     </div>
   </div>
 
@@ -244,8 +244,8 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202608241400"></script>
-  <script src="i18n.js?v=202608241400"></script>
-  <script src="app.js?v=202608241400"></script>
+  <script src="protocol.js?v=202608261200"></script>
+  <script src="i18n.js?v=202608261200"></script>
+  <script src="app.js?v=202608261200"></script>
 </body>
 </html>

@@ -74,10 +74,14 @@
     }
     body.replaceChildren();
 
+    /* These hexes are the one place the palette is repeated rather than read
+       from style.css. window.stop() above can end parsing before the
+       stylesheet loads, so a var() here would resolve to nothing and leave
+       unreadable text. Keep them in step with :root in style.css by hand. */
     var wrap = document.createElement("div");
     wrap.style.cssText =
       "font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;" +
-      "background:#12151c;color:#e2e8f0;min-height:100vh;margin:0;" +
+      "background:#15151a;color:#e8e5de;min-height:100vh;margin:0;" +
       "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
       "gap:14px;text-align:center;padding:24px;box-sizing:border-box";
 
@@ -92,7 +96,7 @@
 
     var en = document.createElement("p");
     en.textContent = "This app cannot run inside another website.";
-    en.style.cssText = "margin:0;font-size:14px;color:#9ca3af";
+    en.style.cssText = "margin:0;font-size:14px;color:#9b98a4";
 
     var link = document.createElement("a");
     link.href = window.self.location.href;
@@ -100,8 +104,8 @@
     link.rel = "noopener noreferrer";
     link.textContent = "Шууд нээх / Open directly";
     link.style.cssText =
-      "margin-top:6px;padding:10px 18px;border-radius:8px;background:#2563eb;" +
-      "color:#fff;text-decoration:none;font-size:14px";
+      "margin-top:6px;padding:10px 18px;border-radius:8px;background:#7fa8d4;" +
+      "color:#12121a;text-decoration:none;font-size:14px";
 
     wrap.append(icon, mn, en, link);
     body.appendChild(wrap);

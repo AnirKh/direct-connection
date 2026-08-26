@@ -482,7 +482,7 @@ function wakeServer() {
   const wakeNoticeTimer = setTimeout(() => {
     const msg = document.createElement("span");
     msg.className = "server-wake-status";
-    msg.style.color = "#fbbf24";
+    msg.style.color = "var(--orange)";
     msg.textContent = `⏳ ${t("serverWaking")}`;
     createInfo.replaceChildren(msg);
   }, 2000);
@@ -545,7 +545,7 @@ function checkAutoJoin() {
   pendingRoomSecret = _autoSecret;   // link join — carries the room secret
   setLobbyButtons(true);
   const msg = document.createElement("span");
-  msg.style.color = "#7dd3fc";
+  msg.style.color = "var(--accent-text)";
   msg.textContent = I18N[LANG].joiningSession(_autoSessionId);
   createInfo.replaceChildren(msg);
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
@@ -563,7 +563,7 @@ function connectWebSocket() {
     if (createInfo.querySelector(".server-wake-status")) {
       const msg = document.createElement("span");
       msg.className = "server-ready-status";
-      msg.style.color = "#4ade80";
+      msg.style.color = "var(--green)";
       msg.textContent = `✓ ${t("serverReady")}`;
       createInfo.replaceChildren(msg);
       setTimeout(() => {
@@ -898,20 +898,20 @@ async function handleSignaling(data) {
       ready.textContent = t("roomReady");
 
       const pinBox = document.createElement("div");
-      pinBox.style.cssText = "background:#12151c;border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
+      pinBox.style.cssText = "background:var(--sunken);border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
       const pinLabel = document.createElement("div");
-      pinLabel.style.cssText = "font-size:11px;color:#9ca3af;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
+      pinLabel.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
       pinLabel.textContent = t("pinCode");
       const pinValue = document.createElement("div");
-      pinValue.style.cssText = "font-size:28px;font-weight:700;letter-spacing:10px;color:#fff";
+      pinValue.style.cssText = "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
       pinValue.textContent = data.pin;
       const pinHint = document.createElement("div");
-      pinHint.style.cssText = "font-size:11px;color:#9ca3af;margin-top:4px";
+      pinHint.style.cssText = "font-size:11px;color:var(--muted);margin-top:4px";
       pinHint.textContent = t("pinCodeHint");
       pinBox.append(pinLabel, pinValue, pinHint);
 
       const linkHint = document.createElement("div");
-      linkHint.style.cssText = "font-size:12px;color:#9ca3af;margin-bottom:6px";
+      linkHint.style.cssText = "font-size:12px;color:var(--muted);margin-bottom:6px";
       linkHint.textContent = t("linkHint");
       const linkRow = document.createElement("div");
       linkRow.style.cssText = "display:flex;gap:6px;align-items:center";
@@ -920,7 +920,7 @@ async function handleSignaling(data) {
       shareUrlInput.type = "text";
       shareUrlInput.value = shareUrl;
       shareUrlInput.readOnly = true;
-      shareUrlInput.style.cssText = "font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:#12151c;color:#7dd3fc;border:1px solid #2a2f3a";
+      shareUrlInput.style.cssText = "font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:var(--sunken);color:var(--accent-text);border:1px solid var(--border)";
       const copyLinkBtn = document.createElement("button");
       copyLinkBtn.id = "copyLinkBtn";
       copyLinkBtn.style.cssText = "width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0";
@@ -1030,7 +1030,7 @@ async function handleSignaling(data) {
       console.error("[Server error]", data.message);
       if (_isAutoJoin && isConnecting) {
         const msg = document.createElement("span");
-        msg.style.color = "#f87171";
+        msg.style.color = "var(--danger-text)";
         msg.textContent = `❌ ${data.message}`;
         createInfo.replaceChildren(msg);
         setLobbyButtons(false);
@@ -1056,11 +1056,11 @@ async function handleSignaling(data) {
 
       if (_isAutoJoin) {
         const wrap = document.createElement("span");
-        wrap.style.color = "#f87171";
+        wrap.style.color = "var(--danger-text)";
         wrap.append(document.createTextNode(I18N[LANG].couldNotJoin(msg)));
         wrap.appendChild(document.createElement("br"));
         const small = document.createElement("small");
-        small.style.color = "#9ca3af";
+        small.style.color = "var(--muted)";
         small.textContent = t("sessionExpired");
         wrap.appendChild(small);
         createInfo.replaceChildren(wrap);
@@ -1444,7 +1444,7 @@ function attachSendProgress(id) {
   const host = row.querySelector(".bubble") || row;
   const line = document.createElement("div");
   line.className = "transfer-pending send-progress";
-  line.style.cssText = "color:#94a3b8;font-size:11px;margin-top:4px";
+  line.style.cssText = "color:var(--muted);font-size:11px;margin-top:4px";
   line.textContent = `${t("sending")} 0%`;
   host.appendChild(line);
 }
@@ -1500,7 +1500,7 @@ function failTransfer(id) {
   pending.textContent = `⚠️ ${t("transferFailed")}`;
   pending.classList.remove("transfer-pending");
   pending.classList.add("transfer-failed");
-  pending.style.color = "#f87171";   // beats the inline colour set on the placeholder
+  pending.style.color = "var(--danger-text)";   // beats the inline colour set on the placeholder
   scrollBottom();
 }
 
@@ -1998,7 +1998,7 @@ function resolveVoiceNow(who, url) {
   bubble.className = "bubble";
   const wrap = document.createElement("div");
   wrap.className = "voice-bubble";
-  wrap.appendChild(tablerIcon("microphone", 18, "#06b6d4"));
+  wrap.appendChild(tablerIcon("microphone", 18, "var(--accent-text)"));
   const audio = document.createElement("audio");
   audio.src = url; audio.controls = true;
   wrap.appendChild(audio);
@@ -2020,7 +2020,7 @@ function appendImagePlaceholder(who, id, name) {
   bubble.className = "bubble";
   const label = document.createElement("div");
   label.className = "transfer-pending";
-  label.style.cssText = "color:#9ca3af;font-size:13px";
+  label.style.cssText = "color:var(--muted);font-size:13px";
   label.textContent = `🖼️ ${name || t("image")} — ${t("receiving")}`;
   bubble.appendChild(label);
   const meta = document.createElement("div");
@@ -2074,7 +2074,7 @@ function appendFileBubble(who, url, name, size, id) {
   } else {
     const pending = document.createElement("span");
     pending.className = "file-pending transfer-pending";
-    pending.style.cssText = "color:#94a3b8;font-size:12px";
+    pending.style.cssText = "color:var(--muted);font-size:12px";
     pending.textContent = t("receiving");
     info.appendChild(pending);
   }
@@ -2114,7 +2114,7 @@ function appendVoicePlaceholder(who, id) {
   mic.textContent = "🎤";
   const pending = document.createElement("span");
   pending.className = "transfer-pending";
-  pending.style.cssText = "color:#9ca3af;font-size:12px";
+  pending.style.cssText = "color:var(--muted);font-size:12px";
   pending.textContent = t("receiving");
   vb.append(mic, pending);
   bubble.appendChild(vb);
