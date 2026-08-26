@@ -291,6 +291,54 @@ test("a request without the client header is refused before any parsing", async 
   assert.equal(res.status, 403, "drive-by posts must be refused");
 });
 
+/* The status code is the evidence of ordering here. multer buffers the whole
+   upload into memory, so a check placed after it has already spent the RAM. An
+   over-sized body would trip multer's own limit and answer 413 — seeing the
+   cheap header/limit rejection instead proves nothing read the body. */
+
+/** A multipart body larger than LEAVE_MESSAGE_MAX_FILE_BYTES (28 MB default). */
+function oversizedUpload() {
+  const B = "----dcOversize";
+  const head = Buffer.from(
+    `--${B}\r\nContent-Disposition: form-data; name="file"; filename="big.bin"\r\n` +
+    `Content-Type: application/octet-stream\r\n\r\n`);
+  const payload = Buffer.alloc(30 * 1024 * 1024, 0x41);
+  const tail = Buffer.from(`\r\n--${B}--\r\n`);
+  return { body: Buffer.concat([head, payload, tail]), type: `multipart/form-data; boundary=${B}` };
+}
+
+test("an unauthorised upload is refused before its body is buffered", async () => {
+  const up = oversizedUpload();
+  const res = await post(up.body, { "Content-Type": up.type });   // no X-DC-Client
+  assert.equal(res.status, 403,
+    "expected the header check first; 413 would mean multer buffered 30 MB from a stranger");
+  assert.ok(await stillServing());
+});
+
+test("a rate-limited upload is refused before its body is buffered", async () => {
+  /* Burn the allowance with cheap requests, then send something large. */
+  const headers = { "Content-Type": "application/json", "X-DC-Client": "1", "X-Forwarded-For": "198.51.100.44" };
+  for (let i = 0; i < 6; i++) await post('{"message":"x"}', headers);
+
+  const up = oversizedUpload();
+  const res = await post(up.body, {
+    "Content-Type": up.type, "X-DC-Client": "1", "X-Forwarded-For": "198.51.100.44"
+  });
+  assert.equal(res.status, 429,
+    "expected the rate limit first; 413 would mean the limit ran after buffering");
+  assert.ok(await stillServing());
+});
+
+test("an oversized upload from an allowed client is still rejected by multer", async () => {
+  /* The guards must not have replaced the size limit — only moved ahead of it. */
+  const up = oversizedUpload();
+  const res = await post(up.body, {
+    "Content-Type": up.type, "X-DC-Client": "1", "X-Forwarded-For": "198.51.100.55"
+  });
+  assert.equal(res.status, 413, "the file-size limit must still apply to legitimate clients");
+  assert.ok(await stillServing());
+});
+
 /* ══════════════════════════════════════════
    Privacy
 ══════════════════════════════════════════ */

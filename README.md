@@ -10,6 +10,8 @@ AnirKh.github.io/direct-connection
 | `app.js` | Everything stateful: WebRTC, data channel, calls, chat UI. |
 | `csp.js` | The Content-Security-Policy, defined once (see below). |
 | `clientip.js` | Works out the real client address from `X-Forwarded-For`. Every rate limit depends on it, so it is separate and tested. |
+| `ratelimit.js` | Sliding-window counters, their expiry sweep, and `safeLabel` for anything client-supplied that reaches a log line. Same reason as above: small, pure, security-relevant. |
+| `framebust.js` | Refuses to run inside a frame. The only such protection on GitHub Pages (see below). |
 | `server.js` | Signaling, PIN/token auth, rate limits, `/api/send-message`. |
 
 Adding a string means adding it to **both** languages in `i18n.js` — `t()` falls back to the key name, so a missing translation shows up as raw text in the UI.
@@ -80,11 +82,20 @@ Node's built-in runner, no dependencies. Three files:
 
 - `test/protocol.test.js` — invite-link parsing (including malformed input, which must not throw at page load), room secrets, key derivation, and the framing. Includes a man-in-the-middle case asserting that an attacker who substitutes both public keys cannot reach a working key without the room secret.
 - `test/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
-- `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`.
+- `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
+- `test/ratelimit.test.js` — the sliding window, its expiry sweep, and log sanitising. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
 
 Not covered: the WebRTC and UI code in `app.js`, which needs a browser and two peers. Changes there still want a manual two-tab check.
+
+### Two ordering rules in `server.js`
+
+Both are about work done before a request has earned it.
+
+**`requireClientHeader` and `enforceEmailRateLimit` must stay ahead of `upload.single()`.** multer buffers the entire upload into memory before the handler runs, so any check placed after it has already let a stranger spend up to `LEAVE_ATTACH_MAX_BYTES` of RAM. The tests pin this by status code: an oversized upload with no client header must answer **403**, not 413 — a 413 means multer parsed it first.
+
+**Anything client-supplied that reaches a log line goes through `safeLabel`.** A WebSocket `data.type` is arbitrary text up to `maxPayload`. Printed raw, a newline in it writes further log lines the attacker controls, including imitations of the real ones. Unknown types are also capped per socket, so one client cannot fill the log by inventing names.
 
 ### Framing (clickjacking)
 

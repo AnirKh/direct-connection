@@ -51,6 +51,10 @@ const {
    as this is hard to forge. See clientip.js. */
 const { getClientIp, isLoopbackIp, TRUSTED_PROXY_HOPS } = require("./clientip");
 
+/* Sliding-window counters and log sanitising — small, pure, and tested
+   directly rather than through a running server. See ratelimit.js. */
+const { slidingAllow, pruneExpired, safeLabel } = require("./ratelimit");
+
 const app    = express();
 const server = http.createServer(app);
 
@@ -214,22 +218,40 @@ function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
-app.post("/api/send-message", upload.single("file"), asyncRoute(async (req, res) => {
-  /* Non-simple header forces CORS preflight; simple cross-site forms cannot set it. */
+/* ── Gatekeepers, deliberately ahead of multer ──
+   multer buffers the whole upload into memory before the handler runs, so any
+   check placed after it has already let an unauthenticated stranger spend
+   LEAVE_MESSAGE_MAX_FILE_BYTES of RAM. Both checks below are cheap, header-only
+   and settle the request before a byte of body is read. Order matters here —
+   keep them in front of upload.single(). */
+
+/** Non-simple header forces CORS preflight; simple cross-site forms cannot set it. */
+function requireClientHeader(req, res, next) {
   if ((req.headers[API_CLIENT_HEADER] || "") !== API_CLIENT_VALUE) {
     return res.status(403).json({ error: "Forbidden" });
   }
+  next();
+}
+
+function enforceEmailRateLimit(req, res, next) {
+  const limit = checkEmailRateLimit(getClientIp(req));
+  if (!limit.allowed) {
+    return res.status(429).json({ error: `Too many messages. Try again in ${limit.remaining}s.` });
+  }
+  next();
+}
+
+app.post("/api/send-message",
+  requireClientHeader,
+  enforceEmailRateLimit,
+  upload.single("file"),
+  asyncRoute(async (req, res) => {
 
   /* multer fills req.body only for multipart requests and leaves it undefined
      for anything else, and no body parser is mounted. The client always sends
      FormData, so a missing body is a malformed request — it must fall through
      to the "Message is required" check below, not throw. */
   const { message, name } = req.body || {};
-  const clientIp = getClientIp(req);
-  const emailLimit = checkEmailRateLimit(clientIp);
-  if (!emailLimit.allowed) {
-    return res.status(429).json({ error: `Too many messages. Try again in ${emailLimit.remaining}s.` });
-  }
 
   if (typeof message !== "string" || message.trim() === "") {
     return res.status(400).json({ error: "Message is required" });
@@ -394,6 +416,8 @@ setInterval(() => {
 ══════════════════════════════════════════════ */
 
 const sessions = new Map();
+/** Unknown message types logged per socket before going quiet. */
+const UNKNOWN_TYPE_LOG_MAX = 5;
 const SESSION_ID_MAX = 80;
 const SESSION_ID_PATTERN = /^[\p{L}\p{N} _.:~-]+$/u;
 
@@ -413,6 +437,7 @@ function ipLogId(ip) {
   return crypto.createHash("sha256").update(ip).digest("hex").slice(0, 10);
 }
 
+
 function publicSessions() {
   if (!PUBLIC_SESSION_LIST) return [];
   return Array.from(sessions)
@@ -427,16 +452,13 @@ const LIST_SESSIONS_MAX        = 40;
 const CREATE_SESSION_WINDOW_MS = 10 * 60 * 1000;
 const CREATE_SESSION_MAX       = 10;
 
-/** Sliding-window rate limit; mutates map. Returns true if allowed. */
-function slidingAllow(map, ip, max, windowMs) {
-  const now = Date.now();
-  let arr = map.get(ip) || [];
-  arr = arr.filter(t => now - t < windowMs);
-  if (arr.length >= max) return false;
-  arr.push(now);
-  map.set(ip, arr);
-  return true;
-}
+/* joinAttempts and emailAttempts each have a sweep above; these two were
+   missed, and without one they keep an entry per address seen since startup.
+   See ratelimit.js — pruneExpired explains why slidingAllow cannot do it. */
+setInterval(() => {
+  pruneExpired(listSessionsHits, LIST_SESSIONS_WINDOW_MS);
+  pruneExpired(createSessionHits, CREATE_SESSION_WINDOW_MS);
+}, 60_000);
 
 function recordSessionJoinFailure(sessionId, session) {
   const now = Date.now();
@@ -508,7 +530,7 @@ wss.on("connection", (ws, req) => {
   ws.on("message", (raw) => {
     let data;
     try { data = JSON.parse(raw); } catch (e) { return; }
-    console.log(`MSG ${ipLogId(clientIp)}: ${data.type}`);
+    console.log(`MSG ${ipLogId(clientIp)}: ${safeLabel(data.type)}`);
 
     switch (data.type) {
 
@@ -671,7 +693,14 @@ wss.on("connection", (ws, req) => {
 
       case "ping": /* keep-alive, no-op */ break;
 
-      default: console.log("Unknown msg type:", data.type);
+      default:
+        /* An unknown type is either an old client or someone probing. Either
+           way one socket must not be able to fill the log with novel types. */
+        ws.unknownTypeLogs = (ws.unknownTypeLogs || 0) + 1;
+        if (ws.unknownTypeLogs <= UNKNOWN_TYPE_LOG_MAX) {
+          console.log(`Unknown msg type from ${ipLogId(clientIp)}: ${safeLabel(data.type)}` +
+            (ws.unknownTypeLogs === UNKNOWN_TYPE_LOG_MAX ? " (further ones from this client not logged)" : ""));
+        }
     }
   });
 });
