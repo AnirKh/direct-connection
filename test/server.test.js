@@ -12,6 +12,7 @@ const test   = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const path   = require("node:path");
+const http   = require("node:http");
 const WebSocket = require("ws");
 
 const PORT   = 3199;
@@ -212,6 +213,82 @@ test("a healthy client survives several heartbeat sweeps", async () => {
   await waitFor(ws, "session-created");
   await sleep(3500);                       // ~3 sweeps at HEARTBEAT_MS=1000
   assert.equal(ws.readyState, WebSocket.OPEN);
+});
+
+/* ══════════════════════════════════════════
+   POST /api/send-message
+
+   The endpoint parses uploads, so a malformed request reaches real parsing code
+   before any auth or rate limit applies. What matters in every case below is
+   not the status code but that the process is still serving afterwards: an
+   uncaught throw here kills the signaling server and every room with it.
+══════════════════════════════════════════ */
+
+function post(body, headers) {
+  return new Promise(resolve => {
+    const req = http.request({
+      host: "127.0.0.1", port: PORT, path: "/api/send-message", method: "POST",
+      headers: { "Content-Length": Buffer.byteLength(body), ...headers }
+    }, res => {
+      let data = "";
+      res.on("data", c => data += c);
+      res.on("end", () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on("error", err => resolve({ error: err.code || err.message }));
+    req.setTimeout(4000, () => { req.destroy(); resolve({ error: "TIMEOUT" }); });
+    req.end(body);
+  });
+}
+
+/** True while the server is still answering requests. */
+async function stillServing() {
+  const res = await new Promise(resolve => {
+    const r = http.get({ host: "127.0.0.1", port: PORT, path: "/api/ping" }, res => {
+      let d = ""; res.on("data", c => d += c); res.on("end", () => resolve({ status: res.statusCode }));
+    });
+    r.on("error", err => resolve({ error: err.code }));
+    r.setTimeout(3000, () => { r.destroy(); resolve({ error: "TIMEOUT" }); });
+  });
+  return res.status === 200;
+}
+
+test("a non-multipart body does not take the server down", async () => {
+  /* multer only fills req.body for multipart requests, and no body parser is
+     mounted, so req.body is undefined here. Destructuring it threw, and because
+     the handler is async the rejection was unhandled — which ends the process.
+     One request, with a header the client documents, dropped every live chat. */
+  const live = await client();             // a real user, mid-session
+  live.send_({ type: "create-session", sessionId: "room-survives-json" });
+  assert.ok(await waitFor(live, "session-created"), "setup: room not created");
+
+  const res = await post('{"message":"hi"}', {
+    "Content-Type": "application/json",
+    "X-DC-Client": "1"
+  });
+
+  assert.notEqual(res.error, "ECONNRESET", "the server dropped the connection — it crashed");
+  assert.ok(await stillServing(), "the server stopped answering after one malformed request");
+  assert.equal(live.readyState, WebSocket.OPEN, "a live session was dropped with the process");
+});
+
+test("an empty body with no content type does not take the server down", async () => {
+  const res = await post("", { "X-DC-Client": "1" });
+  assert.notEqual(res.error, "ECONNRESET");
+  assert.ok(await stillServing(), "the server stopped answering");
+});
+
+test("a form-encoded body does not take the server down", async () => {
+  const res = await post("message=hi", {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "X-DC-Client": "1"
+  });
+  assert.notEqual(res.error, "ECONNRESET");
+  assert.ok(await stillServing(), "the server stopped answering");
+});
+
+test("a request without the client header is refused before any parsing", async () => {
+  const res = await post('{"message":"hi"}', { "Content-Type": "application/json" });
+  assert.equal(res.status, 403, "drive-by posts must be refused");
 });
 
 /* ══════════════════════════════════════════

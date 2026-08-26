@@ -206,13 +206,25 @@ function cleanAttachmentName(name) {
   return cleaned || "attachment";
 }
 
-app.post("/api/send-message", upload.single("file"), async (req, res) => {
+/* Express 4 does not await route handlers, so a rejected promise becomes an
+   unhandled rejection and Node terminates the process — taking every open room
+   and every call in progress with it. One malformed request could do it. Route
+   every async handler through here so a throw becomes a 500 instead. */
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+app.post("/api/send-message", upload.single("file"), asyncRoute(async (req, res) => {
   /* Non-simple header forces CORS preflight; simple cross-site forms cannot set it. */
   if ((req.headers[API_CLIENT_HEADER] || "") !== API_CLIENT_VALUE) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  const { message, name } = req.body;
+  /* multer fills req.body only for multipart requests and leaves it undefined
+     for anything else, and no body parser is mounted. The client always sends
+     FormData, so a missing body is a malformed request — it must fall through
+     to the "Message is required" check below, not throw. */
+  const { message, name } = req.body || {};
   const clientIp = getClientIp(req);
   const emailLimit = checkEmailRateLimit(clientIp);
   if (!emailLimit.allowed) {
@@ -278,7 +290,7 @@ app.post("/api/send-message", upload.single("file"), async (req, res) => {
     console.error("Resend error:", err.message);
     res.status(500).json({ error: "Failed to send email", detail: err.message });
   }
-});
+}));
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -288,7 +300,12 @@ app.use((err, req, res, next) => {
     }
     return res.status(400).json({ error: err.message });
   }
-  next(err);
+  /* Anything reaching here is a bug in a handler. Answer generically rather
+     than calling next(err): Express's default handler replies with the stack
+     trace unless NODE_ENV is production, which is not guaranteed to be set. */
+  console.error("Unhandled request error:", (err && err.stack) || err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "Server error" });
 });
 
 /* ── HTML escape helper ─────────────────────── */
