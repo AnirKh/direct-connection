@@ -53,6 +53,8 @@ function applyI18n() {
   if (typingIndicator && !typingIndicator.classList.contains("hidden")) {
     typingIndicator.textContent = t("peerTyping");
   }
+  // the path badge carries a translated label and tooltip — redraw both
+  renderConnectionPath(_lastPath);
 }
 
 /* ── Language switcher ───────────────────────── */
@@ -82,6 +84,8 @@ const pinCancelBtn     = document.getElementById("pinCancelBtn");
 const pinError         = document.getElementById("pinError");
 const chatSessionLabel = document.getElementById("chatSessionLabel");
 const connectionQuality= document.getElementById("connectionQuality");
+const connectionState  = document.getElementById("connectionState");
+const connectionPath   = document.getElementById("connectionPath");
 const statsBar         = document.getElementById("statsBar");
 const leaveBtn         = document.getElementById("leaveBtn");
 const chatMessages     = document.getElementById("chatMessages");
@@ -148,6 +152,12 @@ let typingTimeout   = null;
 let peerTyping      = false;
 
 let _lastSessionList = [];  // cache for re-render on language change
+
+/* Last known connection path, so the header badge can be redrawn in the new
+   language. Declared here rather than beside renderConnectionPath(): applyI18n()
+   runs while this file is still parsing and reads it, which a `let` further down
+   would refuse — the badge is translated, so it has to be reachable that early. */
+let _lastPath = null;
 
 const recvBuffers = {};
 
@@ -716,6 +726,7 @@ function closePeerConnection() {
   e2eKeyPair = null;
   e2eReady = false;
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+  renderConnectionPath(null);   // no connection, no path — the badge must not linger
   e2eVerifyCode = "";
   e2eVerified = false;
   e2eLocalPubRaw = null;
@@ -1114,19 +1125,86 @@ leaveBtn.onclick = () => {
    STATS
 ══════════════════════════════════════════════ */
 
+/**
+ * The candidate pair ICE actually settled on.
+ *
+ * transport.selectedCandidatePairId names it outright where available; the scan
+ * is a fallback for browsers that omit it. Reading any succeeded pair is not
+ * good enough — several can succeed and only one carries traffic.
+ */
+function selectedCandidatePair(stats) {
+  let transport = null;
+  stats.forEach(r => { if (r.type === "transport") transport = r; });
+  if (transport && transport.selectedCandidatePairId) {
+    const named = stats.get(transport.selectedCandidatePairId);
+    if (named) return named;
+  }
+  let pair = null;
+  stats.forEach(r => {
+    if (r.type === "candidate-pair" && r.state === "succeeded" && (r.nominated || !pair)) pair = r;
+  });
+  return pair;
+}
+
+/**
+ * How the two sides are actually reaching each other.
+ *
+ * "relayed" is the one that matters: it means a TURN server sits in the middle
+ * carrying every packet. The contents stay encrypted end to end, but that
+ * server learns who is talking to whom and for how long — a different trust
+ * situation from a direct connection, and one the user should not have to infer
+ * from a candidate type like "srflx".
+ *
+ * Returns null while ICE is still deciding.
+ */
+function describeConnectionPath(stats) {
+  const pair = selectedCandidatePair(stats);
+  if (!pair) return null;
+  const local  = stats.get(pair.localCandidateId);
+  const remote = stats.get(pair.remoteCandidateId);
+  if (!local || !remote) return null;
+
+  const types = [local.candidateType, remote.candidateType];
+  let kind;
+  if (types.includes("relay"))                kind = "relayed";
+  else if (types.every(t => t === "host"))    kind = "local";
+  else                                        kind = "direct";
+  return { kind, local, remote };
+}
+
+/** Writes the path badge that sits after the connection state in the header. */
+function renderConnectionPath(path) {
+  _lastPath = path;
+  if (!path) { connectionPath.classList.add("hidden"); connectionPath.title = ""; return; }
+  const label = { direct: "pathDirect", local: "pathLocal", relayed: "pathRelayed" }[path.kind];
+  const hint  = { direct: "pathDirectHint", local: "pathLocalHint", relayed: "pathRelayedHint" }[path.kind];
+  connectionPath.textContent = t(label);
+  connectionPath.title       = t(hint);
+  connectionPath.className   = `path-badge path-${path.kind}`;
+}
+
 function startStatsPolling() {
   if (statsInterval) clearInterval(statsInterval);
   statsInterval = setInterval(async () => {
     if (!pc) return;
     try {
       const stats = await pc.getStats();
-      let rtt = null, sent = 0, recv = 0, ctype = "";
+      const path  = describeConnectionPath(stats);
+      const pair  = selectedCandidatePair(stats);
+
+      let sent = 0, recv = 0;
       stats.forEach(r => {
-        if (r.type === "candidate-pair" && r.state === "succeeded") rtt = r.currentRoundTripTime;
         if (r.type === "outbound-rtp") sent += r.bytesSent || 0;
         if (r.type === "inbound-rtp")  recv += r.bytesReceived || 0;
-        if (r.type === "local-candidate" && r.candidateType) ctype = r.candidateType;
       });
+      /* Data-channel traffic shows up on the pair, not on rtp reports, so fall
+         back to it — otherwise a chat-only session reports nothing moving. */
+      if (!sent && pair) sent = pair.bytesSent || 0;
+      if (!recv && pair) recv = pair.bytesReceived || 0;
+
+      const rtt = pair && typeof pair.currentRoundTripTime === "number"
+        ? pair.currentRoundTripTime : null;
+
       const parts = [];
       if (rtt !== null) {
         const ms = Math.round(rtt * 1000);
@@ -1135,9 +1213,12 @@ function startStatsPolling() {
         else if (ms < 250) setQuality(`⬤ ${t("fair")}`, "poor");
         else               setQuality(`⬤ ${t("poor")}`, "poor");
       }
+      renderConnectionPath(path);
+
       if (sent)  parts.push(`↑ ${fmtBytes(sent)}`);
       if (recv)  parts.push(`↓ ${fmtBytes(recv)}`);
-      if (ctype) parts.push(`via: ${ctype}`);
+      /* The header says direct or relayed in words; the detail belongs here. */
+      if (path) parts.push(`${path.local.candidateType} → ${path.remote.candidateType}`);
       statsBar.textContent = parts.join("   ");
     } catch (_) {}
   }, 2000);
@@ -1150,7 +1231,9 @@ function fmtBytes(b) {
 }
 
 function setQuality(text, cls) {
-  connectionQuality.textContent = text;
+  /* Writes the state only. The path badge is a separate child of
+     #connectionQuality so it survives every state change. */
+  connectionState.textContent = text;
   connectionQuality.className = "quality-label " + cls;
 }
 

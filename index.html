@@ -20,7 +20,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202608261200"></script>
+  <script src="framebust.js?v=202608261400"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -151,7 +151,12 @@
       </button>
       <div class="chat-header-center">
         <div id="chatSessionLabel" class="chat-session-name"></div>
-        <div id="connectionQuality" class="quality-label">⬤ <span data-i18n="connecting">Холбогдож байна…</span></div>
+        <!-- The path badge is a sibling of the state text, not part of it, so
+             setQuality() can rewrite the state without wiping the badge. -->
+        <div id="connectionQuality" class="quality-label">
+          <span id="connectionState">⬤ <span data-i18n="connecting">Холбогдож байна…</span></span>
+          <span id="connectionPath" class="path-badge hidden"></span>
+        </div>
       </div>
       <div class="chat-header-actions">
         <details id="keyVerifyDropdown" class="key-verify">
@@ -244,8 +249,8 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202608261200"></script>
-  <script src="i18n.js?v=202608261200"></script>
-  <script src="app.js?v=202608261200"></script>
+  <script src="protocol.js?v=202608261400"></script>
+  <script src="i18n.js?v=202608261400"></script>
+  <script src="app.js?v=202608261400"></script>
 </body>
 </html>
