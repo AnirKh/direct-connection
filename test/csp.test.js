@@ -49,6 +49,44 @@ test("every allowed origin gets its WebSocket counterpart", () => {
   }
 });
 
+/* ══════════════════════════════════════════
+   Third-party assets
+══════════════════════════════════════════ */
+
+/** Every <link> and <script> in index.html pointing off-origin. */
+function externalAssetTags() {
+  return Array.from(indexHtml.matchAll(/<(?:link|script)\b[^>]*\bhttps?:\/\/[^>]*>/g))
+    .map(m => m[0])
+    /* The CSP meta tag lists origins in its content attribute; it fetches nothing. */
+    .filter(tag => !/http-equiv=/i.test(tag));
+}
+
+test("index.html does load something from a CDN", () => {
+  /* Guards the test below: if the icon font is ever self-hosted, that check
+     would pass by matching nothing at all, and silently stop meaning anything. */
+  assert.ok(externalAssetTags().length >= 1,
+    "no external assets found — if that is deliberate, delete the SRI test too");
+});
+
+test("every third-party asset is pinned with an integrity hash", () => {
+  /* style-src allows the CDN, and CSS alone can hide an element — a substituted
+     stylesheet could suppress #verifyBanner, which is the only thing telling the
+     user nobody has verified the connection. crossorigin is required or the
+     browser skips the integrity check entirely rather than failing.
+
+     Written against every external tag rather than the one URL we know about,
+     so adding a second CDN link without a hash fails here. */
+  for (const tag of externalAssetTags()) {
+    const url = (tag.match(/https?:\/\/[^"'\s>]+/) || ["?"])[0];
+    assert.match(tag, /\bintegrity="sha(256|384|512)-[A-Za-z0-9+/=]+"/,
+      `no integrity hash on ${url}`);
+    assert.match(tag, /\bcrossorigin=/,
+      `integrity is ignored without crossorigin on ${url}`);
+    assert.match(tag, /@\d+\.\d+\.\d+\//,
+      `${url} must pin an exact version, or the hash will break on the next release`);
+  }
+});
+
 test("scripts may only come from our own origin", () => {
   /* The app's confidentiality rests on the served JavaScript being ours; a CDN
      or inline allowance here would undo the end-to-end encryption entirely. */

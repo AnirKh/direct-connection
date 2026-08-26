@@ -5,7 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' blob: data:; media-src 'self' blob: mediastream:; connect-src 'self' https://direct-connection.onrender.com https://anirkh.github.io http://localhost:3000 http://127.0.0.1:3000 wss://direct-connection.onrender.com wss://anirkh.github.io ws://localhost:3000 ws://127.0.0.1:3000; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; worker-src 'self' blob:">
   <title>Шууд холбоос</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
+  <!--
+    integrity is not cosmetic here. style-src allows this origin, and CSS alone
+    can hide an element: a substituted stylesheet could suppress #verifyBanner,
+    the warning that says nobody has verified this connection. The browser now
+    refuses the file unless it hashes to exactly this, and crossorigin is
+    required for the check to run at all.
+
+    The version is pinned, so the bytes are immutable. Bumping the version means
+    recomputing the hash — see "Icon font" in the README.
+  -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css"
+        integrity="sha384-XAeMOW3g/ahgKWjRcH7Xp+LVEQ/hkKrV0zkAUTnFwlaWK1aXfd9vVufdwqr/836i"
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
