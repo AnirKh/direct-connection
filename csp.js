@@ -60,8 +60,11 @@ function buildCsp(origins, { asHeader }) {
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
-    /* Meta tags ignore frame-ancestors — X-Frame-Options covers the static
-       deployment instead. Only emit it in the header form. */
+    /* Browsers ignore frame-ancestors in a meta tag, so only emit it in the
+       header form. Nothing header-based reaches the GitHub Pages build —
+       X-Frame-Options is a header too, and Pages sets none — so the static
+       deployment relies on framebust.js instead. Do not read this line as the
+       static build being covered; it is not. */
     ...(asHeader ? ["frame-ancestors 'none'"] : []),
     "frame-src 'none'",
     "worker-src 'self' blob:"

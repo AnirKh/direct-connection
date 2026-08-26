@@ -5,6 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' blob: data:; media-src 'self' blob: mediastream:; connect-src 'self' https://direct-connection.onrender.com https://anirkh.github.io http://localhost:3000 http://127.0.0.1:3000 wss://direct-connection.onrender.com wss://anirkh.github.io ws://localhost:3000 ws://127.0.0.1:3000; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; worker-src 'self' blob:">
   <title>Шууд холбоос</title>
+
+  <!--
+    Clickjacking cover for the GitHub Pages build. The server sends
+    X-Frame-Options and frame-ancestors, but Pages cannot set headers and a meta
+    tag cannot carry frame-ancestors, so framebust.js is the only protection
+    there and these two lines are its first half.
+
+    The page starts hidden and framebust.js reveals it once it has confirmed we
+    are not inside a frame. That order is the point: if the script fails to load,
+    the page stays blank instead of becoming an invisible click target.
+
+    Both must stay ahead of every other script — app.js opens a WebSocket as
+    soon as it parses.
+  -->
+  <style id="antiClickjack">body{visibility:hidden}</style>
+  <script src="framebust.js?v=202608241400"></script>
+
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
     can hide an element: a substituted stylesheet could suppress #verifyBanner,

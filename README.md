@@ -86,6 +86,31 @@ Node's built-in runner, no dependencies. Three files:
 
 Not covered: the WebRTC and UI code in `app.js`, which needs a browser and two peers. Changes there still want a manual two-tab check.
 
+### Framing (clickjacking)
+
+`server.js` sends `X-Frame-Options: DENY` and `frame-ancestors 'none'`. **Neither reaches the GitHub Pages build** — Pages serves static files and sets no headers, and browsers ignore `frame-ancestors` in a `<meta>` tag. So on Pages, `framebust.js` is the entire defence.
+
+It has two halves, and both are load-bearing:
+
+| In `index.html` | What it does |
+| --- | --- |
+| `<style id="antiClickjack">body{visibility:hidden}</style>` | hides the page before anything renders |
+| `<script src="framebust.js">` | reveals it only after confirming we are not in a frame |
+
+That order makes it **fail closed**: if the script never loads, the page stays blank instead of becoming an invisible click target. Both must stay ahead of every other script, because `app.js` opens a WebSocket the moment it parses.
+
+Inside a frame, `framebust.js` first tries to replace the framing page. Do not rely on that — Chrome refuses top navigation from a cross-origin frame without a user gesture, and an attacker picks the sandbox flags anyway. What actually protects the page is what follows: `window.stop()` halts parsing so `app.js` never loads, and the body is replaced with a notice.
+
+Measured against a headerless static server standing in for Pages, framed in a sandbox that blocks escape:
+
+| | without `framebust.js` | with it |
+| --- | --- | --- |
+| Scripts parsed | `protocol.js`, `i18n.js`, `app.js` | `framebust.js` only |
+| Lobby rendered | yes | removed |
+| Clickable controls | Approve, Create room, Send message | none |
+
+`server.js` must keep serving `/framebust.js`, or the Render build 404s on it and every page stays hidden — `test/csp.test.js` checks that, along with the load order and the hide-first style.
+
 ### Icon font
 
 `index.html` loads Tabler icons from jsDelivr with a Subresource Integrity hash. The browser refuses the file unless it hashes to exactly that value, so a compromised or hijacked CDN cannot substitute a stylesheet — which matters because CSS alone can hide `#verifyBanner`, the warning that says nobody has verified the connection.

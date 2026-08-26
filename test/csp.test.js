@@ -27,10 +27,53 @@ test("the meta tag matches what csp.js generates", () => {
 
 test("frame-ancestors is header-only", () => {
   /* Browsers ignore frame-ancestors in a meta tag; emitting it there would be
-     a false sense of protection. X-Frame-Options covers the static build. */
+     a false sense of protection. The static build gets no header at all — see
+     the framebust tests below, which are its only cover. */
   const header = buildCsp(DEFAULT_ALLOWED_ORIGINS, { asHeader: true });
   assert.ok(header.includes("frame-ancestors 'none'"));
   assert.ok(!META_CSP.includes("frame-ancestors"));
+});
+
+/* ══════════════════════════════════════════
+   Framing — the static deployment
+
+   GitHub Pages sets no headers, so neither frame-ancestors nor
+   X-Frame-Options applies there. framebust.js is the whole defence, and it
+   only works if it is present, loaded first, and paired with the CSS that
+   hides the page until it runs.
+══════════════════════════════════════════ */
+
+const framebustSrc = fs.readFileSync(path.join(__dirname, "..", "framebust.js"), "utf8");
+
+test("the page is hidden until the frame check has run", () => {
+  /* Failing closed is the point: if framebust.js does not load, a blank page
+     is correct and a visible one is a clickable target. */
+  assert.match(indexHtml, /<style id="antiClickjack">[^<]*visibility:\s*hidden/,
+    "index.html must hide the body up front");
+  assert.ok(framebustSrc.includes("antiClickjack"),
+    "framebust.js must be the thing that reveals it");
+});
+
+test("the frame check loads before any other script", () => {
+  const scripts = Array.from(indexHtml.matchAll(/<script[^>]*\bsrc="([^"?]+)/g)).map(m => m[1]);
+  assert.ok(scripts.length > 1, "expected the app scripts as well");
+  assert.equal(scripts[0], "framebust.js",
+    "framebust.js must come first — app.js opens a WebSocket as soon as it parses");
+});
+
+test("the frame check refuses to run the app inside a frame", () => {
+  assert.match(framebustSrc, /window\.self\s*!==\s*window\.top/,
+    "no frame detection found");
+  assert.ok(framebustSrc.includes("window.stop()"),
+    "must halt parsing so app.js never loads inside a frame");
+  assert.match(framebustSrc, /catch\s*\([^)]*\)\s*\{[\s\S]{0,200}framed\s*=\s*true/,
+    "a cross-origin throw when reading window.top must count as framed");
+});
+
+test("the server serves the frame check", () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.ok(/["']\/framebust\.js["']/.test(serverSrc),
+    "server.js does not serve framebust.js — the Render build would 404 on it");
 });
 
 test("the two forms differ only by frame-ancestors", () => {
