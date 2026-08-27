@@ -104,6 +104,7 @@ const I18N = {
     recordVoice:     "Дуу бичих",
     stopRecord:      "Зогсоох & илгээх",
     micDenied:       "Микрофон ашиглах эрхийг татгалзлаа",
+    micFailed:       "Дуу бичиж эхэлж чадсангүй — микрофоныг сулласан.",
     // Leave message status
     writeFirst:      "Эхлэн мэдээлэл бичнэ үү.",
     sending:         "Илгээж байна…",
@@ -117,6 +118,7 @@ const I18N = {
     // Auto-join errors
     couldNotJoin:    (msg) => `❌ Нэгдэж чадсангүй: ${msg}`,
     sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
+    joinTimedOut:    "Өрөөнд нэвтрэх хариу ирсэнгүй. Урилгын холбоосоор ахин оролдоно уу.",
     // PIN rate limit
     pinRateLimited:  (s) => `Олон удаа оролдлоо. ${s} секундын дараа дахин оролдоно уу.`,
     sessionJoinLocked: (s) => `Энэ өрөөнд олон удаа буруу оролдсон. ${s} секундын дараа дахин оролдоно уу.`,
@@ -223,6 +225,7 @@ const I18N = {
     recordVoice:     "Record voice",
     stopRecord:      "Tap to stop & send",
     micDenied:       "Microphone access denied",
+    micFailed:       "Could not start recording — the microphone was released.",
     writeFirst:      "Please write a message first.",
     sending:         "Sending…",
     msgSent:         "✓ Message sent!",
@@ -233,6 +236,7 @@ const I18N = {
     image:           "Image",
     couldNotJoin:    (msg) => `❌ Could not join: ${msg}`,
     sessionExpired:  "The session may have expired.",
+    joinTimedOut:    "No answer when joining. Open the invite link again to retry.",
     // PIN rate limit
     pinRateLimited:  (s) => `Too many attempts. Try again in ${s}s.`,
     sessionJoinLocked: (s) => `Too many failed join attempts for this room. Try again in ${s}s.`,

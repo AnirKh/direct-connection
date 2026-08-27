@@ -144,6 +144,9 @@ let isMuted         = false;
 let isCamOff        = false;
 let mediaRecorder   = null;
 let voiceChunks     = [];
+let voiceStream     = null;   // the live mic stream, so any path can release it
+let voiceSession    = null;   // the room a recording belongs to
+let voiceDiscard    = false;  // set when the result must be dropped, not sent
 
 let statsInterval   = null;
 let msgIdCounter    = 0;
@@ -546,7 +549,9 @@ function setLobbyButtons(disabled) {
   refreshBtn.disabled     = disabled;
 }
 
-let _autoJoinSent = false;
+let _autoJoinSent  = false;
+let _autoJoinTimer = null;
+const AUTO_JOIN_TIMEOUT_MS = 20_000;
 
 function checkAutoJoin() {
   if (!_isAutoJoin || _autoJoinSent) return;
@@ -559,6 +564,29 @@ function checkAutoJoin() {
   msg.textContent = I18N[LANG].joiningSession(_autoSessionId);
   createInfo.replaceChildren(msg);
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
+
+  /* The server always answers a join — unless the socket dies first. Without a
+     deadline the lobby stays disabled behind "Joining…" with nothing to click
+     and nothing coming. */
+  clearTimeout(_autoJoinTimer);
+  _autoJoinTimer = setTimeout(autoJoinTimedOut, AUTO_JOIN_TIMEOUT_MS);
+}
+
+/** A definitive answer arrived (joined, refused, or errored) — stop the clock. */
+function autoJoinSettled() {
+  clearTimeout(_autoJoinTimer);
+  _autoJoinTimer = null;
+}
+
+function autoJoinTimedOut() {
+  autoJoinSettled();
+  if (currentSession) return;          // it landed after all
+  isConnecting = false;
+  setLobbyButtons(false);
+  const msg = document.createElement("span");
+  msg.style.color = "var(--danger-text)";
+  msg.textContent = t("joinTimedOut");
+  createInfo.replaceChildren(msg);
 }
 
 /* ══════════════════════════════════════════════
@@ -593,6 +621,13 @@ function connectWebSocket() {
   ws.onclose   = () => {
     // Clear keep-alive so it doesn't stack when we reconnect
     if (_keepAliveInterval) { clearInterval(_keepAliveInterval); _keepAliveInterval = null; }
+    /* If the socket died between sending the join and hearing back, the answer
+       is never coming. Let the reconnect send it again rather than leaving the
+       lobby disabled behind "Joining…" forever. */
+    if (_isAutoJoin && _autoJoinSent && !currentSession) {
+      autoJoinSettled();
+      _autoJoinSent = false;
+    }
     setTimeout(connectWebSocket, 3000);
   };
   ws.onerror   = (e) => console.error("WS error", e);
@@ -720,6 +755,10 @@ function attemptJoin() {
 ══════════════════════════════════════════════ */
 
 function closePeerConnection() {
+  /* A voice note belongs to the room it was recorded in. Leaving, or the peer
+     leaving, ends both — and releases the microphone, which otherwise stayed
+     live all the way back to the lobby. */
+  abandonVoiceRecording();
   iceQueue = [];
   callIceQueue = [];
   e2eKey = null;
@@ -957,6 +996,7 @@ async function handleSignaling(data) {
     }
 
     case "session-joined":
+      autoJoinSettled();
       isHost = false;
       currentSession = { sessionId: data.sessionId };
       /* Present only when this join came from an invite link. */
@@ -1038,6 +1078,7 @@ async function handleSignaling(data) {
       break;
 
     case "error":
+      autoJoinSettled();
       console.error("[Server error]", data.message);
       if (_isAutoJoin && isConnecting) {
         const msg = document.createElement("span");
@@ -1056,6 +1097,7 @@ async function handleSignaling(data) {
       break;
 
     case "pin-error": {
+      autoJoinSettled();
       // Translate structured error codes from server
       let msg;
       if      (data.code === "rate-limited")        msg = I18N[LANG].pinRateLimited(data.remaining);
@@ -1632,41 +1674,101 @@ voiceRecordBtn.title = t("recordVoice");
 
 let _isRecording = false;
 
+/**
+ * Releases the microphone and resets the button. Safe to call repeatedly, and
+ * from anywhere — the stream is held at module scope precisely so that any code
+ * path can switch the hardware off, not just the one that turned it on.
+ */
+function releaseVoiceCapture() {
+  if (voiceStream) {
+    voiceStream.getTracks().forEach(track => track.stop());
+    voiceStream = null;
+  }
+  _isRecording = false;
+  voiceRecordBtn.classList.remove("recording");
+  voiceRecordBtn.title = t("recordVoice");
+}
+
+/**
+ * Throws away a recording in progress: microphone off, audio dropped, nothing
+ * sent. Called when the room goes away, since a recording only ever belongs to
+ * the room it started in.
+ */
+function abandonVoiceRecording() {
+  if (!_isRecording && !voiceStream) return;
+  voiceDiscard = true;
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    try { mediaRecorder.stop(); } catch (_) { /* onstop may not fire — clean up below */ }
+  }
+  if (mediaRecorder && mediaRecorder.state !== "inactive") return;   // onstop will finish it
+  voiceChunks = [];
+  voiceSession = null;
+  releaseVoiceCapture();
+}
+
 async function toggleVoiceRecord() {
+  /* Stopping comes first and is never gated on the connection: a recording in
+     progress must always be stoppable, including after the peer has gone. */
+  if (_isRecording) {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    else releaseVoiceCapture();
+    return;
+  }
+
   if (!dcReady()) return;
   if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
 
-  if (!_isRecording) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      voiceChunks   = [];
-      mediaRecorder = new MediaRecorder(stream);
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceStream  = stream;
+    voiceChunks  = [];
+    voiceDiscard = false;
+    /* Remember which room this belongs to. onstop can run long after, in a
+       different room entirely — see the check there. */
+    voiceSession = currentSession && currentSession.sessionId;
 
-      mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
 
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(voiceChunks, { type: "audio/webm" });
-        const file = new File([blob], "voice.webm", { type: "audio/webm" });
-        sendBinary(file, "voice");
-        _isRecording = false;
-        voiceRecordBtn.classList.remove("recording");
-        voiceRecordBtn.title = t("recordVoice");
-      };
+    mediaRecorder.onstop = () => {
+      const chunks = voiceChunks;
+      voiceChunks = [];
+      const discard  = voiceDiscard;
+      const sameRoom = Boolean(voiceSession) && currentSession &&
+                       currentSession.sessionId === voiceSession;
+      voiceDiscard = false;
+      voiceSession = null;
+      releaseVoiceCapture();
 
-      mediaRecorder.start();
-      _isRecording = true;
-      voiceRecordBtn.classList.add("recording");
-      voiceRecordBtn.title = t("stopRecord");
+      /* Refuse to deliver audio to anyone but the room it was recorded in. The
+         recorder outlives the room otherwise: leave while recording, join
+         somewhere else, press the button again, and this would hand the new
+         peer everything captured since — including the time in between. */
+      if (discard || !sameRoom || !dcReady()) {
+        if (!discard && chunks.length) console.warn("Discarding a voice note: the room it was recorded in is gone");
+        return;
+      }
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      sendBinary(new File([blob], "voice.webm", { type: "audio/webm" }), "voice");
+    };
 
-    } catch (_) {
-      showToast(t("micDenied"), "warn");
-    }
+    mediaRecorder.start();
+    _isRecording = true;
+    voiceRecordBtn.classList.add("recording");
+    voiceRecordBtn.title = t("stopRecord");
 
-  } else {
-    if (mediaRecorder && mediaRecorder.state !== "inactive") {
-      mediaRecorder.stop();
-    }
+  } catch (err) {
+    /* getUserMedia may well have succeeded and MediaRecorder then failed — an
+       unsupported codec does exactly that. The stream is live either way and
+       must not be left running, which would keep the microphone on with the
+       browser's recording indicator lit until the tab closed. */
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    voiceStream = null;
+    releaseVoiceCapture();
+    const denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
+    showToast(denied ? t("micDenied") : t("micFailed"), "warn");
+    if (!denied) console.error("Voice recording failed to start:", err);
   }
 }
 
