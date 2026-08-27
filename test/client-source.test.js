@@ -2,12 +2,20 @@
   Source-level checks on app.js.
 
   app.js needs a browser and two peers to run, so these read it as text rather
-  than executing it. That is a weaker guarantee than a runtime test and it is
-  deliberate: these guard invariants where the failure is silent, so a coarse
-  check that fires is worth more than a precise one that does not exist.
+  than executing it. That is a weaker guarantee than a runtime test, and the
+  split is deliberate:
 
-  The runtime half of the secret-leak guard lives in protocol.test.js
-  ("payloadLeaksSecret"), and wsSend enforces it on every outgoing message.
+    guards.js + connstats.js hold the decisions, and their own tests prove the
+    answers are right — every combination, with no browser involved.
+
+    These tests prove app.js actually ASKS, and asks at the right moment. A
+    correct guard that nothing calls is worth nothing, and no test of guards.js
+    could ever notice.
+
+  What remains here is what cannot be extracted: that outgoing messages go
+  through wsSend, that none of them carries the room secret, that call signaling
+  never touches the WebSocket, and that a peer-chosen transfer id reaches a
+  selector through exactly one escaped helper.
 */
 
 "use strict";
@@ -93,14 +101,14 @@ test("the guard covers every variable a room secret can live in", () => {
   }
 });
 
-test("every path to the camera checks that a call was agreed to first", () => {
-  /* attachCallMedia() calls getUserMedia. inCall is what the call buttons and
-     the Accept button set, so without this guard a peer can send call-offer or
-     call-accept cold and open the camera and microphone with no prompt shown.
+test("every path to the camera asks the guard first", () => {
+  /* attachCallMedia() calls getUserMedia. Whether the answer is right is
+     guards.test.js's job — this checks only that app.js asks, and asks before
+     capturing, which no amount of testing guards.js could establish.
 
-     Written against whichever functions reach attachCallMedia rather than
-     against a fixed pair of names: the guard was added to one of the two doors
-     first and the other went unnoticed. A third door must not be able to. */
+     Written against whichever functions reach attachCallMedia rather than a
+     fixed pair of names: the guard was added to one of the two doors first and
+     the other went unnoticed for a release. A third door must not be able to. */
   const reaching = Array.from(topLevelFunctions(withoutComments(appSrc)))
     .filter(([name, body]) => name !== "attachCallMedia" && body.includes("attachCallMedia("));
 
@@ -108,10 +116,10 @@ test("every path to the camera checks that a call was agreed to first", () => {
     `expected the call-offer and call-accept paths, found ${reaching.length}`);
 
   for (const [name, body] of reaching) {
-    assert.ok(/if\s*\(!inCall\)/.test(body), `${name} is missing the !inCall consent guard`);
+    assert.ok(body.includes("mayCaptureForCall("), `${name} does not ask mayCaptureForCall`);
     assert.ok(
-      body.indexOf("!inCall") < body.indexOf("attachCallMedia("),
-      `${name} must check consent before capturing media`);
+      body.indexOf("mayCaptureForCall(") < body.indexOf("attachCallMedia("),
+      `${name} must ask before capturing, not after`);
   }
 });
 
@@ -131,15 +139,18 @@ test("the peer cannot add video to a call the user asked to keep voice-only", ()
   assert.ok(helper.includes("pendingCallVideo"), "consentedVideo must read the user's choice");
 });
 
-test("a text message is only displayed when the agreed key opened it", () => {
-  /* A plaintext fallback would undo e2eFailClosed(): that disables sending, but
-     a middleman caught swapping keys could still write into the chat window. */
+test("an incoming text message is put to the guard", () => {
+  /* What counts as displayable is guards.test.js's job. Two things it cannot
+     see are checked here: that handleTextMessage consults the guard at all, and
+     that no plaintext body is read anywhere in it — a fallback would undo
+     failing closed, letting a middleman caught swapping keys still write into
+     the chat window. */
   const handler = topLevelFunctions(withoutComments(appSrc)).get("handleTextMessage");
   assert.ok(handler, "handleTextMessage not found");
   assert.ok(!/data\.text\b/.test(handler),
     "handleTextMessage must not render an unencrypted message body");
-  assert.ok(/if\s*\(!e2eReady\s*\|\|\s*!data\.ct\)/.test(handler),
-    "the text case must drop anything that was not encrypted");
+  assert.ok(handler.includes("mayRenderText("),
+    "the text case must ask the guard rather than deciding inline");
 });
 
 test("transfer ids reach a selector through exactly one escaped helper", () => {

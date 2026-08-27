@@ -12,6 +12,11 @@
    See protocol.js; it is loaded before this file and covered by test/. */
 const DC = window.DCProtocol;
 
+/* Derived connection facts and the safety decisions. Both are pure and tested
+   directly — see connstats.js and guards.js, and test/ for what they promise. */
+const DCS = window.DCStats;
+const G   = window.DCGuards;
+
 /* ── Read hash immediately ───────────────────── */
 const _invite        = DC.parseInviteHash(location.hash);
 const _autoSessionId = _invite.sessionId;
@@ -624,7 +629,7 @@ function connectWebSocket() {
     /* If the socket died between sending the join and hearing back, the answer
        is never coming. Let the reconnect send it again rather than leaving the
        lobby disabled behind "Joining…" forever. */
-    if (_isAutoJoin && _autoJoinSent && !currentSession) {
+    if (G.shouldRetryAutoJoin({ isAutoJoin: _isAutoJoin, joinSent: _autoJoinSent, joined: Boolean(currentSession) })) {
       autoJoinSettled();
       _autoJoinSent = false;
     }
@@ -709,10 +714,8 @@ function renderSessionList(sessions) {
 }
 
 function timeAgo(ts) {
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60)   return I18N[LANG].timeS(s);
-  if (s < 3600) return I18N[LANG].timeM(Math.floor(s / 60));
-  return I18N[LANG].timeH(Math.floor(s / 3600));
+  const { unit, value } = DCS.timeAgo(ts);
+  return { s: I18N[LANG].timeS, m: I18N[LANG].timeM, h: I18N[LANG].timeH }[unit](value);
 }
 
 createBtn.onclick = () => {
@@ -1174,19 +1177,7 @@ leaveBtn.onclick = () => {
  * is a fallback for browsers that omit it. Reading any succeeded pair is not
  * good enough — several can succeed and only one carries traffic.
  */
-function selectedCandidatePair(stats) {
-  let transport = null;
-  stats.forEach(r => { if (r.type === "transport") transport = r; });
-  if (transport && transport.selectedCandidatePairId) {
-    const named = stats.get(transport.selectedCandidatePairId);
-    if (named) return named;
-  }
-  let pair = null;
-  stats.forEach(r => {
-    if (r.type === "candidate-pair" && r.state === "succeeded" && (r.nominated || !pair)) pair = r;
-  });
-  return pair;
-}
+const selectedCandidatePair = DCS.selectedCandidatePair;
 
 /**
  * How the two sides are actually reaching each other.
@@ -1199,20 +1190,7 @@ function selectedCandidatePair(stats) {
  *
  * Returns null while ICE is still deciding.
  */
-function describeConnectionPath(stats) {
-  const pair = selectedCandidatePair(stats);
-  if (!pair) return null;
-  const local  = stats.get(pair.localCandidateId);
-  const remote = stats.get(pair.remoteCandidateId);
-  if (!local || !remote) return null;
-
-  const types = [local.candidateType, remote.candidateType];
-  let kind;
-  if (types.includes("relay"))                kind = "relayed";
-  else if (types.every(t => t === "host"))    kind = "local";
-  else                                        kind = "direct";
-  return { kind, local, remote };
-}
+const describeConnectionPath = DCS.describePath;
 
 /** Writes the path badge that sits after the connection state in the header. */
 function renderConnectionPath(path) {
@@ -1234,26 +1212,13 @@ function startStatsPolling() {
       const path  = describeConnectionPath(stats);
       const pair  = selectedCandidatePair(stats);
 
-      let sent = 0, recv = 0;
-      stats.forEach(r => {
-        if (r.type === "outbound-rtp") sent += r.bytesSent || 0;
-        if (r.type === "inbound-rtp")  recv += r.bytesReceived || 0;
-      });
-      /* Data-channel traffic shows up on the pair, not on rtp reports, so fall
-         back to it — otherwise a chat-only session reports nothing moving. */
-      if (!sent && pair) sent = pair.bytesSent || 0;
-      if (!recv && pair) recv = pair.bytesReceived || 0;
-
-      const rtt = pair && typeof pair.currentRoundTripTime === "number"
-        ? pair.currentRoundTripTime : null;
+      const { sent, recv } = DCS.trafficTotals(stats, pair);
+      const quality = DCS.qualityFromRtt(pair && pair.currentRoundTripTime);
 
       const parts = [];
-      if (rtt !== null) {
-        const ms = Math.round(rtt * 1000);
-        parts.push(`RTT: ${ms}ms`);
-        if (ms < 80)       setQuality(`⬤ ${t("connected")}`, "connected");
-        else if (ms < 250) setQuality(`⬤ ${t("fair")}`, "poor");
-        else               setQuality(`⬤ ${t("poor")}`, "poor");
+      if (quality) {
+        parts.push(`RTT: ${quality.ms}ms`);
+        setQuality(`⬤ ${t(quality.key)}`, quality.cls);
       }
       renderConnectionPath(path);
 
@@ -1266,11 +1231,7 @@ function startStatsPolling() {
   }, 2000);
 }
 
-function fmtBytes(b) {
-  if (b < 1024)    return `${b}B`;
-  if (b < 1048576) return `${(b/1024).toFixed(1)}KB`;
-  return `${(b/1048576).toFixed(1)}MB`;
-}
+const fmtBytes = DCS.fmtBytes;
 
 function setQuality(text, cls) {
   /* Writes the state only. The path badge is a separate child of
@@ -1336,7 +1297,7 @@ function handleTextMessage(data) {
          and rendering one would undo e2eFailClosed(): that disables sending, but
          a middleman caught swapping keys could still write into this window.
          Same rule, and same silent drop, as the e2e-dc envelope above. */
-      if (!e2eReady || !data.ct) {
+      if (!G.mayRenderText(data, e2eReady)) {
         console.warn("Dropping a text message that was not end-to-end encrypted");
         break;
       }
@@ -1732,11 +1693,10 @@ async function toggleVoiceRecord() {
     mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
 
     mediaRecorder.onstop = () => {
-      const chunks = voiceChunks;
-      voiceChunks = [];
-      const discard  = voiceDiscard;
-      const sameRoom = Boolean(voiceSession) && currentSession &&
-                       currentSession.sessionId === voiceSession;
+      const chunks     = voiceChunks;
+      const discard    = voiceDiscard;
+      const recordedIn = voiceSession;
+      voiceChunks  = [];
       voiceDiscard = false;
       voiceSession = null;
       releaseVoiceCapture();
@@ -1745,7 +1705,8 @@ async function toggleVoiceRecord() {
          recorder outlives the room otherwise: leave while recording, join
          somewhere else, press the button again, and this would hand the new
          peer everything captured since — including the time in between. */
-      if (discard || !sameRoom || !dcReady()) {
+      if (!G.mayDeliverRecording({ recordedIn, currentRoom: currentSession && currentSession.sessionId,
+                                   discarded: discard, channelOpen: dcReady() })) {
         if (!discard && chunks.length) console.warn("Discarding a voice note: the room it was recorded in is gone");
         return;
       }
@@ -1840,7 +1801,7 @@ function handleCallRequest(data) {
     The peer may still ask for less — no camera on their side is a fair reason to
     answer a video call with audio only — so this is an AND, not an override. */
 function consentedVideo(peerWantsVideo) {
-  return Boolean(pendingCallVideo) && Boolean(peerWantsVideo);
+  return G.consentedVideo(pendingCallVideo, peerWantsVideo);
 }
 
 async function attachCallMedia(withVideo) {
@@ -1996,7 +1957,7 @@ async function initiateCallOffer(peerWantsVideo) {
      out of the blue and attachCallMedia() below would open the camera and
      microphone with nothing on screen having asked. Mirrors the guard in
      handleIncomingCallOffer — both doors reach the same getUserMedia. */
-  if (!inCall) {
+  if (!G.mayCaptureForCall(inCall)) {
     console.warn("Ignoring unsolicited call-accept — no call was placed");
     dcSendCallSignal({ type: "call-reject" });
     return;
@@ -2029,7 +1990,7 @@ async function handleIncomingCallOffer(data) {
      call-offer and attachCallMedia() would open the camera and microphone with
      no prompt shown. (Call signaling arrives only over the encrypted data
      channel now, so the sender is always the peer.) */
-  if (!inCall) {
+  if (!G.mayCaptureForCall(inCall)) {
     console.warn("Ignoring unsolicited call offer — no call was accepted");
     dcSendCallSignal({ type: "call-reject" });
     return;

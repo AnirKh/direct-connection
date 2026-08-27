@@ -4,10 +4,12 @@ AnirKh.github.io/direct-connection
 
 | File | What it holds |
 | --- | --- |
-| `index.html` | Markup. Loads `protocol.js`, `i18n.js`, `app.js` **in that order** — `app.js` reads `DCProtocol`, `LANG` and `I18N` while parsing. |
+| `index.html` | Markup. Loads `framebust.js` first, then `protocol.js`, `connstats.js`, `guards.js`, `i18n.js`, `app.js` **in that order** — `app.js` reads `DCProtocol`, `DCStats`, `DCGuards`, `LANG` and `I18N` while parsing. |
 | `protocol.js` | Pure wire-protocol logic: invite links, ECDH→HKDF key derivation, verification code, binary chunk framing. No DOM, no sockets, no state — loaded as `window.DCProtocol` in the browser and `require`d by the tests. |
 | `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
-| `app.js` | Everything stateful: WebRTC, data channel, calls, chat UI. |
+| `guards.js` | The safety decisions as pure functions — may the camera open, may this message be shown, may this voice note be sent, should this join be retried. See below. |
+| `connstats.js` | Everything derived from an `RTCStatsReport`: which route ICE chose, direct or relayed, link quality, byte totals. Pure. |
+| `app.js` | Everything stateful and everything with an effect: WebRTC, data channel, calls, chat UI. Asks the two modules above rather than deciding for itself. |
 | `csp.js` | The Content-Security-Policy, defined once (see below). |
 | `clientip.js` | Works out the real client address from `X-Forwarded-For`. Every rate limit depends on it, so it is separate and tested. |
 | `ratelimit.js` | Sliding-window counters, their expiry sweep, and `safeLabel` for anything client-supplied that reaches a log line. Same reason as above: small, pure, security-relevant. |
@@ -57,9 +59,31 @@ The PIN and token cannot substitute for the room secret: the server generates bo
 
 Links are short-lived by nature. A room exists only in the server's memory and disappears when **either** participant disconnects, after ten minutes with nobody having joined, or whenever the server restarts. An "old" link points at a room that no longer exists and simply reports *session not found* — so there is no population of stale links to worry about.
 
+## Why the decisions live outside app.js
+
+`app.js` needs a browser and two peers, so nothing in it could be executed by the test suite. Four rounds of analysis found real bugs in it, and **every single one was a decision or a small state machine** — not DOM code:
+
+| Bug | The decision behind it |
+| --- | --- |
+| A peer could open the camera with no prompt | may capture start? |
+| A voice call was upgraded to video by the peer | how much video was agreed to? |
+| Plaintext messages were displayed | may this be shown? |
+| A voice note reached the next room's peer | which room does this recording belong to? |
+| An invite-link join hung forever | should this join be retried? |
+| The wrong network route was reported | which candidate pair is actually in use? |
+
+So the decisions moved to `guards.js` and `connstats.js`, and the effects stayed put. Both modules are pure — no DOM, no module state, no side effects — so every combination can be asserted directly, including the ones nobody thinks to try. That is where the bugs were.
+
+The split gives the two test files different jobs:
+
+- `test/guards.test.js` and `test/connstats.test.js` prove the **answers are right**.
+- `test/client-source.test.js` proves `app.js` **asks**, and asks before acting. A correct guard nothing calls is worth nothing, and no test of `guards.js` could ever notice.
+
+**Deliberately not done:** the rest of `app.js` is still one file of stateful WebRTC and DOM code. Splitting it further would mean restructuring live code that has no runtime coverage — recreating the exact risk this was meant to reduce. Extracting a decision is safe because it is provably pure; moving effects around is not. If more comes out later, it should be more decisions.
+
 ## Calls: consent is local, never taken from the wire
 
-Two rules, both enforced in `test/client-source.test.js`:
+Two rules. `test/guards.test.js` proves they give the right answer; `test/client-source.test.js` proves `app.js` asks before capturing:
 
 - **`getUserMedia` runs only when `inCall` is already true.** `inCall` is set by pressing a call button or Accept — nothing a peer sends can set it. Every function that reaches `attachCallMedia()` must check it first, or the peer can skip the prompt and open the camera by sending `call-offer` or `call-accept` cold.
 - **`pendingCallVideo` decides whether the camera is used, not the peer's `withVideo` flag.** That flag rides in on every call message; `consentedVideo()` ANDs the two, so the peer may answer a video call with audio only but can never add video to a call you asked to keep voice-only.
@@ -84,6 +108,8 @@ Node's built-in runner, no dependencies. Three files:
 - `test/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
 - `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
 - `test/ratelimit.test.js` — the sliding window, its expiry sweep, and log sanitising. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
+- `test/guards.test.js` — the safety decisions, every combination.
+- `test/connstats.test.js` — which route ICE chose, link quality, byte totals, with a plain Map standing in for the stats report.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
 
