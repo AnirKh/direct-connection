@@ -62,6 +62,31 @@
   }
 
   /* ══════════════════════════════════════════
+     Key exchange
+  ══════════════════════════════════════════ */
+
+  /**
+   * May a peer public key be accepted?
+   *
+   * Exactly one exchange per data channel. A second key was accepted at any
+   * time, including on a fully established channel, and re-derived the
+   * verification code without changing the key actually in use — so the code on
+   * screen stopped matching the key, the two sides displayed different codes,
+   * and the UI still said "verified". On a PIN join that code is the only thing
+   * standing between the user and a middleman, so a peer being able to set it
+   * to anything empties it of meaning.
+   *
+   * Re-keying is not a feature here: a fresh channel runs a fresh exchange.
+   *
+   * `peerKeySeen` must be set the moment the first key arrives, not once its
+   * derivation finishes — deriving is async, and a second key arriving during
+   * that window is exactly the case worth refusing.
+   */
+  function mayAcceptPeerKey(o) {
+    return Boolean(o) && !o.peerKeySeen;
+  }
+
+  /* ══════════════════════════════════════════
      Incoming messages
   ══════════════════════════════════════════ */
 
@@ -119,6 +144,7 @@
 
   return {
     mayCaptureForCall, consentedVideo,
+    mayAcceptPeerKey,
     mayRenderText,
     mayDeliverRecording,
     shouldRetryAutoJoin

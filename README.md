@@ -90,6 +90,22 @@ Two rules. `test/guards.test.js` proves they give the right answer; `test/client
 
 The test walks whichever functions call `attachCallMedia` rather than a fixed list of names, because the guard was added to one of the two paths first and the second went unnoticed for a release.
 
+## One key exchange per channel
+
+`e2e-pubkey` is accepted once. A second one used to re-derive the verification code while leaving the key actually in use untouched — so the code on screen stopped describing the key, the two sides displayed **different** codes, and the UI still said "verified". On a PIN join that code is the only thing standing between the user and a middleman, so a peer able to set it to anything empties it of meaning.
+
+Re-keying is not a feature: a fresh channel runs a fresh exchange, and `e2eInit()` clears the flag. The flag is set the moment a key arrives rather than when its derivation finishes, because deriving is async and a second key arriving in that window is exactly the case worth refusing.
+
+## Interrupted transfers say so, in both directions
+
+A transfer that dies must not keep claiming to be running. Three paths cover it:
+
+- the sender catches the failure, marks its own bubble failed, and sends `transfer-abort` if the channel is still up
+- the receiver fails that transfer on `transfer-abort`
+- both sides fail every in-flight transfer when the data channel closes
+
+Before this, the peer leaving mid-transfer left the sender's bubble frozen at whatever percentage it had reached, permanently, next to an unhandled null-reference error. The receiver's bubble sat on "Receiving…" just as long. Neither side was told the file had not arrived.
+
 ## Text messages are shown only if the agreed key opened them
 
 `handleTextMessage` drops any `text` that arrives without ciphertext or before the key exchange completes. `sendTextMessage` never sends one, so an unencrypted body is never a real peer.

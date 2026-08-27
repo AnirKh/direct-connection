@@ -264,6 +264,7 @@ let e2eCandidates    = null;   // host only: { secure, plain } awaiting selectio
 let e2eKeyPending    = null;   // guest only: key awaiting the host's confirmation
 let e2eSecureMode    = false;  // true = room secret authenticated this exchange
 let e2ePendingConfirm = null;  // confirm that landed before derivation finished
+let e2ePeerKeySeen   = false;  // a peer public key has arrived on this channel
 let e2eConfirmTimer  = null;
 
 const E2E_CONFIRM_TIMEOUT_MS = 15_000;
@@ -278,6 +279,7 @@ async function e2eInit() {
   e2eCandidates = null;
   e2eKeyPending = null;
   e2ePendingConfirm = null;
+  e2ePeerKeySeen = false;
   updateKeyVerifyUi();
   e2eKeyPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
@@ -344,6 +346,7 @@ function e2eFailClosed() {
   clearTimeout(e2eConfirmTimer);
   e2eKey = null; e2eKeyPending = null; e2eCandidates = null; e2ePendingConfirm = null;
   e2eReady = false; e2eVerified = false; e2eSecureMode = false;
+  e2ePeerKeySeen = false;
   sendBtn.disabled      = true;
   voiceCallBtn.disabled = true;
   videoCallBtn.disabled = true;
@@ -906,7 +909,10 @@ function setupDataChannel() {
     voiceCallBtn.disabled = true;
     videoCallBtn.disabled = true;
     appendSys(t("sysClosed"));
-    // Clean up unacknowledged messages and incomplete transfers to free memory
+    // Clean up unacknowledged messages and incomplete transfers to free memory.
+    /* Mark them failed in the UI first: clearing the state alone left every
+       in-flight bubble showing "Receiving…" with nothing ever to finish it. */
+    for (const k of Object.keys(recvBuffers)) failTransfer(k);
     for (const k of Object.keys(pendingAcks)) delete pendingAcks[k];
     for (const k of Object.keys(recvBuffers)) delete recvBuffers[k];
     for (const k of Object.keys(orphanChunks)) delete orphanChunks[k];
@@ -1313,6 +1319,14 @@ function handleTextMessage(data) {
       break;
 
     case "e2e-pubkey":
+      /* Exactly one exchange per channel. A second key re-derived the
+         verification code while leaving the key in use untouched, so the code
+         on screen stopped matching the key it was supposed to describe. */
+      if (!G.mayAcceptPeerKey({ peerKeySeen: e2ePeerKeySeen })) {
+        console.warn("Ignoring a second e2e-pubkey — this channel already agreed a key");
+        break;
+      }
+      e2ePeerKeySeen = true;
       e2eDeriveKey(data.key);
       break;
 
@@ -1354,6 +1368,14 @@ function handleTextMessage(data) {
       for (const early of takeOrphanChunks(data.id)) acceptChunk(info, data.id, early);
       break;
     }
+
+    case "transfer-abort":
+      /* The sender gave up. Without this the placeholder waits for a
+         transfer-done that is never coming. */
+      delete recvBuffers[data.id];
+      takeOrphanChunks(data.id);
+      failTransfer(data.id);
+      break;
 
     case "transfer-done":
       assembleTransfer(data.id).catch(err => {
@@ -1423,6 +1445,7 @@ async function sendBinary(file, kind) {
 
   const idBytes = new TextEncoder().encode(id);
   let lastPct = -1;
+  try {
   for (let i = 0; i < totalChunks; i++) {
     /* Read one slice at a time. file.arrayBuffer() would pull the whole file
        into the JS heap — 150 MB of it in the worst case — when only 64 KB is
@@ -1435,6 +1458,19 @@ async function sendBinary(file, kind) {
 
     const pct = Math.floor(((i + 1) / totalChunks) * 100);
     if (pct !== lastPct) { lastPct = pct; setTransferProgress(id, pct, "sending"); }
+  }
+  } catch (err) {
+    /* The peer leaving mid-transfer is the ordinary case: dataChannel is set to
+       null underneath the loop and send() throws. Nothing caught it, so the
+       progress line stopped updating and sat at whatever percentage it had
+       reached — for good. The sender was told the peer had left, while the file
+       still claimed to be uploading. */
+    console.error(`Transfer ${id} failed while sending:`, err);
+    failTransfer(id);
+    /* If the channel survived, the receiver is still waiting on a
+       transfer-done that will never arrive. Tell it. */
+    dcSendE2e({ type: "transfer-abort", id }).catch(() => {});
+    return;
   }
 
   clearSendProgress(id);

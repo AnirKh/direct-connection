@@ -63,6 +63,32 @@ test("a missing flag is never treated as consent", () => {
 });
 
 /* ══════════════════════════════════════════
+   mayAcceptPeerKey — one exchange per channel
+══════════════════════════════════════════ */
+
+test("the first peer key of a channel is accepted", () => {
+  assert.equal(G.mayAcceptPeerKey({ peerKeySeen: false }), true);
+});
+
+test("a second peer key is refused", () => {
+  /* The bug: a second key re-derived the verification code without changing
+     the key in use, so the code on screen no longer described the key, the two
+     sides showed different codes, and the UI still said "verified". */
+  assert.equal(G.mayAcceptPeerKey({ peerKeySeen: true }), false);
+});
+
+test("a key arriving while the first is still deriving is refused", () => {
+  /* Deriving is async. The flag is set on arrival rather than on completion,
+     so this window is closed too. */
+  assert.equal(G.mayAcceptPeerKey({ peerKeySeen: true }), false);
+});
+
+test("a missing argument does not throw", () => {
+  assert.equal(G.mayAcceptPeerKey(undefined), false);
+  assert.equal(G.mayAcceptPeerKey(null), false);
+});
+
+/* ══════════════════════════════════════════
    mayRenderText — failing closed
 ══════════════════════════════════════════ */
 
