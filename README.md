@@ -102,10 +102,13 @@ This matters because `e2eFailClosed()` only disables **sending**. Rendering a pl
 npm test
 ```
 
-Node's built-in runner, no dependencies. Three files:
+Node's built-in runner, no dependencies.
+
+**`test/` is everything that runs without a server** — pure, and finished in under a second, so it all goes in the pre-commit hook. **`test/integration/` needs a real server** and runs before a push. The split is by directory rather than a list of filenames on purpose: `test:fast` used to name its files, and four pure test files were quietly left out of it.
+
 
 - `test/protocol.test.js` — invite-link parsing (including malformed input, which must not throw at page load), room secrets, key derivation, and the framing. Includes a man-in-the-middle case asserting that an attacker who substitutes both public keys cannot reach a working key without the room secret.
-- `test/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
+- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
 - `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
 - `test/ratelimit.test.js` — the sliding window, its expiry sweep, and log sanitising. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.
@@ -182,7 +185,7 @@ git config core.hooksPath .githooks
 
 | Hook | Runs | Takes |
 | --- | --- | --- |
-| `pre-commit` | `check-csp` + `npm run test:fast` | ~0.4s |
+| `pre-commit` | `check-csp` + `npm run test:fast` | ~0.9s |
 | `pre-push` | `npm test` (adds the server integration tests) | ~7s |
 
 The split keeps committing instant — a hook slow enough to be annoying is a hook you start bypassing. The slower half runs before code leaves the machine, which is the last moment a failure is free: pushing redeploys Render and republishes GitHub Pages.

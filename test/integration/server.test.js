@@ -63,7 +63,7 @@ async function client() {
 }
 
 test.before(async () => {
-  server = spawn(process.execPath, [path.join(__dirname, "..", "server.js")], {
+  server = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
     env: { ...process.env, PORT: String(PORT), HEARTBEAT_MS: "1000" },
     stdio: "ignore"
   });
