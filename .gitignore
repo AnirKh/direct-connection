@@ -1,8 +1,8 @@
-# Exclude my personal notes
-.gitignore
 # Exclude an entire notes folder
 gitignore/
+
 # Dependencies — reinstalled from package-lock.json via npm install
 node_modules/
+
 # Local Claude Code config (run configs, settings)
 .claude/

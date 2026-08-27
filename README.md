@@ -181,6 +181,15 @@ node -e "const h=require('https'),c=require('crypto');h.get(process.argv[1],r=>{
 
 The hash covers the stylesheet, not the font files it references. A hostile CDN could still serve altered glyphs — it could not hide an element or run code.
 
+### Node version
+
+`package.json` declares **`"node": ">=22"`**. Two reasons, and the second is the one that bites:
+
+- `node --test` only accepts glob patterns from Node 21, and both test scripts rely on them — that is what keeps a new test file in the right suite by where it sits rather than by someone remembering to list it.
+- **Render picks its own Node version when nothing says otherwise**, and can pick a different one on any redeploy. `engines` pins it.
+
+22 rather than 21 because Node 21 is end-of-life. Nothing in the app itself needs anything newer than Node 18 — the floor comes from the tooling.
+
 ### Dependencies
 
 ```
