@@ -14,6 +14,8 @@
   - Stale session pruner (10 min)
   - PIN brute-force protection (3 attempts → 30s lockout per IP)
   - Per-room failed join throttling (mitigates distributed PIN guessing)
+  - A correct invite token is not held to either lock (see joinVerdict)
+  - One room per socket; every room message names its room
   - WebSocket Origin allowlist (same as CORS)
   - list-sessions / create-session rate limits per IP
   - POST /api/send-message (Resend + optional file attachment; requires X-DC-Client header)
@@ -53,7 +55,7 @@ const { getClientIp, isLoopbackIp, TRUSTED_PROXY_HOPS } = require("./clientip");
 
 /* Sliding-window counters and log sanitising — small, pure, and tested
    directly rather than through a running server. See ratelimit.js. */
-const { slidingAllow, pruneExpired, safeLabel } = require("./ratelimit");
+const { slidingAllow, pruneExpired, safeLabel, joinVerdict } = require("./ratelimit");
 
 const app    = express();
 const server = http.createServer(app);
@@ -481,6 +483,17 @@ function generateToken() {
   return crypto.randomBytes(24).toString("base64url");
 }
 
+/** Compares a PIN or token in constant time. A correct token is admitted even
+    while the join locks are on (see joinVerdict), so nothing limits how often
+    one may be tried — which makes this a comparison that must not leak how
+    close a wrong value came. */
+function secretMatches(expected, supplied) {
+  if (typeof supplied !== "string") return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(supplied);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function broadcastSessionList() {
   const list = publicSessions();
 
@@ -490,12 +503,17 @@ function broadcastSessionList() {
   });
 }
 
+/* Every message about a room says which room. A client that could not tell had
+   to assume its current one, and was wrong whenever it had moved on. */
+
+/** Removes every room this socket is part of and tells whoever is left in it.
+    Also what enforces one room per socket: creating or joining calls it first. */
 function cleanupClient(ws) {
   for (const [sessionId, session] of sessions) {
     if (session.host === ws || session.guest === ws) {
       const other = session.host === ws ? session.guest : session.host;
       if (other && other.readyState === WebSocket.OPEN) {
-        other.send(JSON.stringify({ type: "peer-disconnected" }));
+        other.send(JSON.stringify({ type: "peer-disconnected", sessionId }));
       }
       sessions.delete(sessionId);
       console.log(`Session ${sessionLogId(sessionId)} removed`);
@@ -527,9 +545,25 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => { console.log(`Client disconnected ${ipLogId(clientIp)}`); cleanupClient(ws); });
   ws.on("error", (e) => { console.error("WS error:", e); cleanupClient(ws); });
 
+  /* Nothing catches what a "message" listener throws: it becomes an uncaught
+     exception and Node ends the process, taking every room and every call with
+     it. The four characters `null` did exactly that — see handleMessage. This
+     is the backstop for whichever input nobody has thought of yet, the same job
+     asyncRoute() does for the HTTP side. */
   ws.on("message", (raw) => {
+    try {
+      handleMessage(raw);
+    } catch (err) {
+      console.error(`Message handler error for ${ipLogId(clientIp)}:`, (err && err.stack) || err);
+    }
+  });
+
+  function handleMessage(raw) {
     let data;
     try { data = JSON.parse(raw); } catch (e) { return; }
+    /* Parsing succeeding does not make it a message. `null`, `7`, `"x"` and
+       `[]` are all valid JSON, and reading `.type` off null throws. */
+    if (data === null || typeof data !== "object" || Array.isArray(data)) return;
     console.log(`MSG ${ipLogId(clientIp)}: ${safeLabel(data.type)}`);
 
     switch (data.type) {
@@ -558,6 +592,12 @@ wss.on("connection", (ws, req) => {
           ws.send(JSON.stringify({ type: "error", message: "Too many rooms created from this network. Try again later." }));
           break;
         }
+        /* One room per socket. A browser that opened a room and then opened
+           another used to keep hosting both: the first stayed listed with
+           nobody behind it, a guest who joined it waited on a host that was
+           elsewhere, and when it expired the notice ended the chat in the
+           second. Opening a room now lets go of the previous one. */
+        cleanupClient(ws);
         const pin   = generatePin();
         const token = generateToken();
         sessions.set(data.sessionId, {
@@ -589,13 +629,38 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 2. Room-level join lock (many failed PIN/token attempts from any IP) */
+        /* 2. Your own room. Its name is in the lobby list like any other, and
+           the PIN is on your screen, so this is one click away. It used to be
+           admitted, which left one browser negotiating with itself. */
+        if (session.host === ws) {
+          ws.send(JSON.stringify({
+            type: "pin-error",
+            code: "own-room",
+            message: "This is the room you created."
+          }));
+          break;
+        }
+
+        /* 3. A room-level lock that has run its course */
         if (session.joinLockedUntil && session.joinLockedUntil <= Date.now()) {
           session.joinLockedUntil = 0;
           session.failedJoinCount = 0;
           session.failedJoinWindowStart = 0;
         }
-        if (session.joinLockedUntil && session.joinLockedUntil > Date.now()) {
+
+        /* 4. Decide. Which lock applies to which credential is joinVerdict's
+           job — see ratelimit.js. The short of it: the locks are there to slow
+           PIN guessing, so a correct invite token is not held to them. */
+        const rl = rateLimitCheck(ip);
+        const verdict = joinVerdict({
+          tokenOk:    secretMatches(session.token, data.token),
+          pinOk:      typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && secretMatches(session.pin, data.pin),
+          full:       Boolean(session.guest),
+          roomLocked: session.joinLockedUntil > Date.now(),
+          ipLimited:  !rl.allowed
+        });
+
+        if (verdict === "room-locked") {
           const rem = Math.ceil((session.joinLockedUntil - Date.now()) / 1000);
           ws.send(JSON.stringify({
             type: "pin-error",
@@ -606,8 +671,7 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 3. Already full */
-        if (session.guest) {
+        if (verdict === "full") {
           ws.send(JSON.stringify({
             type: "pin-error",
             code: "full",
@@ -616,9 +680,7 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 4. Per-IP rate limit (wrong PIN / token for a real room) */
-        const rl = rateLimitCheck(ip);
-        if (!rl.allowed) {
+        if (verdict === "ip-limited") {
           ws.send(JSON.stringify({
             type: "pin-error",
             code: "rate-limited",
@@ -628,11 +690,7 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 5. Auth: valid PIN or valid token */
-        const pinOk   = typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && session.pin === data.pin;
-        const tokenOk = data.token && session.token === data.token;
-
-        if (!pinOk && !tokenOk) {
+        if (verdict === "wrong") {
           recordSessionJoinFailure(data.sessionId, session);
           const left = rateLimitFail(ip);
           if (left === 0) {
@@ -653,8 +711,10 @@ wss.on("connection", (ws, req) => {
           break;
         }
 
-        /* 6. Success — clear rate limit, admit guest */
+        /* 5. Admitted — clear the limits and let go of any room this socket was
+           already in. One room per socket; see create-session. */
         rateLimitClear(ip);
+        cleanupClient(ws);
         session.joinLockedUntil = 0;
         session.failedJoinCount = 0;
         session.failedJoinWindowStart = 0;
@@ -702,7 +762,7 @@ wss.on("connection", (ws, req) => {
             (ws.unknownTypeLogs === UNKNOWN_TYPE_LOG_MAX ? " (further ones from this client not logged)" : ""));
         }
     }
-  });
+  }
 });
 
 /* ══════════════════════════════════════════════
@@ -747,16 +807,19 @@ setInterval(() => {
        this is a backstop for a close event that never fired. */
     if (!s.host || s.host.readyState !== WebSocket.OPEN) {
       if (s.guest?.readyState === WebSocket.OPEN) {
-        s.guest.send(JSON.stringify({ type: "peer-disconnected" }));
+        s.guest.send(JSON.stringify({ type: "peer-disconnected", sessionId: id }));
       }
       sessions.delete(id);
       pruned++;
       continue;
     }
     if (!s.guest && now - s.createdAt > TEN_MIN) {
-      // Notify host if still connected
+      /* Its own message, not peer-disconnected: there never was a peer. The
+         host is in the lobby looking at a PIN and a link, and needs telling
+         that both have stopped working — the old message said "peer left" into
+         a chat screen that was not showing. */
       if (s.host?.readyState === WebSocket.OPEN) {
-        s.host.send(JSON.stringify({ type: "peer-disconnected" }));
+        s.host.send(JSON.stringify({ type: "session-expired", sessionId: id }));
       }
       sessions.delete(id);
       pruned++;

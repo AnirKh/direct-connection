@@ -125,6 +125,8 @@ const I18N = {
     pinAttemptsLeft: (n) => `Буруу PIN. ${n} оролдлого үлдлээ.`,
     sessionNotFound: "Өрөө олдсонгүй — хугацаа дуусч байж магадгүй.",
     sessionFull:     "Өрөө дүүрсэн байна.",
+    ownRoom:         "Энэ бол таны өөрийн үүсгэсэн өрөө.",
+    roomExpired:     "Хэн ч нэгдээгүй тул өрөөний хугацаа дууслаа. Дахин үүсгэнэ үү.",
     // E2E encryption
     sysE2eReady:     (fp) => `🔐 Шифрлэлт идэвхжлээ · Баталгаажуулах код: ${fp}`,
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
@@ -243,6 +245,8 @@ const I18N = {
     pinAttemptsLeft: (n) => `Wrong PIN. ${n} attempt(s) remaining.`,
     sessionNotFound: "Session not found — it may have expired.",
     sessionFull:     "Session is full.",
+    ownRoom:         "This is the room you created.",
+    roomExpired:     "Nobody joined in time, so this room has expired. Create it again.",
     // E2E encryption
     sysE2eReady:     (fp) => `🔐 Encryption active · Verification code: ${fp}`,
     e2eWaiting:      "Setting up encryption…",

@@ -146,3 +146,78 @@ test("non-string values do not throw", () => {
     assert.equal(typeof safeLabel(value), "string", `failed on ${JSON.stringify(value)}`);
   }
 });
+
+/* ══════════════════════════════════════════
+   joinVerdict — which lock applies to which credential
+══════════════════════════════════════════ */
+
+const { joinVerdict } = require("../ratelimit.js");
+
+const attempt = o => Object.assign(
+  { tokenOk: false, pinOk: false, full: false, roomLocked: false, ipLimited: false }, o);
+
+test("a correct PIN is admitted when nothing is locked", () => {
+  assert.equal(joinVerdict(attempt({ pinOk: true })), "admit");
+});
+
+test("a correct invite token is admitted when nothing is locked", () => {
+  assert.equal(joinVerdict(attempt({ tokenOk: true })), "admit");
+});
+
+test("a correct invite token is admitted through a locked room", () => {
+  /* The bug: room names are public, so fifteen wrong PINs from anyone locked
+     the room — and the invited guest, holding a valid link, was turned away
+     with everyone else. The locks slow PIN guessing; a 192-bit token is not a
+     guess. */
+  assert.equal(joinVerdict(attempt({ tokenOk: true, roomLocked: true })), "admit");
+});
+
+test("a correct invite token is admitted from a locked-out address", () => {
+  /* Same reasoning for the per-address lock — a guest behind the same router
+     as someone who mistyped the PIN three times still holds a valid link. */
+  assert.equal(joinVerdict(attempt({ tokenOk: true, ipLimited: true })), "admit");
+  assert.equal(joinVerdict(attempt({ tokenOk: true, ipLimited: true, roomLocked: true })), "admit");
+});
+
+test("a correct PIN is NOT admitted through a locked room", () => {
+  /* The other half, and the one that must not be "fixed" to match: if a right
+     PIN got in during the lock, the lock would stop nothing — the guesser
+     would simply keep going until one landed. */
+  assert.equal(joinVerdict(attempt({ pinOk: true, roomLocked: true })), "room-locked");
+});
+
+test("a correct PIN is NOT admitted from a locked-out address", () => {
+  assert.equal(joinVerdict(attempt({ pinOk: true, ipLimited: true })), "ip-limited");
+});
+
+test("a wrong attempt during a lock is told about the lock, not that it was wrong", () => {
+  /* Answering "wrong" here would turn the lock into a free guess-checker. */
+  assert.equal(joinVerdict(attempt({ roomLocked: true })), "room-locked");
+  assert.equal(joinVerdict(attempt({ ipLimited: true })), "ip-limited");
+});
+
+test("a full room turns even a valid token away", () => {
+  assert.equal(joinVerdict(attempt({ tokenOk: true, full: true })), "full");
+  assert.equal(joinVerdict(attempt({ pinOk: true, full: true })), "full");
+});
+
+test("neither credential being right is a wrong attempt", () => {
+  assert.equal(joinVerdict(attempt({})), "wrong");
+});
+
+test("every combination gives one of the five known answers", () => {
+  const known = new Set(["admit", "full", "room-locked", "ip-limited", "wrong"]);
+  for (let bits = 0; bits < 32; bits++) {
+    const o = {
+      tokenOk: Boolean(bits & 1), pinOk: Boolean(bits & 2), full: Boolean(bits & 4),
+      roomLocked: Boolean(bits & 8), ipLimited: Boolean(bits & 16)
+    };
+    const verdict = joinVerdict(o);
+    assert.ok(known.has(verdict), `unexpected verdict ${verdict} for ${JSON.stringify(o)}`);
+    /* Nobody is ever admitted without a correct credential, or into a full room. */
+    if (verdict === "admit") {
+      assert.ok(o.tokenOk || o.pinOk, `admitted with no credential: ${JSON.stringify(o)}`);
+      assert.equal(o.full, false, `admitted into a full room: ${JSON.stringify(o)}`);
+    }
+  }
+});

@@ -152,6 +152,7 @@ let voiceChunks     = [];
 let voiceStream     = null;   // the live mic stream, so any path can release it
 let voiceSession    = null;   // the room a recording belongs to
 let voiceDiscard    = false;  // set when the result must be dropped, not sent
+let voiceOpening    = false;  // the mic is being opened — a second press must wait
 
 let statsInterval   = null;
 let msgIdCounter    = 0;
@@ -733,12 +734,22 @@ createBtn.onclick = () => {
 
 /* ── PIN modal ───────────────────────────────── */
 let pendingJoinId = null;
+let pinJoinInFlight = false;   // a join sent from this dialog, not yet answered
+
+/** The dialog's join has been answered, or no longer matters. Join was only
+    ever re-enabled after a refusal, so one successful join left it disabled
+    for every room after — the dialog opened with a button that did nothing. */
+function settlePinJoin() {
+  pinJoinInFlight = false;
+  pinJoinBtn.disabled = false;
+}
 
 function openPinModal(sessionId) {
   pendingJoinId = sessionId;
   pinSessionLabel.textContent = I18N[LANG].sessionLabel(sessionId);
   pinInput.value = "";
   pinError.textContent = "";
+  settlePinJoin();   // a freshly opened dialog always has a working button
   pinOverlay.classList.remove("hidden");
   setTimeout(() => pinInput.focus(), 100);
 }
@@ -752,6 +763,7 @@ function attemptJoin() {
   if (pin.length !== 6) { pinError.textContent = t("pinMustBe6"); return; }
   pinError.textContent = "";
   pinJoinBtn.disabled = true;
+  pinJoinInFlight = true;
   pendingRoomSecret = null;   // PIN join — no shared secret, manual verification applies
   wsSend({ type: "join-session", sessionId: pendingJoinId, pin });
 }
@@ -936,6 +948,14 @@ function setupDataChannel() {
    SIGNALING HANDLER
 ══════════════════════════════════════════════ */
 
+/** Is this server message about the room on screen? See mayApplyRoomEvent. */
+function roomEventIsOurs(data) {
+  return G.mayApplyRoomEvent({
+    eventRoom: data.sessionId,
+    currentRoom: currentSession && currentSession.sessionId
+  });
+}
+
 async function handleSignaling(data) {
   switch (data.type) {
 
@@ -1006,6 +1026,7 @@ async function handleSignaling(data) {
 
     case "session-joined":
       autoJoinSettled();
+      settlePinJoin();
       isHost = false;
       currentSession = { sessionId: data.sessionId };
       /* Present only when this join came from an invite link. */
@@ -1017,6 +1038,7 @@ async function handleSignaling(data) {
       break;
 
     case "guest-joined":
+      if (!roomEventIsOurs(data)) break;
       switchToChat(currentSession.sessionId);
       createPeerConnection();
       dataChannel = pc.createDataChannel("chat");
@@ -1080,11 +1102,34 @@ async function handleSignaling(data) {
        peer ever asking, bypassing the end-to-end channel entirely. */
 
     case "peer-disconnected":
+      /* Named by room since the server learned to say which. It used not to,
+         and a room this browser had moved on from could still end the chat in
+         the room it was actually in. */
+      if (!roomEventIsOurs(data)) break;
       appendSys(t("sysPeerLeft"));
       endCall(false);
       closePeerConnection();
       showReconnectButton();
       break;
+
+    case "session-expired": {
+      /* Nobody joined in time and the server has dropped the room. This used to
+         arrive as peer-disconnected, which wrote "peer left" into the hidden
+         chat screen and left the lobby showing a PIN and a link for a room that
+         no longer existed — the host waited on it with nothing to say so. */
+      if (!roomEventIsOurs(data)) break;
+      currentSession = null;
+      roomSecret = null;
+      isHost = false;
+      isConnecting = false;
+      const msg = document.createElement("span");
+      msg.style.color = "var(--orange)";
+      msg.textContent = `⌛ ${t("roomExpired")}`;
+      createInfo.style.textAlign = "";
+      createInfo.replaceChildren(msg);
+      createBtn.disabled = false;
+      break;
+    }
 
     case "error":
       autoJoinSettled();
@@ -1100,7 +1145,7 @@ async function handleSignaling(data) {
         showToast(data.message, "error");
         createInfo.textContent = "";
         createBtn.disabled = false;
-        pinJoinBtn.disabled = false;
+        settlePinJoin();
         isConnecting = false;
       }
       break;
@@ -1114,9 +1159,14 @@ async function handleSignaling(data) {
       else if (data.code === "wrong-pin")           msg = I18N[LANG].pinAttemptsLeft(data.attemptsLeft);
       else if (data.code === "not-found")     msg = t("sessionNotFound");
       else if (data.code === "full")          msg = t("sessionFull");
+      else if (data.code === "own-room")      msg = t("ownRoom");
       else                                    msg = data.message || "Error";
 
-      if (_isAutoJoin) {
+      /* Route by which join is waiting for an answer, not by how the page was
+         opened. _isAutoJoin stays true for the life of a page that arrived by
+         invite link, so a wrong PIN typed there later was reported in the lobby
+         — behind the dialog — and left the dialog's button disabled. */
+      if (_isAutoJoin && !pinJoinInFlight) {
         const wrap = document.createElement("span");
         wrap.style.color = "var(--danger-text)";
         wrap.append(document.createTextNode(I18N[LANG].couldNotJoin(msg)));
@@ -1130,7 +1180,7 @@ async function handleSignaling(data) {
         isConnecting = false;
       } else {
         pinError.textContent = msg;
-        pinJoinBtn.disabled  = false;
+        settlePinJoin();
       }
       break;
     }
@@ -1287,13 +1337,29 @@ async function sendTextMessage() {
   dataChannel.send(JSON.stringify({ type: "typing-stop" }));
 }
 
-function handleTextMessage(data) {
-  switch (data.type) {
+/**
+ * Every message from the data channel lands here — once as it arrived, and once
+ * more for whatever an `e2e-dc` envelope held. `sealed` tells the two apart and
+ * is true only on that second pass, so it cannot be claimed by the sender.
+ */
+function handleTextMessage(data, sealed = false) {
+  /* File announcements and call setup are sent sealed, so they are believed
+     only sealed. Checking `text` alone left every other type open: a clear
+     transfer-meta drew a file bubble with any name, and a clear call-request
+     raised the incoming-call prompt — after e2eFailClosed() as well as before.
+     See mayHandleFrame for who is in a position to send one. */
+  const type = data && data.type;
+  if (!G.mayHandleFrame(type, sealed)) {
+    console.warn(`Dropping "${type}" — it arrived outside the encrypted envelope`);
+    return;
+  }
+
+  switch (type) {
 
     case "e2e-dc":
       if (!e2eReady) break;
       e2eDecrypt(data.ct, data.iv)
-        .then(json => handleTextMessage(JSON.parse(json)))
+        .then(json => handleTextMessage(JSON.parse(json), true))
         .catch(err => console.error("E2E envelope decrypt failed:", err));
       break;
 
@@ -1712,18 +1778,38 @@ async function toggleVoiceRecord() {
     return;
   }
 
+  /* Opening the microphone takes a moment and _isRecording only turns true once
+     it has opened. A second press in that gap — a double-click — opened a second
+     stream over the first, and the first could then never be stopped. */
+  if (!G.mayStartRecording({ recording: _isRecording, opening: voiceOpening })) return;
+
   if (!dcReady()) return;
   if (!e2eReady) { appendSys(t("e2eWaiting")); return; }
 
   let stream = null;
+  /* The room this press was made in. Read before the await below: by the time
+     the microphone opens it may no longer be the room on screen. */
+  const askedIn = currentSession && currentSession.sessionId;
+  voiceOpening = true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    /* A permission prompt can stay up for as long as the user likes, and the
+       room can end underneath it. abandonVoiceRecording() ran then and found
+       nothing to stop, so without this the microphone came on afterwards — in
+       the lobby, with no button left to turn it off. */
+    if (!G.mayKeepMicOpen({ askedIn, currentRoom: currentSession && currentSession.sessionId,
+                            channelOpen: dcReady() })) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+
     voiceStream  = stream;
     voiceChunks  = [];
     voiceDiscard = false;
     /* Remember which room this belongs to. onstop can run long after, in a
        different room entirely — see the check there. */
-    voiceSession = currentSession && currentSession.sessionId;
+    voiceSession = askedIn;
 
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
@@ -1766,6 +1852,8 @@ async function toggleVoiceRecord() {
     const denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
     showToast(denied ? t("micDenied") : t("micFailed"), "warn");
     if (!denied) console.error("Voice recording failed to start:", err);
+  } finally {
+    voiceOpening = false;
   }
 }
 
@@ -2024,8 +2112,8 @@ async function handleIncomingCallOffer(data) {
   /* An offer is only legitimate after call-request → the user pressing accept,
      which is what sets inCall. Without this check a peer could skip straight to
      call-offer and attachCallMedia() would open the camera and microphone with
-     no prompt shown. (Call signaling arrives only over the encrypted data
-     channel now, so the sender is always the peer.) */
+     no prompt shown. (handleTextMessage only lets call signaling through when
+     it came out of the encrypted envelope, so the sender is always the peer.) */
   if (!G.mayCaptureForCall(inCall)) {
     console.warn("Ignoring unsolicited call offer — no call was accepted");
     dcSendCallSignal({ type: "call-reject" });

@@ -362,3 +362,171 @@ test("occupied rooms are hidden from the lobby list", async () => {
   const after = await waitFor(probe, "session-list");
   assert.ok(!after.sessions.some(s => s.sessionId === "room-listing"), "occupied room should be hidden");
 });
+
+/* ══════════════════════════════════════════
+   WebSocket input that is valid JSON but not a message
+══════════════════════════════════════════ */
+
+test("a JSON value that is not an object does not take the server down", async () => {
+  /* JSON.parse is happy with `null`, and reading `.type` off null throws. A
+     "message" listener that throws is an uncaught exception, which ends the
+     process — so four characters from anyone dropped every room and every call
+     in progress. As with the upload tests above, the evidence that matters is
+     that a bystander is still connected afterwards. */
+  const live = await client();
+  live.send_({ type: "create-session", sessionId: "room-survives-null" });
+  assert.ok(await waitFor(live, "session-created"), "setup: room not created");
+
+  const hostile = await client();
+  for (const frame of ["null", "7", "\"text\"", "[]", "[null]", "true", "{}", "{\"type\":null}"]) {
+    hostile.send(frame);
+  }
+  await sleep(300);
+
+  assert.ok(await stillServing(), "the server stopped answering after a non-object message");
+  assert.equal(live.readyState, WebSocket.OPEN, "a live session was dropped with the process");
+
+  /* The socket that sent them is not punished either — it just was not heard. */
+  hostile.send_({ type: "list-sessions" });
+  assert.ok(await waitFor(hostile, "session-list"), "the sender's own socket should still work");
+});
+
+/* ══════════════════════════════════════════
+   Which lock applies to which credential
+══════════════════════════════════════════ */
+
+/** Sends three wrong PINs from one address and waits for all three answers. */
+async function threeWrongPins(sessionId, wrong) {
+  const stranger = await client();
+  for (let i = 0; i < 3; i++) stranger.send_({ type: "join-session", sessionId, pin: wrong });
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline && stranger.inbox.filter(m => m.type === "pin-error").length < 3) await sleep(25);
+}
+
+test("a valid invite link still works while wrong PINs have the room locked", async () => {
+  /* Room names are listed publicly, so anyone can lock any room: fifteen wrong
+     PINs. That used to turn away the invited guest as well, for five minutes
+     at a time, for as long as someone kept it up. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-locked" });
+  const created = await waitFor(host, "session-created");
+  const wrong = created.pin === "000000" ? "111111" : "000000";
+
+  for (let i = 0; i < 5; i++) await threeWrongPins("room-locked", wrong);   // 5 addresses x 3
+
+  /* The lock is real, and it holds even against the right PIN — otherwise it
+     would stop nothing and a guesser would just carry on. */
+  const typed = await client();
+  typed.send_({ type: "join-session", sessionId: "room-locked", pin: created.pin });
+  const refused = await waitFor(typed, "pin-error");
+  assert.equal(refused && refused.code, "session-join-locked", "setup: the room should be locked by now");
+
+  const invited = await client();
+  invited.send_({ type: "join-session", sessionId: "room-locked", token: created.token });
+  assert.ok(await waitFor(invited, "session-joined"),
+    "the holder of a valid invite link was locked out by someone else's wrong PINs");
+});
+
+test("a wrong token during a lock learns nothing but that the room is locked", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-locked-2" });
+  const created = await waitFor(host, "session-created");
+  const wrong = created.pin === "000000" ? "111111" : "000000";
+  for (let i = 0; i < 5; i++) await threeWrongPins("room-locked-2", wrong);
+
+  const guesser = await client();
+  guesser.send_({ type: "join-session", sessionId: "room-locked-2", token: "x".repeat(created.token.length) });
+  const err = await waitFor(guesser, "pin-error");
+  assert.equal(err && err.code, "session-join-locked");
+});
+
+/* ══════════════════════════════════════════
+   One room per socket
+══════════════════════════════════════════ */
+
+test("a host cannot join their own room", async () => {
+  /* It is in the lobby list like any other room and the PIN is on screen. It
+     used to be admitted, leaving one browser negotiating with itself. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-own" });
+  const created = await waitFor(host, "session-created");
+
+  host.send_({ type: "join-session", sessionId: "room-own", pin: created.pin });
+  const err = await waitFor(host, "pin-error");
+  assert.equal(err && err.code, "own-room");
+
+  /* ...and the attempt did not damage the room. */
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "room-own", token: created.token });
+  assert.ok(await waitFor(guest, "session-joined"), "the room should still accept its real guest");
+});
+
+test("opening a second room lets go of the first", async () => {
+  /* The first used to stay listed with nobody behind it: a guest who joined
+     waited on a host who was elsewhere, and its expiry ten minutes later ended
+     the chat in the second room. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-first" });
+  const first = await waitFor(host, "session-created");
+  host.inbox.length = 0;
+  host.send_({ type: "create-session", sessionId: "room-second" });
+  const second = await waitFor(host, "session-created");
+  assert.equal(second && second.sessionId, "room-second");
+
+  const late = await client();
+  late.send_({ type: "join-session", sessionId: "room-first", token: first.token });
+  const err = await waitFor(late, "pin-error");
+  assert.equal(err && err.code, "not-found", "the abandoned room should be gone, not waiting on a host who left it");
+
+  const other = await client();
+  other.send_({ type: "create-session", sessionId: "room-first" });
+  assert.ok(await waitFor(other, "session-created", 2000), "the abandoned room's name was not released");
+});
+
+test("a failed attempt to open a second room leaves the first alone", async () => {
+  const taken = await client();
+  taken.send_({ type: "create-session", sessionId: "room-taken" });
+  await waitFor(taken, "session-created");
+
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-keeps" });
+  const kept = await waitFor(host, "session-created");
+  host.send_({ type: "create-session", sessionId: "room-taken" });   // refused: name in use
+  assert.ok(await waitFor(host, "error"), "setup: the duplicate name should be refused");
+
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "room-keeps", token: kept.token });
+  assert.ok(await waitFor(guest, "session-joined"), "a refused create must not cost the host the room they had");
+});
+
+test("joining someone else's room lets go of your own", async () => {
+  const other = await client();
+  other.send_({ type: "create-session", sessionId: "room-theirs" });
+  const theirs = await waitFor(other, "session-created");
+
+  const mover = await client();
+  mover.send_({ type: "create-session", sessionId: "room-mine" });
+  const mine = await waitFor(mover, "session-created");
+  mover.send_({ type: "join-session", sessionId: "room-theirs", token: theirs.token });
+  assert.ok(await waitFor(mover, "session-joined"), "setup: the move should succeed");
+
+  const late = await client();
+  late.send_({ type: "join-session", sessionId: "room-mine", token: mine.token });
+  const err = await waitFor(late, "pin-error");
+  assert.equal(err && err.code, "not-found", "the room its host walked away from should be gone");
+});
+
+test("a peer leaving is reported with the room it happened in", async () => {
+  /* Without a name the client had to assume its current room, and was wrong
+     whenever it had moved on. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-named" });
+  const created = await waitFor(host, "session-created");
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "room-named", token: created.token });
+  await waitFor(guest, "session-joined");
+
+  guest.send_({ type: "leave-session" });
+  const gone = await waitFor(host, "peer-disconnected");
+  assert.equal(gone && gone.sessionId, "room-named");
+});

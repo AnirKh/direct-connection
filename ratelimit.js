@@ -9,6 +9,10 @@
   rather than through a running server.
 
   Shape of the state: Map<clientIp, number[]> — a list of request timestamps.
+
+  joinVerdict is here as well: which of the join limits apply to which kind of
+  credential is a decision about rate limiting, and it was wrong for a while in
+  a way only a table of cases shows.
 */
 
 "use strict";
@@ -72,4 +76,34 @@ function safeLabel(value, max = 32) {
   return clean.length > max ? clean.slice(0, max) + "…" : clean;
 }
 
-module.exports = { slidingAllow, pruneExpired, safeLabel };
+/**
+ * Decides what a join attempt gets, given what is already known about it.
+ *
+ * The two locks exist to slow down guessing a 6-digit PIN. The invite token is
+ * 192 random bits; nobody guesses it, so nobody presenting the right one is
+ * guessing. Holding them to the PIN's locks protected nothing and cost a lot:
+ * room names are public, so fifteen wrong PINs from anyone locked the invited
+ * guest out of a room they held a valid link to — and could be repeated for as
+ * long as the room existed.
+ *
+ * So a correct token goes straight through, and everything else meets the
+ * locks first. A PIN counts for nothing while a lock is on, right or wrong: if
+ * a correct one were admitted during the lock, the lock would stop nothing —
+ * the guesser would just keep going until one landed.
+ *
+ * Wrong PINs can still lock a room against other PIN joiners. That is what a
+ * guess limit on a short code costs, and the invite link is the way round it.
+ *
+ * @param {{tokenOk: boolean, pinOk: boolean, full: boolean,
+ *          roomLocked: boolean, ipLimited: boolean}} o
+ * @returns {"admit"|"full"|"room-locked"|"ip-limited"|"wrong"}
+ */
+function joinVerdict(o) {
+  if (o.tokenOk)    return o.full ? "full" : "admit";
+  if (o.roomLocked) return "room-locked";
+  if (o.full)       return "full";
+  if (o.ipLimited)  return "ip-limited";
+  return o.pinOk ? "admit" : "wrong";
+}
+
+module.exports = { slidingAllow, pruneExpired, safeLabel, joinVerdict };

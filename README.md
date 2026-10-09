@@ -7,12 +7,12 @@ AnirKh.github.io/direct-connection
 | `index.html` | Markup. Loads `framebust.js` first, then `protocol.js`, `connstats.js`, `guards.js`, `i18n.js`, `app.js` **in that order** — `app.js` reads `DCProtocol`, `DCStats`, `DCGuards`, `LANG` and `I18N` while parsing. |
 | `protocol.js` | Pure wire-protocol logic: invite links, ECDH→HKDF key derivation, verification code, binary chunk framing. No DOM, no sockets, no state — loaded as `window.DCProtocol` in the browser and `require`d by the tests. |
 | `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
-| `guards.js` | The safety decisions as pure functions — may the camera open, may this message be shown, may this voice note be sent, should this join be retried. See below. |
+| `guards.js` | The safety decisions as pure functions — may the camera open, may this message be believed, may the microphone open, may this voice note be sent, which room is the server talking about. See below. |
 | `connstats.js` | Everything derived from an `RTCStatsReport`: which route ICE chose, direct or relayed, link quality, byte totals. Pure. |
 | `app.js` | Everything stateful and everything with an effect: WebRTC, data channel, calls, chat UI. Asks the two modules above rather than deciding for itself. |
 | `csp.js` | The Content-Security-Policy, defined once (see below). |
 | `clientip.js` | Works out the real client address from `X-Forwarded-For`. Every rate limit depends on it, so it is separate and tested. |
-| `ratelimit.js` | Sliding-window counters, their expiry sweep, and `safeLabel` for anything client-supplied that reaches a log line. Same reason as above: small, pure, security-relevant. |
+| `ratelimit.js` | Sliding-window counters, their expiry sweep, `safeLabel` for anything client-supplied that reaches a log line, and `joinVerdict` — which join lock applies to which credential. Same reason as above: small, pure, security-relevant. |
 | `framebust.js` | Refuses to run inside a frame. The only such protection on GitHub Pages (see below). |
 | `server.js` | Signaling, PIN/token auth, rate limits, `/api/send-message`. |
 
@@ -57,19 +57,22 @@ The PIN and token cannot substitute for the room secret: the server generates bo
 
 ### Lifetime
 
-Links are short-lived by nature. A room exists only in the server's memory and disappears when **either** participant disconnects, after ten minutes with nobody having joined, or whenever the server restarts. An "old" link points at a room that no longer exists and simply reports *session not found* — so there is no population of stale links to worry about.
+Links are short-lived by nature. A room exists only in the server's memory and disappears when **either** participant disconnects, after ten minutes with nobody having joined (the host is told — see "Rooms" below), when its host opens or joins another room, or whenever the server restarts. An "old" link points at a room that no longer exists and simply reports *session not found* — so there is no population of stale links to worry about.
 
 ## Why the decisions live outside app.js
 
-`app.js` needs a browser and two peers, so nothing in it could be executed by the test suite. Four rounds of analysis found real bugs in it, and **every single one was a decision or a small state machine** — not DOM code:
+`app.js` needs a browser and two peers, so nothing in it could be executed by the test suite. Round after round of analysis found real bugs in it, and **almost every one was a decision or a small state machine** — not DOM code:
 
 | Bug | The decision behind it |
 | --- | --- |
 | A peer could open the camera with no prompt | may capture start? |
 | A voice call was upgraded to video by the peer | how much video was agreed to? |
 | Plaintext messages were displayed | may this be shown? |
+| Unencrypted file announcements and call requests were acted on | may this be believed? |
 | A voice note reached the next room's peer | which room does this recording belong to? |
+| A double-click left the microphone on | may the microphone open? |
 | An invite-link join hung forever | should this join be retried? |
+| One room expiring closed the chat in another | which room is this message about? |
 | The wrong network route was reported | which candidate pair is actually in use? |
 
 So the decisions moved to `guards.js` and `connstats.js`, and the effects stayed put. Both modules are pure — no DOM, no module state, no side effects — so every combination can be asserted directly, including the ones nobody thinks to try. That is where the bugs were.
@@ -106,11 +109,46 @@ A transfer that dies must not keep claiming to be running. Three paths cover it:
 
 Before this, the peer leaving mid-transfer left the sender's bubble frozen at whatever percentage it had reached, permanently, next to an unhandled null-reference error. The receiver's bubble sat on "Receiving…" just as long. Neither side was told the file had not arrived.
 
-## Text messages are shown only if the agreed key opened them
+## Only the handshake may arrive unencrypted
 
-`handleTextMessage` drops any `text` that arrives without ciphertext or before the key exchange completes. `sendTextMessage` never sends one, so an unencrypted body is never a real peer.
+Two things travel on the data channel: frames in the clear, and an `e2e-dc` envelope that the agreed key seals. **Anything the app sends sealed is believed only sealed.** `handleTextMessage` takes a `sealed` flag that is true in exactly one place — where `e2eDecrypt` hands over what the envelope held — and asks `mayHandleFrame` before acting on anything.
 
-This matters because `e2eFailClosed()` only disables **sending**. Rendering a plaintext body would leave a middleman who was just caught swapping keys still able to write into the chat window.
+| May arrive in the clear | Why |
+| --- | --- |
+| `e2e-pubkey`, `e2e-confirm`, `e2e-fail` | the handshake — there is no key yet |
+| `e2e-dc` | the envelope itself |
+| `text` | carries its own ciphertext; `mayRenderText` drops it without one |
+| `ack`, `typing`, `typing-stop` | nothing a watcher of packet timing could not already see |
+
+Everything else — `transfer-*`, `call-*` — is refused in the clear.
+
+**Who could send a clear frame?** Whoever is carrying the packets. A signaling server that swaps the transport fingerprints sits on the channel, and it can pass the key exchange through untouched, so the chat still reads as verified. It cannot open the envelope. It could write beside it: a clear `transfer-meta` drew a file bubble with any name it chose, a clear `call-request` raised the incoming-call prompt, and a clear `call-offer` after that was treated as the peer's. All of it kept working after `e2eFailClosed()`, which only disables **sending**.
+
+The first fix for this covered `text` and nothing else. That is why the list says what **may** be clear rather than what must be sealed: a message type added later is refused in the clear until someone decides otherwise. `test/client-source.test.js` checks the list against the senders in both directions — a type sent clear but not listed would be dropped by the other side without a word.
+
+## The microphone has one owner
+
+A voice note opens the microphone, and opening is not instant. Two rules keep track of it, one each side of that wait:
+
+- **A second press while it is opening does nothing** (`mayStartRecording`). `_isRecording` only turns true once the stream exists, so a double-click used to open two. The second replaced the first in the one variable that remembers it; the first could never be stopped and stayed live until the tab closed.
+- **The room is checked again once it has opened** (`mayKeepMicOpen`). A permission prompt can outlast the room. The room's clean-up ran, found no stream yet, and the microphone then came on in the lobby with no button left to turn it off.
+
+## Rooms: one per socket, and every message says which
+
+- **A socket is in at most one room.** Creating or joining one lets go of any other (`cleanupClient`). A browser that opened a room and then opened or joined another used to keep hosting the first: it stayed in the lobby list with nobody behind it, and a guest who joined waited on a host who was elsewhere.
+- **`peer-disconnected`, `guest-joined` and `session-expired` carry a `sessionId`**, and the client acts only if it names the room on screen (`mayApplyRoomEvent`). They used to name nothing, so when that abandoned first room expired, "the other side left" closed the live chat in the second.
+- **An unjoined room that expires says so.** After ten minutes the host gets `session-expired` and the lobby replaces the PIN and link with a notice. It used to arrive as `peer-disconnected`, which wrote "peer left" into the hidden chat screen and left the lobby advertising a room that no longer existed.
+- **A host cannot join their own room** (`own-room`). It is in the list like any other and the PIN is on screen; it used to be admitted, leaving one browser negotiating with itself.
+
+## Join locks are for PINs, not invite links
+
+Three wrong attempts lock an address out for 30 seconds; fifteen against one room lock the room for five minutes. Both exist to slow down guessing a 6-digit PIN.
+
+**A correct invite token goes through both** (`joinVerdict` in `ratelimit.js`). The token is 192 random bits — nobody presenting the right one is guessing. Holding it to the PIN's locks protected nothing, and room names are public, so anyone could lock an invited guest out of a room they held a valid link to, for as long as they cared to keep it up.
+
+**A correct PIN does not.** If a right PIN were admitted during a lock, the lock would stop nothing — the guesser would keep going until one landed. Someone can therefore still lock a room against PIN joiners; that is the price of a guess limit on a short code, and the invite link is the way round it.
+
+Because nothing limits how often a token may be tried, both secrets are compared in constant time (`secretMatches`).
 
 ## Tests
 
@@ -124,15 +162,17 @@ Node's built-in runner, no dependencies.
 
 
 - `test/protocol.test.js` — invite-link parsing (including malformed input, which must not throw at page load), room secrets, key derivation, and the framing. Includes a man-in-the-middle case asserting that an attacker who substitutes both public keys cannot reach a working key without the room secret.
-- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
+- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, an invite token getting through a locked room, one room per socket, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
 - `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
-- `test/ratelimit.test.js` — the sliding window, its expiry sweep, and log sanitising. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
+- `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and all 32 combinations of `joinVerdict`. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.
 - `test/connstats.test.js` — which route ICE chose, link quality, byte totals, with a plain Map standing in for the stats report.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
 
-Not covered: the WebRTC and UI code in `app.js`, which needs a browser and two peers. Changes there still want a manual two-tab check.
+**The WebSocket side has the same hazard and the same kind of backstop.** Nothing catches what a `"message"` listener throws, so it ends the process too — the four characters `null` did it, because `JSON.parse` accepts them and reading `.type` off `null` throws. `handleMessage` now rejects anything that is not a plain object, and the listener wraps it in a `try`/`catch` for whichever input nobody has thought of yet. New message handling goes inside `handleMessage`, not in a second listener.
+
+Not covered: the WebRTC and UI code in `app.js`, which needs a browser and two peers. Changes there still want a manual two-tab check. Also not covered: the ten-minute expiry of an unjoined room — the wait is hard-coded, so it was checked by hand against a server with its clock moved forward.
 
 ### Two ordering rules in `server.js`
 

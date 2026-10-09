@@ -177,3 +177,97 @@ test("call signaling never goes over the WebSocket", () => {
     !/case\s+"call-(offer|answer|ice)"/.test(signalingHandler[0]),
     "handleSignaling must not accept call signaling from the WebSocket");
 });
+
+test("only what came out of the envelope is ever marked sealed", () => {
+  /* mayHandleFrame trusts its `sealed` argument completely, so the whole rule
+     rests on who is able to pass true. Exactly one call may: the one fed by
+     e2eDecrypt. The raw channel handler must never pass anything. */
+  const src = withoutComments(appSrc);
+
+  const sealedCalls = Array.from(src.matchAll(/handleTextMessage\([^\n]*,\s*true\s*\)/g));
+  assert.equal(sealedCalls.length, 1, `expected one sealed call site, found ${sealedCalls.length}`);
+  const leadUp = src.slice(Math.max(0, sealedCalls[0].index - 160), sealedCalls[0].index);
+  assert.ok(/e2eDecrypt\(/.test(leadUp), "the sealed call must be the one the envelope's decryption feeds");
+
+  const onmessage = src.match(/dataChannel\.onmessage\s*=[\s\S]*?\n  \};/);
+  assert.ok(onmessage, "dataChannel.onmessage not found");
+  assert.ok(onmessage[0].includes("handleTextMessage("), "raw frames no longer reach handleTextMessage");
+  assert.ok(!/handleTextMessage\([^\n]*,/.test(onmessage[0]),
+    "a frame straight off the channel must never be passed as sealed");
+});
+
+test("handleTextMessage asks the guard before acting on any message", () => {
+  const handler = topLevelFunctions(withoutComments(appSrc)).get("handleTextMessage");
+  assert.ok(handler, "handleTextMessage not found");
+  assert.ok(handler.includes("mayHandleFrame("), "handleTextMessage must ask whether a frame may be handled");
+  assert.ok(handler.indexOf("mayHandleFrame(") < handler.indexOf("switch ("),
+    "the check must come before the dispatch, not inside one case of it");
+});
+
+test("what the app sends in the clear is what it accepts in the clear", () => {
+  /* The list in guards.js and the senders here have to agree in both
+     directions. A type sent clear but not listed is silently dropped by the
+     other side; a type sent sealed but listed is a hole left open for nothing. */
+  const { CLEAR_TYPES } = require("../guards.js");
+  const src = withoutComments(appSrc);
+
+  const clearSent  = new Set(Array.from(
+    src.matchAll(/(?:\bdcSend|dataChannel\.send)\(\s*(?:JSON\.stringify\(\s*)?\{\s*type:\s*"([^"]+)"/g)).map(m => m[1]));
+  const sealedSent = new Set(Array.from(
+    src.matchAll(/(?:dcSendE2e|dcSendCallSignal)\(\s*\{\s*type:\s*"([^"]+)"/g)).map(m => m[1]));
+
+  /* Guards the two checks below against matching nothing at all. */
+  assert.ok(clearSent.size >= 5,  `expected several clear sends, found ${[...clearSent]}`);
+  assert.ok(sealedSent.size >= 8, `expected the transfer and call types, found ${[...sealedSent]}`);
+
+  for (const type of clearSent) {
+    assert.ok(CLEAR_TYPES.includes(type), `"${type}" is sent in the clear but the peer would refuse it`);
+  }
+  for (const type of sealedSent) {
+    assert.ok(!CLEAR_TYPES.includes(type), `"${type}" is always sent sealed, so it must not be accepted in the clear`);
+  }
+});
+
+test("the record button asks before opening the microphone, and again once it is open", () => {
+  /* Two gaps, one on each side of the await. Before: a double-click opened two
+     streams and only one could ever be stopped. After: the room could end
+     while the permission prompt was up, and the microphone came on anyway. */
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("toggleVoiceRecord");
+  assert.ok(fn, "toggleVoiceRecord not found");
+  const opens = fn.indexOf("getUserMedia(");
+  assert.ok(opens > -1, "toggleVoiceRecord no longer opens the microphone itself — update this test");
+
+  assert.ok(fn.includes("mayStartRecording("), "a press must ask whether it may open the microphone");
+  assert.ok(fn.indexOf("mayStartRecording(") < opens, "that question must come before opening, not after");
+  assert.ok(fn.indexOf("mayKeepMicOpen(") > opens, "the room must be checked again once the microphone has opened");
+  assert.ok(/finally\s*\{\s*voiceOpening\s*=\s*false/.test(fn),
+    "the opening flag must clear on every exit, or one refused permission leaves the button dead");
+});
+
+test("the PIN dialog always opens with a working Join button", () => {
+  /* Join was only re-enabled after a refusal, so one successful join left it
+     disabled for every room after. */
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  assert.ok(fns.get("settlePinJoin"), "settlePinJoin not found");
+  assert.ok(/pinJoinBtn\.disabled\s*=\s*false/.test(fns.get("settlePinJoin")), "settlePinJoin must re-enable Join");
+  assert.ok(fns.get("openPinModal").includes("settlePinJoin("), "opening the dialog must re-arm its button");
+
+  const joined = withoutComments(appSrc).match(/case "session-joined":[\s\S]*?break;/);
+  assert.ok(joined && joined[0].includes("settlePinJoin("), "a successful join must settle the dialog too");
+});
+
+test("server news about a room is checked against the room on screen", () => {
+  /* These messages used to name no room. The handler assumed the current one,
+     so an abandoned room expiring closed the chat in a different one. */
+  const handler = appSrc.match(/async function handleSignaling\(data\)[\s\S]*?\n\}/);
+  assert.ok(handler, "handleSignaling not found");
+  const body = withoutComments(handler[0]);
+
+  for (const type of ["guest-joined", "peer-disconnected", "session-expired"]) {
+    const branch = body.match(new RegExp(`case "${type}":[\\s\\S]*?break;`));
+    assert.ok(branch, `no ${type} case in handleSignaling`);
+    assert.ok(branch[0].includes("roomEventIsOurs("), `${type} must check which room it is about before acting`);
+  }
+  const helper = topLevelFunctions(withoutComments(appSrc)).get("roomEventIsOurs");
+  assert.ok(helper && helper.includes("mayApplyRoomEvent("), "roomEventIsOurs must ask the guard");
+});
