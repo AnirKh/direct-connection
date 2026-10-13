@@ -63,7 +63,7 @@ The shield button in the chat header is the only standing sign of which of these
 | warn | encrypted, but nobody has checked for a middleman — a PIN join with the code not yet compared | amber | shield with `!` |
 | ok | authenticated by the invite-link secret, or by typing the other side's code | green | shield with a tick |
 
-Tapping it opens the code to compare. A chat message also states the code once when a PIN join connects.
+Tapping it opens the code to compare. That panel is the only place the code appears: the chat itself says one word when a room connects — "Connected" — and it says it once the key is agreed, not when the channel opens, so a chat that fails the key check never claims it. The three lines that used to be written on every join (the transport, "setting up encryption…", the code) were removed on request as more than anyone read.
 
 This used to be a full-width warning banner across the chat. It was removed on request as more than the situation needed, and the shield took over its job, so a few things are now load-bearing:
 
@@ -71,7 +71,7 @@ This used to be a full-width warning banner across the chat. It was removed on r
 - **Nothing else may recolour it.** Hovering an icon button turns it white and opening the panel used to turn the shield green; both are overridden, because either would hide or misstate the state.
 - **Every change to the verification state goes through `updateKeyVerifyUi()` or `updateShield()`.** With no banner behind it, a path that skips them leaves the old colour on screen.
 
-Be honest about the trade: an icon is easier to miss than a banner. Someone who never looks at the shield will not notice a PIN join that should have been a link join.
+Be honest about the trade: an icon is easier to miss than a banner, and with the join messages gone as well it is the **only** thing that distinguishes an unverified chat. Someone who never looks at the shield will not notice a PIN join that should have been a link join.
 
 The PIN and token cannot substitute for the room secret: the server generates both, so it already knows them.
 

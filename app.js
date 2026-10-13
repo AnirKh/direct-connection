@@ -341,7 +341,16 @@ function e2eActivate(key, secure) {
   voiceCallBtn.disabled = false;
   videoCallBtn.disabled = false;
   updateKeyVerifyUi();
-  appendSys(secure ? t("sysE2eAuto") : I18N[LANG].sysE2eReady(e2eVerifyCode));
+  /* The one thing the chat says about connecting, and it says it here — once
+     the key is agreed — rather than when the channel opens. "Connected" then
+     always means the chat can be used, and a channel that fails the key check
+     never gets to claim it.
+
+     Three lines used to be written on every join: the transport, "setting up
+     encryption…", and the verification code. That was more than anyone read.
+     How the chat was verified is the shield's job now; the code is in its
+     panel. */
+  appendSys(t("sysConnected"));
 }
 
 /** Refuse to open the channel. Better a dead chat than a silently readable one. */
@@ -961,11 +970,11 @@ function setupDataChannel() {
     // sendBtn stays disabled until E2E key exchange completes (usually <100ms)
     voiceCallBtn.disabled = true;
     videoCallBtn.disabled = true;
-    appendSys(t("sysConnected"));
-    appendSys(t("e2eWaiting"));
+    /* Nothing is announced yet. The channel being open is not the chat being
+       usable — e2eActivate() says "connected" once the key is agreed. */
     e2eReady = false;
     await e2eInit();
-    // sendBtn enabled in e2eDeriveKey() once shared key is ready
+    // sendBtn enabled in e2eActivate() once the shared key is confirmed
   };
 
   dataChannel.onclose = () => {

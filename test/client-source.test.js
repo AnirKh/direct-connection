@@ -344,3 +344,42 @@ test("amber and green are the shield's, and nothing overrides them", () => {
   assert.ok(open, "the open-panel rule was not found");
   assert.ok(!/(^|[;\s])color\s*:/.test(open[1]), "an open panel must not recolour the shield");
 });
+
+/* ── What the chat says when a room connects ── */
+
+test("joining a room writes one line in the chat, and only once the key is agreed", () => {
+  /* Three lines used to appear on every join. One does now — "Connected" —
+     and where it is written matters as much as how many: said when the channel
+     opens, it would also be said about a chat that then fails the key check. */
+  const src = withoutComments(appSrc);
+  const fns = topLevelFunctions(src);
+
+  const onopen = src.match(/dataChannel\.onopen\s*=[\s\S]*?\n  \};/);
+  assert.ok(onopen, "dataChannel.onopen not found");
+  assert.ok(!onopen[0].includes("appendSys("), "the channel opening must not announce anything by itself");
+
+  const activate = fns.get("e2eActivate");
+  assert.ok(activate, "e2eActivate not found");
+  const said = Array.from(activate.matchAll(/appendSys\((.*?)\);/g)).map(m => m[1].trim());
+  assert.deepEqual(said, ['t("sysConnected")'], "e2eActivate should say exactly one thing: connected");
+
+  assert.equal((src.match(/"sysConnected"/g) || []).length, 1, "\"connected\" must have one source, or it gets said twice");
+  assert.ok(!fns.get("e2eFailClosed").includes("sysConnected"), "a chat that failed the key check must never say connected");
+});
+
+test("the verification code is not written into the chat", () => {
+  /* It lives in the shield's panel. Removed from the chat on request. */
+  const src = withoutComments(appSrc);
+  for (const call of src.matchAll(/appendSys\(([^;]*)\);/g)) {
+    assert.ok(!/e2eVerifyCode/.test(call[1]), `a system message still carries the code: ${call[0]}`);
+  }
+});
+
+test("failures are still reported in the chat", () => {
+  /* Trimming the join messages must not have taken the warnings with them. */
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  assert.ok(/appendSys\(t\("e2eMismatch"\)\)/.test(fns.get("e2eFailClosed")), "a failed key check must still say so");
+  assert.ok(/appendSys\(t\("e2eFailed"\)\)/.test(fns.get("e2eDeriveKey")), "a failed key derivation must still say so");
+  const signaling = withoutComments(appSrc).match(/async function handleSignaling\(data\)[\s\S]*?\n\}/)[0];
+  assert.ok(/appendSys\(t\("sysPeerLeft"\)\)/.test(signaling), "the other side leaving must still say so");
+});
