@@ -132,6 +132,7 @@ const I18N = {
     sessionFull:     "Өрөө дүүрсэн байна.",
     ownRoom:         "Энэ бол таны өөрийн үүсгэсэн өрөө.",
     roomExpired:     "Хэн ч нэгдээгүй тул өрөөний хугацаа дууслаа. Дахин үүсгэнэ үү.",
+    updateOnItsWay:  "Шинэчлэл удахгүй бэлэн болно. Хэдэн минутын дараа хуудсаа дахин нээнэ үү.",
     // E2E encryption
     e2eWaiting:      "Шифрлэлт тохируулж байна…",
     e2eFailed:       "Шифрлэлт амжилтгүй боллоо. Дахин холбогдоно уу.",
@@ -256,6 +257,7 @@ const I18N = {
     sessionFull:     "Session is full.",
     ownRoom:         "This is the room you created.",
     roomExpired:     "Nobody joined in time, so this room has expired. Create it again.",
+    updateOnItsWay:  "An update is on its way. Reopen the page in a few minutes.",
     // E2E encryption
     e2eWaiting:      "Setting up encryption…",
     e2eFailed:       "Encryption setup failed. Please reconnect.",

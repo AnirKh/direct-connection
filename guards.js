@@ -306,7 +306,55 @@
     return o.eventRoom === o.currentRoom;
   }
 
+  /* ══════════════════════════════════════════
+     Updates
+  ══════════════════════════════════════════ */
+
+  /** `202610131742-3fa9c1d2` — when it was built, then a hash of what was
+      built. Written by tools/sync-build.js. */
+  const BUILD_ID = /^\d{12}-[0-9a-f]{8}$/;
+
+  /**
+   * Is build `a` later than build `b`?
+   *
+   * True only for two well-formed ids. One of them arrives from the server, and
+   * something malformed must never talk a page into reloading itself.
+   */
+  function isNewerBuild(a, b) {
+    if (typeof a !== "string" || typeof b !== "string") return false;
+    if (!BUILD_ID.test(a) || !BUILD_ID.test(b)) return false;
+    return a.slice(0, 12) > b.slice(0, 12);
+  }
+
+  /**
+   * The server has said which build it is. What should this page do about it?
+   *
+   *   "none"    the same build — or the server is the older one, which happens
+   *             for a few minutes while it is still restarting after an update
+   *   "reload"  this page is out of date and nothing is going on: fetch the new one
+   *   "later"   out of date, but someone is mid-chat, mid-join or mid-sentence —
+   *             remember it and fetch the new page once they are done
+   *   "notify"  out of date, and a fresh page was already fetched without
+   *             getting a newer one — the update has not finished arriving, and
+   *             fetching again would only loop
+   *
+   * This is what makes a page that was left open notice an update. Without it
+   * a tab from before the update kept running the old code for as long as it
+   * stayed open: its owner saw a room that needs no PIN drawn as one that does,
+   * was asked for a PIN that did not exist, and could not get in.
+   *
+   * @param {{serverBuild: string, pageBuild: string, retriedFor: string|null,
+   *          recentlyReloaded: boolean, busy: boolean}} o
+   */
+  function updateAction(o) {
+    if (!o || !isNewerBuild(o.serverBuild, o.pageBuild)) return "none";
+    if (o.recentlyReloaded) return "notify";
+    if (typeof o.retriedFor === "string" && o.retriedFor.indexOf(o.serverBuild) === 0) return "notify";
+    return o.busy ? "later" : "reload";
+  }
+
   return {
+    isNewerBuild, updateAction,
     mayCaptureForCall, consentedVideo,
     mayAcceptPeerKey, shieldState,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,

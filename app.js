@@ -8,6 +8,71 @@
 
 "use strict";
 
+/* ══════════════════════════════════════════════
+   IS THIS SCRIPT RUNNING IN THE PAGE THAT WAS BUILT WITH IT?
+   ─────────────────────────────────────────────
+   A browser keeps the page and each script on separate clocks, so after an
+   update it can hold one from before and one from after. Old page plus this
+   script was reproduced: the script looked for a button the old page does not
+   have, threw while loading, and nothing on the page worked — not even the
+   parts that had not changed.
+
+   index.html loads this file as app.js?v=<build>. That stamp is the page saying
+   which build it belongs to; APP_BUILD is this script saying which build it is.
+   If they differ the page is the stale half, so fetch a fresh one and run
+   nothing — before the invite is read, before a socket opens.
+
+   This has to stand entirely on its own. It cannot use guards.js or i18n.js:
+   in a mixed page those are exactly the files that cannot be trusted to match.
+
+   APP_BUILD is written by tools/sync-build.js and by nothing else.
+══════════════════════════════════════════════ */
+const APP_BUILD = "202610130821-3420669c";
+
+function refuseToRunInAStalePage() {
+  let builtFor = null;
+  try { builtFor = new URL(document.currentScript.src).searchParams.get("v"); }
+  catch (_) { /* no script address to read — nothing to compare */ }
+  if (!builtFor || builtFor === APP_BUILD) return;
+
+  /* `?r=` marks a page we already went to fetch. The address is new to every
+     cache between here and the server, so it comes back current — unless the
+     update has not finished arriving, in which case asking again would only
+     loop. Say so instead. The invite, if there is one, rides along in the
+     fragment and is still never sent anywhere. */
+  const alreadyFetched = String(new URLSearchParams(location.search).get("r") || "").startsWith(APP_BUILD);
+  if (alreadyFetched) showStalePageNotice();
+  else location.replace(`${location.pathname}?r=${encodeURIComponent(APP_BUILD)}${location.hash}`);
+
+  throw new Error(`Stale page: built for ${builtFor}, but this script is ${APP_BUILD}. Not starting.`);
+}
+
+/** Shown only when fetching a fresh page did not produce one. Plain DOM and
+    both languages spelled out: nothing else can be assumed to have loaded. */
+function showStalePageNotice() {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;background:#15151a;color:#e8e5de;" +
+    "min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+    "gap:14px;text-align:center;padding:24px;box-sizing:border-box";
+  const mn = document.createElement("p");
+  mn.textContent = "Шинэчлэл татагдаж байна. Түр хүлээгээд дахин ачаална уу.";
+  mn.style.cssText = "margin:0;font-size:16px;font-weight:600";
+  const en = document.createElement("p");
+  en.textContent = "An update is still arriving. Wait a moment, then reload.";
+  en.style.cssText = "margin:0;font-size:14px;color:#9b98a4";
+  const again = document.createElement("a");
+  /* A new address each time, so a retry is never answered from a cache that
+     stored the stale page under the last one. */
+  again.href = `${location.pathname}?r=${encodeURIComponent(APP_BUILD)}.${Date.now()}${location.hash}`;
+  again.textContent = "Дахин ачаалах / Reload";
+  again.style.cssText = "margin-top:6px;padding:10px 18px;border-radius:8px;background:#7fa8d4;color:#12121a;text-decoration:none;font-size:14px";
+  wrap.append(mn, en, again);
+  document.body.replaceChildren(wrap);
+}
+
+refuseToRunInAStalePage();
+
 /* Wire-protocol primitives — invite links, key derivation, chunk framing.
    See protocol.js; it is loaded before this file and covered by test/. */
 const DC = window.DCProtocol;
@@ -686,6 +751,10 @@ function connectWebSocket() {
         if (createInfo.querySelector(".server-ready-status")) createInfo.textContent = "";
       }, 2000);
     }
+    /* First thing said on every connection, ahead of the list request: it is
+       how the server tells a current page from one that predates this
+       handshake and so cannot update itself. */
+    wsSend({ type: "hello", build: APP_BUILD });
     requestSessionList();
     checkAutoJoin();
     if (!_keepAliveInterval) {
@@ -1050,6 +1119,47 @@ function setupDataChannel() {
    SIGNALING HANDLER
 ══════════════════════════════════════════════ */
 
+/* ── Noticing an update ──────────────────────
+   The server names its build on every connection, and every page reconnects
+   within seconds of the server restarting for an update. So a page that was
+   left open finds out it is old almost as soon as it becomes old — and fetches
+   the new one, provided nobody is in the middle of anything. */
+
+let updatePending     = null;    // a newer build to fetch once this page is idle
+let updateNoticeShown = false;
+
+/** In a room, joining one, or part-way through typing something — any of which
+    a reload would throw away. */
+function pageIsBusy() {
+  return Boolean(currentSession) || isConnecting || pinJoinInFlight || Boolean(listJoinId) ||
+         sessionIdInput.value.trim() !== "" || leaveMessage.value.trim() !== "" || senderName.value.trim() !== "";
+}
+
+/** Loads the page again under an address no cache has seen, so what comes back
+    is current. The same trick as refuseToRunInAStalePage(). */
+function fetchNewPage(build) {
+  try { sessionStorage.setItem("dc-self-reload", String(Date.now())); } catch (_) { /* storage off — the ?r= marker still stops a loop */ }
+  location.replace(`${location.pathname}?r=${encodeURIComponent(build)}${location.hash}`);
+}
+
+function handleServerBuild(serverBuild) {
+  let recentlyReloaded = false;
+  try { recentlyReloaded = Date.now() - Number(sessionStorage.getItem("dc-self-reload") || 0) < 60_000; } catch (_) {}
+
+  const action = G.updateAction({
+    serverBuild, pageBuild: APP_BUILD,
+    retriedFor: new URLSearchParams(location.search).get("r"),
+    recentlyReloaded, busy: pageIsBusy()
+  });
+
+  if (action === "reload") fetchNewPage(serverBuild);
+  else if (action === "later") updatePending = serverBuild;
+  else if (action === "notify" && !updateNoticeShown) {
+    updateNoticeShown = true;
+    showToast(t("updateOnItsWay"), "info");
+  }
+}
+
 /** Is this server message about the room on screen? See mayApplyRoomEvent. */
 function roomEventIsOurs(data) {
   return G.mayApplyRoomEvent({
@@ -1060,6 +1170,10 @@ function roomEventIsOurs(data) {
 
 async function handleSignaling(data) {
   switch (data.type) {
+
+    case "hello":
+      handleServerBuild(data.build);
+      break;
 
     case "session-list":
       renderSessionList(data.sessions);
@@ -1342,6 +1456,9 @@ leaveBtn.onclick = () => {
   setCreateButtons(false);
   sessionIdInput.value = "";
   requestSessionList();
+  /* An update arrived while the chat was going. This is the moment it stops
+     costing anything to take it. */
+  if (updatePending) fetchNewPage(updatePending);
 };
 
 /* ══════════════════════════════════════════════

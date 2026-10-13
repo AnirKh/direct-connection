@@ -438,3 +438,56 @@ test("a refused join is routed by the guard", () => {
   assert.ok(refused[0].includes("joinRefusalTarget("), "the pin-error case must ask the guard where the reason goes");
   assert.ok(!/if \(_isAutoJoin\b/.test(refused[0]), "routing on how the page was opened is the bug the guard replaced");
 });
+
+/* ── Noticing an update ───────────────────────
+   A page left open across an update kept running the old code. These check
+   the pieces that let it find out and act — the decisions themselves are in
+   build.test.js. */
+
+test("a page introduces itself before it asks for anything", () => {
+  /* The server tells an up-to-date page from an ancient one by whether hello
+     came before the list request. Sent the other way round, every current page
+     would be told to reload on every connection. */
+  const src = withoutComments(appSrc);
+  const onopen = src.match(/ws\.onopen\s*=[\s\S]*?\n  \};/);
+  assert.ok(onopen, "ws.onopen not found");
+  const hello = onopen[0].search(/wsSend\(\{\s*type:\s*"hello",\s*build:\s*APP_BUILD\s*\}\)/);
+  const list  = onopen[0].indexOf("requestSessionList(");
+  assert.ok(hello > -1, "ws.onopen must send hello with the page's build");
+  assert.ok(list > -1 && hello < list, "hello must go out before the room list is requested");
+});
+
+test("the server's build is put to the guard, not acted on directly", () => {
+  const src = withoutComments(appSrc);
+  const signaling = src.match(/async function handleSignaling\(data\)[\s\S]*?\n\}/)[0];
+  assert.match(signaling, /case "hello":\s*handleServerBuild\(data\.build\);/);
+
+  const fn = topLevelFunctions(src).get("handleServerBuild");
+  assert.ok(fn, "handleServerBuild not found");
+  assert.ok(fn.includes("updateAction("), "the decision to reload belongs to guards.js");
+  assert.ok(fn.includes("pageIsBusy()"), "it must know whether a reload would throw something away");
+  assert.ok(fn.indexOf("updateAction(") < fn.indexOf("fetchNewPage("), "decide first, then act");
+});
+
+test("a reload never happens in the middle of a chat, a join, or a sentence", () => {
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("pageIsBusy");
+  assert.ok(fn, "pageIsBusy not found");
+  for (const sign of ["currentSession", "isConnecting", "pinJoinInFlight", "listJoinId", "leaveMessage.value", "sessionIdInput.value"]) {
+    assert.ok(fn.includes(sign), `pageIsBusy must look at ${sign}`);
+  }
+});
+
+test("an update that arrived during a chat is taken on leaving it", () => {
+  const leave = withoutComments(appSrc).match(/leaveBtn\.onclick\s*=[\s\S]*?\n\};/);
+  assert.ok(leave, "the leave handler was not found");
+  assert.match(leave[0], /if \(updatePending\) fetchNewPage\(updatePending\);/);
+});
+
+test("a fresh page is always fetched under an address no cache has seen", () => {
+  /* A plain reload can be answered from the same cache that held the stale
+     page. The invite, if any, must ride along in the fragment and nowhere else. */
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("fetchNewPage");
+  assert.ok(fn, "fetchNewPage not found");
+  assert.match(fn, /location\.replace\(`\$\{location\.pathname\}\?r=\$\{encodeURIComponent\(build\)\}\$\{location\.hash\}`\)/);
+  assert.ok(!/location\.reload\(/.test(withoutComments(appSrc)), "location.reload() can hand back the cached page — use fetchNewPage()");
+});

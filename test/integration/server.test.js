@@ -674,3 +674,58 @@ test("an open room lets in someone who typed a PIN anyway", async () => {
   guest.send_({ type: "join-session", sessionId: "open-with-pin", pin: "123456" });
   assert.ok(await waitFor(guest, "session-joined"), "a PIN sent to an open room should be ignored, not choked on");
 });
+
+/* ══════════════════════════════════════════
+   Telling pages which build the server is
+══════════════════════════════════════════ */
+
+test("the server names its build the moment a socket connects", async () => {
+  /* Every open page reconnects a few seconds after the server restarts for an
+     update, so this is how a page left open learns that it is old. */
+  const ws = await client();
+  const hello = await waitFor(ws, "hello", 2000);
+  assert.ok(hello, "no hello on connecting");
+  assert.match(hello.build, /^\d{12}-[0-9a-f]{8}$/);
+
+  const fs = require("node:fs");
+  const inApp = fs.readFileSync(path.join(__dirname, "..", "..", "app.js"), "utf8").match(/^const APP_BUILD = "([^"]+)";/m)[1];
+  assert.equal(hello.build, inApp, "the server must announce the build of the client it ships");
+  assert.equal(ws.inbox[0].type, "hello", "it should be the first thing said");
+});
+
+test("a page too old to update itself is told to reload", async () => {
+  /* Pages from before the handshake cannot act on a build id, but they do show
+     the text of an error. They ask for the room list the moment they connect,
+     without saying hello — which is how the server recognises them. */
+  const oldPage = await client();
+  oldPage.send_({ type: "list-sessions" });
+  assert.ok(await waitFor(oldPage, "session-list"), "it must still get its list");
+  const notice = await waitFor(oldPage, "error", 2000);
+  assert.ok(notice, "an old page was not told to reload");
+  assert.match(notice.message, /reopen|reload/i);
+
+  /* Once per connection, not on every refresh of the list. */
+  oldPage.send_({ type: "list-sessions" });
+  oldPage.send_({ type: "list-sessions" });
+  await sleep(400);
+  assert.equal(oldPage.inbox.filter(m => m.type === "error").length, 1, "the notice should not repeat");
+});
+
+test("a current page is not nagged", async () => {
+  const page = await client();
+  page.send_({ type: "hello", build: "202610131742-3fa9c1d2" });
+  page.send_({ type: "list-sessions" });
+  assert.ok(await waitFor(page, "session-list"));
+  await sleep(400);
+  assert.equal(page.inbox.filter(m => m.type === "error").length, 0, "a page that said hello must not get the reload notice");
+});
+
+test("a hello with nonsense in it is harmless", async () => {
+  const live = await client();
+  const ws = await client();
+  for (const build of [null, 42, {}, [], "x".repeat(5000), "<script>"]) ws.send_({ type: "hello", build });
+  ws.send_({ type: "list-sessions" });
+  assert.ok(await waitFor(ws, "session-list"), "the socket should still work");
+  assert.ok(await stillServing());
+  assert.equal(live.readyState, WebSocket.OPEN);
+});

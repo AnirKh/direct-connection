@@ -11,7 +11,9 @@
     "test": "node --test \"test/*.test.js\" \"test/integration/*.test.js\"",
     "test:fast": "node --test \"test/*.test.js\"",
     "sync-csp": "node tools/sync-csp.js",
-    "check-csp": "node tools/sync-csp.js --check"
+    "check-csp": "node tools/sync-csp.js --check",
+    "sync-build": "node tools/sync-build.js",
+    "check-build": "node tools/sync-build.js --check"
   },
   "dependencies": {
     "express": "^4.18.2",

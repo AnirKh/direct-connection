@@ -18,6 +18,15 @@ if ! npm run --silent check-csp; then
   exit 1
 fi
 
+if ! npm run --silent check-build; then
+  echo ""
+  echo "pre-commit: a client file changed but the build stamp did not."
+  echo "            The stamp is what stops a browser running a new page with"
+  echo "            an old script, or the other way round."
+  echo "            Fix with:  npm run sync-build"
+  exit 1
+fi
+
 if ! npm run --silent test:fast; then
   echo ""
   echo "pre-commit: fast tests failed."

@@ -70,6 +70,35 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.
 const API_CLIENT_HEADER = "x-dc-client";
 const API_CLIENT_VALUE  = "1";
 
+/* Which build of the client this server shipped with. Read out of app.js, which
+   is where tools/sync-build.js writes it, so there is one copy and no way for
+   the two to disagree. Every socket is told this on connecting; a page that
+   finds it is older fetches the new one. Null if app.js has no well-formed id —
+   then nothing is announced and nothing reloads. */
+const CLIENT_BUILD = (() => {
+  try {
+    const src = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+    return (src.match(/^const APP_BUILD = "(\d{12}-[0-9a-f]{8})";/m) || [])[1] || null;
+  } catch (_) {
+    return null;
+  }
+})();
+
+/* For pages older than the handshake above. They cannot update themselves and
+   do not know to listen for a build id — but they do show the text of any
+   "error" the server sends, so that is how they get told. Sent once per
+   connection, to a socket that asks for the room list without having said
+   hello first, which every such page does the moment it connects. Safe to
+   delete once those pages are gone; none survives being closed. */
+const RELOAD_NOTICE =
+  "Шинэ хувилбар гарлаа — хуудсаа хааж дахин нээнэ үү. · A new version is out — please close and reopen this page.";
+
+function nudgePageTooOldToUpdateItself(ws) {
+  if (ws.saidHello || ws.nudged) return;
+  ws.nudged = true;
+  ws.send(JSON.stringify({ type: "error", message: RELOAD_NOTICE }));
+}
+
 /* Built once — ALLOWED_ORIGINS cannot change while the process is running. */
 const CSP_HEADER = buildCsp(ALLOWED_ORIGINS, { asHeader: true });
 
@@ -547,6 +576,11 @@ wss.on("connection", (ws, req) => {
   ws.on("pong", () => { ws.isAlive = true; });
   console.log(`Client connected ${ipLogId(clientIp)} | sessions: ${sessions.size}`);
 
+  /* Said first, on every connection — including the reconnect every open page
+     makes a few seconds after this process restarts for an update. That is the
+     moment a page left open finds out it is old. */
+  if (CLIENT_BUILD) ws.send(JSON.stringify({ type: "hello", build: CLIENT_BUILD }));
+
   ws.on("close", () => { console.log(`Client disconnected ${ipLogId(clientIp)}`); cleanupClient(ws); });
   ws.on("error", (e) => { console.error("WS error:", e); cleanupClient(ws); });
 
@@ -580,8 +614,15 @@ wss.on("connection", (ws, req) => {
           break;
         }
         ws.send(JSON.stringify({ type: "session-list", sessions: publicSessions() }));
+        nudgePageTooOldToUpdateItself(ws);
         break;
       }
+
+      /* A current page introducing itself. The build it names is not used for
+         anything — saying hello at all is the signal. */
+      case "hello":
+        ws.saidHello = true;
+        break;
 
       /* ── Create session ─────────────────────── */
       case "create-session": {

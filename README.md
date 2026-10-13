@@ -4,6 +4,7 @@ AnirKh.github.io/direct-connection
 
 | File | What it holds |
 | --- | --- |
+| `tools/sync-build.js` | Stamps the client with a build id so a browser cannot run files from two versions. **Run `npm run sync-build` after changing any file below that a browser loads.** See "One version in the browser at a time". |
 | `index.html` | Markup. Loads `framebust.js` first, then `protocol.js`, `connstats.js`, `guards.js`, `i18n.js`, `app.js` **in that order** — `app.js` reads `DCProtocol`, `DCStats`, `DCGuards`, `LANG` and `I18N` while parsing. |
 | `protocol.js` | Pure wire-protocol logic: invite links, ECDH→HKDF key derivation, verification code, binary chunk framing. No DOM, no sockets, no state — loaded as `window.DCProtocol` in the browser and `require`d by the tests. |
 | `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
@@ -196,6 +197,32 @@ Three wrong attempts lock an address out for 30 seconds; fifteen against one roo
 
 Because nothing limits how often a token may be tried, both secrets are compared in constant time (`secretMatches`).
 
+## One version in the browser at a time
+
+**After changing any file a browser loads, run `npm run sync-build`.** The pre-commit hook refuses the commit otherwise.
+
+This exists because of a bug that reached users. `index.html` loaded every script as `app.js?v=202608261800` — a stamp written once and never changed. GitHub Pages lets a browser keep each file for ten minutes, each on its own clock, and a tab left open keeps what it has for as long as it stays open. So after an update, three different things went wrong, all reproduced with a real browser cache:
+
+| What the browser had | What the user saw |
+| --- | --- |
+| new page, old script | the new button is on screen and does nothing |
+| old page, new script | the script reaches for an element that is not there, throws while loading, and **nothing** on the page works |
+| a tab opened before the update | old code against the new server — a room with no PIN was drawn as one that needs one, asked for a PIN that did not exist, and nobody could get in |
+
+It was reported as "the open-room button does not work and the other person cannot enter", and it would have happened again on the next change that added anything to the page.
+
+Three pieces, one for each row:
+
+1. **The stamp changes with the files.** `tools/sync-build.js` writes a build id — `202610131742-3fa9c1d2`, the time and a hash of every client file — into `const APP_BUILD` in `app.js` and onto every local file `index.html` loads. A new page therefore asks for addresses no browser has cached, and cannot be handed an old script.
+2. **`app.js` checks the page it finds itself in.** Before it reads the invite or opens a socket, `refuseToRunInAStalePage()` compares the stamp it was loaded with against `APP_BUILD`. If they differ the page is the stale half: it fetches a fresh one and runs nothing. This cannot use `guards.js` or `i18n.js` — in a mixed page those are exactly the files that cannot be trusted to match.
+3. **The server says which build it is.** Every socket is sent `hello` with the build on connecting, and every open page reconnects within seconds of the server restarting for an update. `updateAction` in `guards.js` decides: an idle page fetches the new build; one in a chat, joining, or part-way through typing waits until that is over; one that already fetched for this build says so rather than looping.
+
+A fresh page is always fetched as `?r=<build>` — an address no cache has seen — and never by a plain reload, which can be answered from the same cache that held the stale copy. The invite rides along in the fragment, so it still never reaches a server.
+
+Pages that predate all this cannot update themselves. The server recognises them — they ask for the room list without saying `hello` first — and sends the one thing they do display, an error message, asking for the page to be closed and reopened. That bridge can be deleted once those pages are gone; none survives being closed.
+
+The server reads the id out of `app.js` rather than holding a second copy, and `npm run check-build` fails if the stamp no longer describes the files.
+
 ## Phone keyboards
 
 On a phone the message box used to sit **underneath the keyboard** while you typed into it. Two causes, and both had to go:
@@ -232,6 +259,7 @@ Node's built-in runner, no dependencies.
 - `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and every combination of `joinVerdict`'s seven inputs. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.
 - `test/connstats.test.js` — which route ICE chose, link quality, byte totals, with a plain Map standing in for the stats report.
+- `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
@@ -316,7 +344,7 @@ git config core.hooksPath .githooks
 
 | Hook | Runs | Takes |
 | --- | --- | --- |
-| `pre-commit` | `check-csp` + `npm run test:fast` | ~0.9s |
+| `pre-commit` | `check-csp` + `check-build` + `npm run test:fast` | ~1s |
 | `pre-push` | `npm test` (adds the server integration tests) | ~7s |
 
 The split keeps committing instant — a hook slow enough to be annoying is a hook you start bypassing. The slower half runs before code leaves the machine, which is the last moment a failure is free: pushing redeploys Render and republishes GitHub Pages.
