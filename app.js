@@ -126,6 +126,8 @@ const callRequestIcon  = document.getElementById("callRequestIcon");
 const callAcceptBtn    = document.getElementById("callAcceptBtn");
 const callDeclineBtn   = document.getElementById("callDeclineBtn");
 const keyVerifyDropdown = document.getElementById("keyVerifyDropdown");
+const keyVerifyBtn   = document.getElementById("keyVerifyBtn");
+const keyVerifyIcon  = document.getElementById("keyVerifyIcon");
 const keyVerifyCode  = document.getElementById("keyVerifyCode");
 const keyVerifyInput = document.getElementById("keyVerifyInput");
 const keyVerifyStatus= document.getElementById("keyVerifyStatus");
@@ -2013,18 +2015,36 @@ function updateLocalVideoAspect() {
 const makeSharedVerificationCode = DC.makeSharedVerificationCode;
 const normalizeVerifyCode        = DC.normalizeVerifyCode;
 
-/** Warn only when the link is up but unauthenticated — precisely the case where
-    a man-in-the-middle would otherwise be invisible. */
-function updateVerifyBanner() {
-  const banner = document.getElementById("verifyBanner");
-  if (!banner) return;
-  const nag = e2eReady && !e2eSecureMode && !e2eVerified;
-  banner.textContent = nag ? `⚠️ ${t("verifyBannerWarn")}` : "";
-  banner.classList.toggle("hidden", !nag);
+/* Each state changes three things together — colour (the class), glyph and
+   label — so none of them has to carry the meaning alone: colour is no use to
+   someone who cannot tell amber from green, and a tick drawn in amber would
+   say "checked" about a chat nobody has checked. */
+const SHIELD_LOOK = {
+  idle: { icon: "shield",             label: () => t("verifyKeys") },
+  warn: { icon: "shield-exclamation", label: () => t("verifyWarn") },
+  ok:   { icon: "shield-check",       label: () => t(e2eSecureMode ? "verifyAuto" : "verifyOk") }
+};
+
+/** Redraws the shield in the header. Amber is the case that matters: the link
+    is up but unauthenticated — precisely where a man-in-the-middle would
+    otherwise be invisible. This used to be a banner across the whole chat; the
+    shield now does that job on its own, so every change to the verification
+    state has to come through here. */
+function updateShield() {
+  if (!keyVerifyDropdown || !keyVerifyBtn || !keyVerifyIcon) return;
+  const state = G.shieldState({ ready: e2eReady, secure: e2eSecureMode, verified: e2eVerified });
+  for (const name of Object.keys(SHIELD_LOOK)) {
+    keyVerifyDropdown.classList.toggle(`verify-${name}`, name === state);
+  }
+  const look  = SHIELD_LOOK[state];
+  const label = look.label();
+  keyVerifyIcon.className = `ti ti-${look.icon}`;
+  keyVerifyBtn.title = label;
+  keyVerifyBtn.setAttribute("aria-label", label);
 }
 
 function updateKeyVerifyUi() {
-  updateVerifyBanner();
+  updateShield();
   if (!keyVerifyCode || !keyVerifyInput || !keyVerifyStatus) return;
   keyVerifyCode.textContent = e2eVerifyCode || "----";
   if (!e2eVerifyCode) keyVerifyInput.value = "";
@@ -2050,7 +2070,7 @@ if (keyVerifyInput) {
       : (typed ? t("verifyMismatch") : t("verifyPending"));
     keyVerifyStatus.classList.toggle("ok", e2eVerified);
     keyVerifyStatus.classList.toggle("bad", Boolean(typed && !e2eVerified));
-    updateVerifyBanner();
+    updateShield();
   });
 }
 

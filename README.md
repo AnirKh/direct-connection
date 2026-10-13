@@ -7,7 +7,7 @@ AnirKh.github.io/direct-connection
 | `index.html` | Markup. Loads `framebust.js` first, then `protocol.js`, `connstats.js`, `guards.js`, `i18n.js`, `app.js` **in that order** — `app.js` reads `DCProtocol`, `DCStats`, `DCGuards`, `LANG` and `I18N` while parsing. |
 | `protocol.js` | Pure wire-protocol logic: invite links, ECDH→HKDF key derivation, verification code, binary chunk framing. No DOM, no sockets, no state — loaded as `window.DCProtocol` in the browser and `require`d by the tests. |
 | `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
-| `guards.js` | The safety decisions as pure functions — may the camera open, may this message be believed, may the microphone open, may this voice note be sent, which room is the server talking about. See below. |
+| `guards.js` | The safety decisions as pure functions — may the camera open, may this message be believed, may the microphone open, may this voice note be sent, which room is the server talking about, what the verification shield says. See below. |
 | `connstats.js` | Everything derived from an `RTCStatsReport`: which route ICE chose, direct or relayed, link quality, byte totals. Pure. |
 | `app.js` | Everything stateful and everything with an effect: WebRTC, data channel, calls, chat UI. Asks the two modules above rather than deciding for itself. |
 | `csp.js` | The Content-Security-Policy, defined once (see below). |
@@ -49,9 +49,29 @@ Breaking that rule would remove the protection while everything carried on worki
 
 ### PIN joins have no secret
 
-Someone joining by typing the 6-digit PIN never received a link, so there is nothing to mix in. Those connections fall back to plain ECDH plus the manual verification code, and the UI shows a standing warning until the code is confirmed.
+Someone joining by typing the 6-digit PIN never received a link, so there is nothing to mix in. Those connections fall back to plain ECDH plus the manual verification code, and the shield in the chat header stays amber until the code is confirmed.
 
-The host cannot know in advance which way a guest will arrive, so it derives **both** candidate keys and adopts whichever one opens the guest's confirmation packet. That is why an attacker forcing the weaker path is visible — the warning banner appears — rather than silent.
+The host cannot know in advance which way a guest will arrive, so it derives **both** candidate keys and adopts whichever one opens the guest's confirmation packet. That is why an attacker forcing the weaker path is visible — the shield turns amber instead of green — rather than silent.
+
+### The shield
+
+The shield button in the chat header is the only standing sign of which of these a chat is in. `shieldState` in `guards.js` decides; `updateShield()` in `app.js` draws it.
+
+| State | When | Colour | Glyph |
+| --- | --- | --- | --- |
+| idle | no key agreed yet | grey | plain shield |
+| warn | encrypted, but nobody has checked for a middleman — a PIN join with the code not yet compared | amber | shield with `!` |
+| ok | authenticated by the invite-link secret, or by typing the other side's code | green | shield with a tick |
+
+Tapping it opens the code to compare. A chat message also states the code once when a PIN join connects.
+
+This used to be a full-width warning banner across the chat. It was removed on request as more than the situation needed, and the shield took over its job, so a few things are now load-bearing:
+
+- **Colour is never the only difference.** Each state swaps the glyph and the `aria-label` with it. Colour is no use to someone who cannot tell amber from green, and a tick drawn in amber would say "checked" about a chat nobody checked.
+- **Nothing else may recolour it.** Hovering an icon button turns it white and opening the panel used to turn the shield green; both are overridden, because either would hide or misstate the state.
+- **Every change to the verification state goes through `updateKeyVerifyUi()` or `updateShield()`.** With no banner behind it, a path that skips them leaves the old colour on screen.
+
+Be honest about the trade: an icon is easier to miss than a banner. Someone who never looks at the shield will not notice a PIN join that should have been a link join.
 
 The PIN and token cannot substitute for the room secret: the server generates both, so it already knows them.
 
@@ -229,7 +249,7 @@ Measured against a headerless static server standing in for Pages, framed in a s
 
 ### Icon font
 
-`index.html` loads Tabler icons from jsDelivr with a Subresource Integrity hash. The browser refuses the file unless it hashes to exactly that value, so a compromised or hijacked CDN cannot substitute a stylesheet — which matters because CSS alone can hide `#verifyBanner`, the warning that says nobody has verified the connection.
+`index.html` loads Tabler icons from jsDelivr with a Subresource Integrity hash. The browser refuses the file unless it hashes to exactly that value, so a compromised or hijacked CDN cannot substitute a stylesheet — which matters because CSS alone can turn the amber shield green, and that shield is the only sign that nobody has verified the connection.
 
 **Bumping the version means recomputing the hash**, or every icon silently disappears:
 

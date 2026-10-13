@@ -30,6 +30,12 @@
     mayApplyRoomEvent     "the other side left" named no room, so one room
                           expiring tore down the chat in another
 
+  One is here without a bug behind it, because it is the thing users are asked
+  to trust:
+
+    shieldState           what the shield in the chat header says — nothing
+                          yet, encrypted but unchecked, or verified
+
   Extracting them is the point: a rule that can be called with plain values can
   be tested for every combination, including the ones nobody thinks to try.
   app.js keeps the effects — opening the camera, drawing bubbles — and asks
@@ -95,6 +101,30 @@
    */
   function mayAcceptPeerKey(o) {
     return Boolean(o) && !o.peerKeySeen;
+  }
+
+  /**
+   * What the shield in the chat header should say.
+   *
+   *   "idle"  no key agreed yet — there is nothing to vouch for
+   *   "warn"  encrypted, but nobody has checked for a middleman: a PIN join
+   *           whose verification code has not been compared
+   *   "ok"    authenticated — by the invite-link secret, or by the two people
+   *           comparing the code
+   *
+   * The shield is the only standing sign of which of these a chat is in. It
+   * replaced a full-width warning banner, so it carries that banner's whole
+   * job: a PIN join is the path a middleman would force, and amber is how the
+   * user finds out it happened.
+   *
+   * Green therefore has exactly two ways in, and both need a key to exist
+   * first. Nothing merely truthy counts.
+   *
+   * @param {{ready: boolean, secure: boolean, verified: boolean}} o
+   */
+  function shieldState(o) {
+    if (!o || o.ready !== true) return "idle";
+    return (o.secure === true || o.verified === true) ? "ok" : "warn";
   }
 
   /* ══════════════════════════════════════════
@@ -251,7 +281,7 @@
 
   return {
     mayCaptureForCall, consentedVideo,
-    mayAcceptPeerKey,
+    mayAcceptPeerKey, shieldState,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin,

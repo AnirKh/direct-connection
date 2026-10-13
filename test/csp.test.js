@@ -112,10 +112,11 @@ test("index.html does load something from a CDN", () => {
 });
 
 test("every third-party asset is pinned with an integrity hash", () => {
-  /* style-src allows the CDN, and CSS alone can hide an element — a substituted
-     stylesheet could suppress #verifyBanner, which is the only thing telling the
-     user nobody has verified the connection. crossorigin is required or the
-     browser skips the integrity check entirely rather than failing.
+  /* style-src allows the CDN, and CSS alone can restyle an element — a
+     substituted stylesheet could turn the amber shield green, which is the only
+     thing telling the user nobody has verified the connection. crossorigin is
+     required or the browser skips the integrity check entirely rather than
+     failing.
 
      Written against every external tag rather than the one URL we know about,
      so adding a second CDN link without a hash fails here. */

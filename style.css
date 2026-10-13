@@ -199,7 +199,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 #leaveBtn { color: var(--muted); font-size: 20px; }
 
 .key-verify {
-  position: relative;
+  /* Not positioned on purpose — the panel below hangs from .chat-header. */
   flex-shrink: 0;
 }
 .key-verify summary {
@@ -208,16 +208,32 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .key-verify summary::-webkit-details-marker {
   display: none;
 }
+/* The shield's colour is its message, and the only standing one: amber means
+   encrypted but nobody has checked for a middleman, green means verified.
+   updateShield() in app.js sets the class and swaps the glyph with it, so the
+   state does not rest on colour alone.
+
+   `summary.icon-btn` is there for weight: .icon-btn:hover turns an icon
+   white, and a shield that goes white under the pointer has stopped saying
+   which state it is in. */
+.key-verify.verify-warn summary.icon-btn { color: var(--orange); }
+.key-verify.verify-ok   summary.icon-btn { color: var(--green); }
+
+/* Open is a background only. It used to turn the shield green as well, which
+   would now read as "verified" on a chat nobody has checked. */
 .key-verify[open] summary {
-  color: var(--green);
-  background: rgba(111,191,139,0.12);
+  background: rgba(255,255,255,0.07);
 }
 .key-verify-panel {
+  /* Hangs from the header's right edge, not from the shield. The shield is the
+     first of three buttons, so a 300px panel lined up with its right edge ran
+     off the left side of a phone screen and lost the start of every line —
+     including the code people are asked to compare. */
   position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
+  top: calc(100% + 6px);
+  right: calc(8px + var(--safe-right));
   z-index: 300;
-  width: min(300px, calc(100vw - 28px));
+  width: min(300px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
   padding: 12px;
   background: var(--card);
   border: 1px solid var(--border);
@@ -329,6 +345,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── CHAT HEADER ───────────────────────────── */
 .chat-header {
+  position: relative;   /* the verification panel is placed against this */
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px;
   padding-top: calc(8px + var(--safe-top));
@@ -375,13 +392,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .chat-header-actions { display: flex; gap: 2px; flex-shrink: 0; }
 
-/* ── VERIFICATION WARNING ──────────────────── */
-.verify-banner {
-  background: rgba(229,72,77,0.14);
-  border-bottom: 1px solid rgba(229,72,77,0.34);
-  color: var(--danger-text); font-size: 12px; line-height: 1.4;
-  padding: 7px 14px; flex-shrink: 0; text-align: center;
-}
 
 /* ── STATS BAR ─────────────────────────────── */
 .stats-bar {

@@ -326,3 +326,60 @@ test("nothing is acted on when no room is on screen", () => {
   assert.equal(G.mayApplyRoomEvent({ eventRoom: undefined, currentRoom: null }), false);
   assert.equal(G.mayApplyRoomEvent(undefined), false);
 });
+
+/* ══════════════════════════════════════════
+   shieldState — what the header shield says
+══════════════════════════════════════════ */
+
+const chat = o => Object.assign({ ready: true, secure: false, verified: false }, o);
+
+test("the shield says nothing until a key has been agreed", () => {
+  assert.equal(G.shieldState(chat({ ready: false })), "idle");
+});
+
+test("a PIN join nobody has verified shows the warning", () => {
+  /* This is the state the full-width banner used to announce, and the one a
+     middleman forcing the weaker path would put the chat in. The shield is now
+     the only thing that says so. */
+  assert.equal(G.shieldState(chat({})), "warn");
+});
+
+test("comparing the code turns the shield green", () => {
+  assert.equal(G.shieldState(chat({ verified: true })), "ok");
+});
+
+test("an invite-link join is green without anyone typing a code", () => {
+  assert.equal(G.shieldState(chat({ secure: true })), "ok");
+  assert.equal(G.shieldState(chat({ secure: true, verified: true })), "ok");
+});
+
+test("the shield is never green before a key exists", () => {
+  /* Stale flags from the previous chat must not vouch for the next one. */
+  assert.equal(G.shieldState(chat({ ready: false, verified: true })), "idle");
+  assert.equal(G.shieldState(chat({ ready: false, secure: true })), "idle");
+  assert.equal(G.shieldState(chat({ ready: false, secure: true, verified: true })), "idle");
+});
+
+test("green has exactly two ways in, across every combination", () => {
+  for (let bits = 0; bits < 8; bits++) {
+    const o = { ready: Boolean(bits & 1), secure: Boolean(bits & 2), verified: Boolean(bits & 4) };
+    const state = G.shieldState(o);
+    assert.ok(["idle", "warn", "ok"].includes(state), `unexpected state ${state}`);
+    assert.equal(state === "ok", o.ready && (o.secure || o.verified), `wrong for ${JSON.stringify(o)}`);
+    assert.equal(state === "idle", !o.ready, `wrong for ${JSON.stringify(o)}`);
+  }
+});
+
+test("nothing merely truthy turns the shield green", () => {
+  for (const value of [1, "true", "yes", {}, []]) {
+    assert.equal(G.shieldState({ ready: true, secure: value, verified: false }), "warn", `secure=${JSON.stringify(value)}`);
+    assert.equal(G.shieldState({ ready: true, secure: false, verified: value }), "warn", `verified=${JSON.stringify(value)}`);
+    assert.equal(G.shieldState({ ready: value, secure: true, verified: true }), "idle", `ready=${JSON.stringify(value)}`);
+  }
+});
+
+test("a missing argument is not a verified chat", () => {
+  assert.equal(G.shieldState(undefined), "idle");
+  assert.equal(G.shieldState(null), "idle");
+  assert.equal(G.shieldState({}), "idle");
+});

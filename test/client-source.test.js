@@ -271,3 +271,76 @@ test("server news about a room is checked against the room on screen", () => {
   const helper = topLevelFunctions(withoutComments(appSrc)).get("roomEventIsOurs");
   assert.ok(helper && helper.includes("mayApplyRoomEvent("), "roomEventIsOurs must ask the guard");
 });
+
+/* ── The shield ──────────────────────────────
+   The shield in the chat header is the only standing sign of whether anyone
+   has checked a chat for a middleman. It replaced a full-width banner, so the
+   checks below are about it not going quiet or lying. */
+
+const indexSrc = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+const styleSrc = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "");
+
+test("the shield's state comes from the guard, not from app.js", () => {
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("updateShield");
+  assert.ok(fn, "updateShield not found");
+  assert.ok(fn.includes("shieldState("), "updateShield must ask guards.js what the shield should say");
+  for (const input of ["e2eReady", "e2eSecureMode", "e2eVerified"]) {
+    assert.ok(fn.includes(input), `updateShield must pass ${input} to the guard`);
+  }
+});
+
+test("every change to the verification state redraws the shield", () => {
+  /* There is no banner behind it any more. A path that changes the state
+     without coming through here leaves the old colour on screen. */
+  const src = withoutComments(appSrc);
+  const fns = topLevelFunctions(src);
+  assert.ok(fns.get("updateKeyVerifyUi").includes("updateShield("), "updateKeyVerifyUi must redraw the shield");
+
+  /* Typing the code is the one change made outside updateKeyVerifyUi. */
+  const typing = src.match(/keyVerifyInput\.addEventListener\("input"[\s\S]*?\n  \}\);/);
+  assert.ok(typing, "the verification-code input handler was not found");
+  assert.ok(typing[0].includes("e2eVerified ="), "expected the handler to set e2eVerified — update this test if it moved");
+  assert.ok(typing[0].includes("updateShield("), "typing the code must redraw the shield");
+
+  for (const name of ["e2eActivate", "e2eFailClosed", "closePeerConnection", "e2eInit"]) {
+    assert.ok(fns.get(name) && fns.get(name).includes("updateKeyVerifyUi("), `${name} changes the state and must redraw`);
+  }
+});
+
+test("each shield state has its own glyph and its own label", () => {
+  /* Colour cannot be the only difference: it is no use to someone who cannot
+     tell amber from green, and a tick drawn in amber would say "checked". */
+  const table = withoutComments(appSrc).match(/const SHIELD_LOOK = \{[\s\S]*?\n\};/);
+  assert.ok(table, "SHIELD_LOOK not found");
+  const icons = Array.from(table[0].matchAll(/icon:\s*"([^"]+)"/g)).map(m => m[1]);
+  assert.equal(icons.length, 3, "expected idle, warn and ok");
+  assert.equal(new Set(icons).size, 3, `two states share a glyph: ${icons}`);
+  assert.ok(!/warn:\s*\{\s*icon:\s*"shield-check"/.test(table[0]), "the unverified state must not show a tick");
+
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("updateShield");
+  assert.ok(fn.includes("aria-label"), "the state must be readable, not only visible");
+});
+
+test("the page starts with a plain shield, not a tick", () => {
+  const icon = indexSrc.match(/<i id="keyVerifyIcon" class="([^"]*)"/);
+  assert.ok(icon, "#keyVerifyIcon not found in index.html");
+  assert.equal(icon[1], "ti ti-shield", "before anything is checked the shield must not claim a check");
+});
+
+test("the wide warning banner is gone, and nothing still expects it", () => {
+  assert.ok(!/verifyBanner|verify-banner/.test(indexSrc), "index.html still has the banner");
+  assert.ok(!/verifyBanner|verify-banner/.test(withoutComments(appSrc)), "app.js still refers to the banner");
+  assert.ok(!/verify-banner/.test(styleSrc), "style.css still styles the banner");
+});
+
+test("amber and green are the shield's, and nothing overrides them", () => {
+  assert.match(styleSrc, /\.key-verify\.verify-warn\s+summary\.icon-btn\s*\{\s*color:\s*var\(--orange\)/);
+  assert.match(styleSrc, /\.key-verify\.verify-ok\s+summary\.icon-btn\s*\{\s*color:\s*var\(--green\)/);
+
+  /* Opening the panel used to turn the shield green on its own — which would
+     now read as "verified" on a chat nobody has checked. */
+  const open = styleSrc.match(/\.key-verify\[open\]\s+summary\s*\{([^}]*)\}/);
+  assert.ok(open, "the open-panel rule was not found");
+  assert.ok(!/(^|[;\s])color\s*:/.test(open[1]), "an open panel must not recolour the shield");
+});
