@@ -2,7 +2,11 @@
 <html lang="mn">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- interactive-widget=resizes-content: on browsers that honour it (Android
+       Chrome and Firefox) the page itself gets shorter when the keyboard opens,
+       so the message box stays above it with no script involved. Browsers that
+       ignore it are covered by fitToVisibleArea() in app.js. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' blob: data:; media-src 'self' blob: mediastream:; connect-src 'self' https://direct-connection.onrender.com https://anirkh.github.io http://localhost:3000 http://127.0.0.1:3000 wss://direct-connection.onrender.com wss://anirkh.github.io ws://localhost:3000 ws://127.0.0.1:3000; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; worker-src 'self' blob:">
   <title>Шууд холбоос</title>
 

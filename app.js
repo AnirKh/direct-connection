@@ -542,6 +542,56 @@ const ICE_CONFIG = {
 applyI18n();
 
 /* ══════════════════════════════════════════════
+   VISIBLE AREA
+   ─────────────────────────────────────────────
+   A phone keyboard covers the bottom of the screen, and on iOS and in most
+   in-app browsers nothing in CSS finds out: the page stays full height. The
+   message box is the bottom-most thing on the page, so it sat underneath the
+   keyboard while the user typed into it.
+
+   The visual viewport is the one measurement that does get shorter, so the
+   page's height follows it. Every screen is sized from --app-height — see
+   :root in style.css.
+══════════════════════════════════════════════ */
+
+/* Was the newest message in view before the visible area changed? Noted on
+   scroll rather than read at resize time: by then the list has already been
+   cut short from the bottom and can no longer say where it was. */
+let _stickToBottom = true;
+chatMessages.addEventListener("scroll", () => {
+  _stickToBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 48;
+});
+
+function fitToVisibleArea() {
+  const vv = window.visualViewport;
+
+  /* Pinch-zoom shrinks the visual viewport as well, and is not a keyboard.
+     Resizing the page to a zoomed-in view would fight the zoom. */
+  if (vv && Math.abs(vv.scale - 1) > 0.01) return;
+
+  const height = vv ? vv.height : window.innerHeight;
+  if (!(height > 0)) return;   // a hidden or not-yet-laid-out page reports 0
+
+  document.documentElement.style.setProperty("--app-height", `${height}px`);
+
+  /* iOS scrolls the whole page to lift a focused field above the keyboard. The
+     page now fits in what is visible, so there is nothing to scroll to — and
+     leaving it scrolled pushes the header off the top. */
+  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+
+  /* The message list just got shorter from the bottom up. Keep the newest
+     message in view, unless the user had scrolled back to read older ones. */
+  if (_stickToBottom) scrollBottom();
+}
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitToVisibleArea);
+  window.visualViewport.addEventListener("scroll", fitToVisibleArea);
+}
+window.addEventListener("resize", fitToVisibleArea);
+fitToVisibleArea();
+
+/* ══════════════════════════════════════════════
    APPROVAL / AUTO-JOIN
 ══════════════════════════════════════════════ */
 
@@ -1307,6 +1357,8 @@ messageInput.addEventListener("keydown", e => {
 messageInput.addEventListener("input", () => {
   messageInput.style.height = "auto";
   messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + "px";
+  /* A taller box takes its extra lines out of the message list above it. */
+  if (_stickToBottom) scrollBottom();
   sendTypingSignal();
 });
 

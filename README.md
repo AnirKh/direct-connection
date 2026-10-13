@@ -150,6 +150,25 @@ Three wrong attempts lock an address out for 30 seconds; fifteen against one roo
 
 Because nothing limits how often a token may be tried, both secrets are compared in constant time (`secretMatches`).
 
+## Phone keyboards
+
+On a phone the message box used to sit **underneath the keyboard** while you typed into it. Two causes, and both had to go:
+
+- **Every full-height rule in `style.css` read `height: 100dvh; height: -webkit-fill-available;`.** The second declaration wins wherever it is understood — which is every phone browser — so the first never applied. All of them now read one variable, `--app-height`, set in one place.
+- **Nothing watched the visual viewport.** That is the one measurement that actually gets shorter when a keyboard opens. On iOS, and in most in-app browsers (a link opened from inside a messaging app), no CSS unit does: the page stays full height and the keyboard simply covers the bottom of it. `fitToVisibleArea()` in `app.js` keeps `--app-height` equal to the visual viewport's height.
+
+The viewport tag also carries `interactive-widget=resizes-content`, so Android Chrome and Firefox shrink the page themselves and need no script.
+
+Three details that are easy to undo by accident:
+
+- **Pinch-zoom is ignored.** Zooming shrinks the visual viewport too; resizing the page to match would fight the zoom.
+- **A height of 0 is ignored.** A hidden tab reports one, and believing it collapses every screen.
+- **Toasts are placed from the top of the visible area**, not from the bottom of the screen, which is behind the keyboard. Errors are shown as toasts.
+
+Do not add a `height: 100vh` / `100dvh` / `-webkit-fill-available` to any rule — size it from `--app-height`. `test/layout.test.js` fails if one comes back.
+
+**What has and has not been checked.** A headless browser at phone size, with the visual viewport reporting a keyboard, puts the message box directly above it (before: 286px below the visible edge). That exercises the code, not a real keyboard. It has not been run on a physical iPhone or Android phone from here.
+
 ## Tests
 
 ```
@@ -167,6 +186,7 @@ Node's built-in runner, no dependencies.
 - `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and all 32 combinations of `joinVerdict`. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.
 - `test/connstats.test.js` — which route ICE chose, link quality, byte totals, with a plain Map standing in for the stats report.
+- `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
 

@@ -37,10 +37,25 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left:   env(safe-area-inset-left,   0px);
   --safe-right:  env(safe-area-inset-right,  0px);
+
+  /* How tall the part of the page you can actually see is. Every full-height
+     thing below is sized from this and from nothing else.
+
+     It starts as the viewport height. app.js then keeps it equal to the visual
+     viewport, which is the one measurement that gets shorter when a phone
+     keyboard opens — on iOS and in most in-app browsers no CSS unit does, so
+     the page stayed full height and the message box sat under the keyboard.
+
+     These used to read `height: 100dvh; height: -webkit-fill-available;`. The
+     second line wins wherever it is understood, which is every phone browser,
+     so the 100dvh above it never applied. One value, set in one place. */
+  --app-height: 100vh;
+}
+@supports (height: 100dvh) {
+  :root { --app-height: 100dvh; }
 }
 
 html {
-  height: -webkit-fill-available;
   height: 100%;
 }
 
@@ -49,8 +64,7 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   line-height: 1.55;
-  height: 100dvh;
-  height: -webkit-fill-available;
+  height: var(--app-height);
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
@@ -58,7 +72,7 @@ body {
 
 /* ── UTILITIES ─────────────────────────────── */
 .hidden { display: none !important; }
-.screen { width: 100%; height: 100dvh; height: -webkit-fill-available; }
+.screen { width: 100%; height: var(--app-height); }
 
 .lang-switcher {
   position: fixed;
@@ -98,7 +112,10 @@ body {
 
 /* ── OVERLAY / MODAL ───────────────────────── */
 .overlay {
-  position: fixed; inset: 0;
+  /* Sized like the screens rather than pinned to all four edges, so a dialog
+     with a text box in it (the PIN) is centred in what is left above the
+     keyboard instead of in the full screen behind it. */
+  position: fixed; top: 0; left: 0; right: 0; height: var(--app-height);
   display: flex; justify-content: center; align-items: center;
   background: rgba(0,0,0,0.65);
   z-index: 999;
@@ -306,7 +323,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* ── CHAT SCREEN ───────────────────────────── */
 #chatScreen {
   display: flex; flex-direction: column;
-  height: 100dvh; height: -webkit-fill-available;
+  height: var(--app-height);
   position: relative; overflow: hidden;
 }
 
@@ -643,9 +660,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 /* ── TOAST NOTIFICATIONS ───────────────────── */
 .dc-toast-container {
+  /* Measured down from the top of the visible area, not up from the bottom of
+     the screen: with a keyboard open the bottom of the screen is behind it,
+     and a toast is how errors are shown. Lands in the same place as before
+     when no keyboard is up. */
   position: fixed;
-  bottom: calc(80px + var(--safe-bottom));
-  left: 50%; transform: translateX(-50%);
+  top: calc(var(--app-height) - 80px - var(--safe-bottom));
+  left: 50%; transform: translate(-50%, -100%);
   display: flex; flex-direction: column; align-items: center;
   gap: 8px; z-index: 9999; pointer-events: none;
   width: min(360px, 90vw);
