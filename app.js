@@ -78,6 +78,7 @@ const lobbyScreen      = document.getElementById("lobbyScreen");
 const chatScreen       = document.getElementById("chatScreen");
 const sessionIdInput   = document.getElementById("sessionId");
 const createBtn        = document.getElementById("createBtn");
+const createOpenBtn    = document.getElementById("createOpenBtn");
 const createInfo       = document.getElementById("createInfo");
 const sessionsList     = document.getElementById("sessionsList");
 const refreshBtn       = document.getElementById("refreshBtn");
@@ -613,8 +614,15 @@ approveBtn.onclick = () => {
   // WS already connecting in background — nothing else needed
 };
 
+/** Both create buttons, always together — a second create while one is in
+    flight is the same mistake whichever button it comes from. */
+function setCreateButtons(disabled) {
+  createBtn.disabled     = disabled;
+  createOpenBtn.disabled = disabled;
+}
+
 function setLobbyButtons(disabled) {
-  createBtn.disabled      = disabled;
+  setCreateButtons(disabled);
   sessionIdInput.disabled = disabled;
   refreshBtn.disabled     = disabled;
 }
@@ -698,6 +706,9 @@ function connectWebSocket() {
       autoJoinSettled();
       _autoJoinSent = false;
     }
+    /* Same for a tap on an open room: its answer died with the socket, and
+       while this stays set no other open room can be joined. */
+    listJoinId = null;
     setTimeout(connectWebSocket, 3000);
   };
   ws.onerror   = (e) => console.error("WS error", e);
@@ -756,22 +767,31 @@ function renderSessionList(sessions) {
     return;
   }
   sessionsList.replaceChildren();
-  _lastSessionList.forEach(({ sessionId, createdAt }) => {
+  _lastSessionList.forEach(({ sessionId, createdAt, open }) => {
+    /* Only an explicit true makes a room open here. An older server sends no
+       flag at all, and its rooms all want a PIN. */
+    const isOpen = open === true;
     const item = document.createElement("div");
     item.className = "session-item";
     const info = document.createElement("div");
     info.className = "session-item-info";
     const name = document.createElement("div");
     name.className = "session-item-name";
-    name.textContent = `📡 ${sessionId}`;
+    name.textContent = `${isOpen ? "🔓" : "🔒"} ${sessionId}`;
     const meta = document.createElement("div");
     meta.className = "session-item-meta";
-    meta.textContent = I18N[LANG].sessionMeta(timeAgo(createdAt));
+    const kind = document.createElement("span");
+    kind.className = isOpen ? "room-kind open" : "room-kind";
+    kind.textContent = t(isOpen ? "roomKindOpen" : "roomKindPin");
+    meta.append(document.createTextNode(I18N[LANG].sessionMeta(timeAgo(createdAt))), kind);
     const joinBtn = document.createElement("button");
     joinBtn.className = "join-btn";
     joinBtn.dataset.id = sessionId;
     joinBtn.textContent = t("joinBtn");
-    joinBtn.onclick = () => openPinModal(sessionId);
+    /* An open room has nothing to type, so there is no dialog to show. If the
+       list turns out to be wrong about it, the server says so and the dialog
+       opens then — see the pin-required case. */
+    joinBtn.onclick = () => (isOpen ? joinOpenRoom(sessionId) : openPinModal(sessionId));
     info.append(name, meta);
     item.append(info, joinBtn);
     sessionsList.appendChild(item);
@@ -783,15 +803,36 @@ function timeAgo(ts) {
   return { s: I18N[LANG].timeS, m: I18N[LANG].timeM, h: I18N[LANG].timeH }[unit](value);
 }
 
-createBtn.onclick = () => {
+/* Two kinds of room, one per button.
+
+     PIN room   the guest types the 6-digit PIN, or uses the invite link
+     open room  no PIN: anyone who can see the list taps Join and is in
+
+   Either way a room holds the host and one guest. An open room is simply
+   first come, first served — and gone from the list the moment someone is in. */
+function createRoom(open) {
   const sessionId = sessionIdInput.value.trim();
   if (!sessionId) { showToast(t("enterSessionName"), "warn"); return; }
   if (isConnecting) return;
   isConnecting = true;
-  createBtn.disabled = true;
+  setCreateButtons(true);
   createInfo.textContent = t("creating");
-  wsSend({ type: "create-session", sessionId });
-};
+  wsSend({ type: "create-session", sessionId, open });
+}
+createBtn.onclick     = () => createRoom(false);
+createOpenBtn.onclick = () => createRoom(true);
+
+/* ── Joining an open room ────────────────────── */
+let listJoinId = null;   // a join sent straight from the list, not yet answered
+
+function joinOpenRoom(sessionId) {
+  /* One join at a time: a second tap, or a tap while an invite link is still
+     being answered, would leave two answers and no way to tell them apart. */
+  if (isConnecting || listJoinId || pinJoinInFlight) return;
+  listJoinId = sessionId;
+  pendingRoomSecret = null;   // no link, so no shared secret — the shield starts amber
+  wsSend({ type: "join-session", sessionId });
+}
 
 /* ── PIN modal ───────────────────────────────── */
 let pendingJoinId = null;
@@ -1041,13 +1082,20 @@ async function handleSignaling(data) {
       pinBox.style.cssText = "background:var(--sunken);border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
       const pinLabel = document.createElement("div");
       pinLabel.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
-      pinLabel.textContent = t("pinCode");
+      /* An open room has no PIN to show. The same box says so instead, and
+         says plainly who can come in — the host should not have to work out
+         that "no PIN" means anyone looking at the list. */
+      const isOpen = data.open === true;
+      pinLabel.textContent = isOpen ? t("openRoomTitle") : t("pinCode");
       const pinValue = document.createElement("div");
-      pinValue.style.cssText = "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
-      pinValue.textContent = data.pin;
+      pinValue.style.cssText = isOpen
+        ? "font-size:28px;line-height:1.2;color:var(--orange)"
+        : "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
+      if (isOpen) pinValue.appendChild(tablerIcon("lock-open"));
+      else        pinValue.textContent = data.pin;
       const pinHint = document.createElement("div");
       pinHint.style.cssText = "font-size:11px;color:var(--muted);margin-top:4px";
-      pinHint.textContent = t("pinCodeHint");
+      pinHint.textContent = isOpen ? t("openRoomHint") : t("pinCodeHint");
       pinBox.append(pinLabel, pinValue, pinHint);
 
       const linkHint = document.createElement("div");
@@ -1079,7 +1127,7 @@ async function handleSignaling(data) {
         });
       };
 
-      createBtn.disabled = false;
+      setCreateButtons(false);
       isConnecting = false;
       requestSessionList();
       break;
@@ -1088,6 +1136,7 @@ async function handleSignaling(data) {
     case "session-joined":
       autoJoinSettled();
       settlePinJoin();
+      listJoinId = null;
       isHost = false;
       currentSession = { sessionId: data.sessionId };
       /* Present only when this join came from an invite link. */
@@ -1188,7 +1237,7 @@ async function handleSignaling(data) {
       msg.textContent = `⌛ ${t("roomExpired")}`;
       createInfo.style.textAlign = "";
       createInfo.replaceChildren(msg);
-      createBtn.disabled = false;
+      setCreateButtons(false);
       break;
     }
 
@@ -1205,7 +1254,7 @@ async function handleSignaling(data) {
       } else {
         showToast(data.message, "error");
         createInfo.textContent = "";
-        createBtn.disabled = false;
+        setCreateButtons(false);
         settlePinJoin();
         isConnecting = false;
       }
@@ -1227,7 +1276,19 @@ async function handleSignaling(data) {
          opened. _isAutoJoin stays true for the life of a page that arrived by
          invite link, so a wrong PIN typed there later was reported in the lobby
          — behind the dialog — and left the dialog's button disabled. */
-      if (_isAutoJoin && !pinJoinInFlight) {
+      const listJoin = listJoinId;
+      listJoinId = null;
+      const target = G.joinRefusalTarget({
+        pinJoin: pinJoinInFlight, listJoin: Boolean(listJoin), autoJoinPage: _isAutoJoin
+      });
+
+      if (target === "toast") {
+        /* A tap on a room the list showed as open. If it wants a PIN after all
+           — the list was stale — ask for it rather than complain: that is what
+           the user would have been shown had the list been right. */
+        if (data.code === "pin-required") openPinModal(listJoin);
+        else { showToast(msg, "error"); requestSessionList(); }
+      } else if (target === "lobby") {
         const wrap = document.createElement("span");
         wrap.style.color = "var(--danger-text)";
         wrap.append(document.createTextNode(I18N[LANG].couldNotJoin(msg)));
@@ -1278,7 +1339,7 @@ leaveBtn.onclick = () => {
   lobbyScreen.classList.remove("hidden");
   document.getElementById("langSwitcher").style.display = "";
   createInfo.textContent = "";
-  createBtn.disabled = false;
+  setCreateButtons(false);
   sessionIdInput.value = "";
   requestSessionList();
 };

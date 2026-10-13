@@ -2,7 +2,7 @@
   ─────────────────────────────────────────────
   Direct Connection — server.js
   Features:
-  - Session create with 6-digit PIN
+  - Session create with 6-digit PIN, or open (no PIN, first guest in)
   - Session list broadcast
   - PIN verification on join
   - Offer / answer / ICE relay
@@ -444,7 +444,10 @@ function publicSessions() {
   if (!PUBLIC_SESSION_LIST) return [];
   return Array.from(sessions)
     .filter(([, s]) => !s.guest)
-    .map(([sessionId, s]) => ({ sessionId, createdAt: s.createdAt }));
+    /* `open` lets the lobby show which rooms can be entered without a PIN, and
+       skip the PIN dialog for them. It gives nothing away: the server answers
+       the same question for anyone who tries the door. */
+    .map(([sessionId, s]) => ({ sessionId, createdAt: s.createdAt, open: s.open === true }));
 }
 
 const listSessionsHits   = new Map();
@@ -488,7 +491,9 @@ function generateToken() {
     one may be tried — which makes this a comparison that must not leak how
     close a wrong value came. */
 function secretMatches(expected, supplied) {
-  if (typeof supplied !== "string") return false;
+  /* An open room has no PIN at all — `expected` is null there, and null must
+     match nothing rather than throw. */
+  if (typeof expected !== "string" || typeof supplied !== "string") return false;
   const a = Buffer.from(expected);
   const b = Buffer.from(supplied);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
@@ -598,16 +603,22 @@ wss.on("connection", (ws, req) => {
            elsewhere, and when it expired the notice ended the chat in the
            second. Opening a room now lets go of the previous one. */
         cleanupClient(ws);
-        const pin   = generatePin();
+        /* Two kinds of room. A PIN room is the default and stays the default
+           for anything that is not exactly `open: true` — a room must never
+           become open by accident. An open room has no PIN to hand out; it
+           still gets a token, because the invite link is what authenticates the
+           key exchange and that is worth having either way. */
+        const open  = data.open === true;
+        const pin   = open ? null : generatePin();
         const token = generateToken();
         sessions.set(data.sessionId, {
           host: ws, guest: null, offer: null,
-          pin, token, createdAt: Date.now(),
+          open, pin, token, createdAt: Date.now(),
           joinLockedUntil: 0,
           failedJoinWindowStart: 0,
           failedJoinCount: 0
         });
-        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token }));
+        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token, open }));
         broadcastSessionList();
         console.log(`Session ${sessionLogId(data.sessionId)} created`);
         break;
@@ -653,12 +664,26 @@ wss.on("connection", (ws, req) => {
            PIN guessing, so a correct invite token is not held to them. */
         const rl = rateLimitCheck(ip);
         const verdict = joinVerdict({
-          tokenOk:    secretMatches(session.token, data.token),
-          pinOk:      typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && secretMatches(session.pin, data.pin),
-          full:       Boolean(session.guest),
-          roomLocked: session.joinLockedUntil > Date.now(),
-          ipLimited:  !rl.allowed
+          open:         session.open === true,
+          tokenOk:      secretMatches(session.token, data.token),
+          pinOk:        typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && secretMatches(session.pin, data.pin),
+          noCredential: typeof data.pin !== "string" && typeof data.token !== "string",
+          full:         Boolean(session.guest),
+          roomLocked:   session.joinLockedUntil > Date.now(),
+          ipLimited:    !rl.allowed
         });
+
+        /* Arrived with nothing to show, at a room that wants a PIN. Not a guess,
+           so nothing is counted — the client just asks for the PIN. */
+        if (verdict === "pin-required") {
+          ws.send(JSON.stringify({
+            type: "pin-error",
+            code: "pin-required",
+            sessionId: data.sessionId,
+            message: "This room needs a PIN."
+          }));
+          break;
+        }
 
         if (verdict === "room-locked") {
           const rem = Math.ceil((session.joinLockedUntil - Date.now()) / 1000);

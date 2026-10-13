@@ -383,3 +383,36 @@ test("a missing argument is not a verified chat", () => {
   assert.equal(G.shieldState(null), "idle");
   assert.equal(G.shieldState({}), "idle");
 });
+
+/* ══════════════════════════════════════════
+   joinRefusalTarget — where a "no" is shown
+══════════════════════════════════════════ */
+
+const refusal = o => Object.assign({ pinJoin: false, listJoin: false, autoJoinPage: false }, o);
+
+test("a refused PIN goes to the PIN dialog", () => {
+  assert.equal(G.joinRefusalTarget(refusal({ pinJoin: true })), "dialog");
+});
+
+test("a refused tap on an open room is shown as a toast", () => {
+  /* Nothing is on screen for that join — no dialog was opened — so the dialog's
+     error line would be writing to something hidden. */
+  assert.equal(G.joinRefusalTarget(refusal({ listJoin: true })), "toast");
+});
+
+test("a refused invite link is reported in the lobby", () => {
+  assert.equal(G.joinRefusalTarget(refusal({ autoJoinPage: true })), "lobby");
+});
+
+test("how the page was opened never outranks the join that is waiting", () => {
+  /* The bug: a page opened by invite link sent every later refusal to the
+     lobby, so a wrong PIN typed afterwards was reported behind the dialog and
+     left its button dead. */
+  assert.equal(G.joinRefusalTarget(refusal({ pinJoin: true, autoJoinPage: true })), "dialog");
+  assert.equal(G.joinRefusalTarget(refusal({ listJoin: true, autoJoinPage: true })), "toast");
+});
+
+test("with nothing waiting and no invite link, the dialog is the fallback", () => {
+  assert.equal(G.joinRefusalTarget(refusal({})), "dialog");
+  assert.equal(G.joinRefusalTarget(undefined), "dialog");
+});

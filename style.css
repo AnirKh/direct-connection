@@ -299,6 +299,24 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   letter-spacing: 1px; color: var(--muted); margin-bottom: 14px;
   display: flex; align-items: center; justify-content: space-between;
 }
+/* The two create buttons, side by side. They wrap onto two rows rather than
+   squeeze when the screen is too narrow for both labels. */
+.create-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.create-actions button {
+  flex: 1 1 130px; min-width: 0;
+  padding: 13px 10px; font-size: 14px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent;   /* the quiet one has a border; keep them the same height */
+}
+.create-actions button i { font-size: 18px; }
+
+/* A second choice sitting next to a filled button. */
+.btn-quiet {
+  background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-quiet:hover:not(:disabled) { background: var(--border); }
+
 .create-info { margin-top: 14px; font-size: 13px; color: var(--accent); line-height: 1.6; }
 .refresh-btn {
   width: auto; margin: 0; padding: 4px 10px; font-size: 12px; min-height: 28px;
@@ -316,6 +334,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .session-item-info { min-width: 0; flex: 1; }
 .session-item-name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-item-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* PIN room or open room, said in words beside the age. The lock glyph on the
+   name says the same thing; neither has to do it alone. */
+.room-kind { margin-left: 6px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border); white-space: nowrap; }
+.room-kind.open { color: var(--orange); border-color: rgba(217,164,65,0.4); }
 .join-btn {
   width: auto; margin: 0; padding: 8px 16px; font-size: 13px;
   min-height: 36px; border-radius: 8px; flex-shrink: 0;

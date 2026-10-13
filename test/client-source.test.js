@@ -383,3 +383,58 @@ test("failures are still reported in the chat", () => {
   const signaling = withoutComments(appSrc).match(/async function handleSignaling\(data\)[\s\S]*?\n\}/)[0];
   assert.ok(/appendSys\(t\("sysPeerLeft"\)\)/.test(signaling), "the other side leaving must still say so");
 });
+
+/* ── Open rooms ───────────────────────────────
+   A room created without a PIN lets in whoever taps it first. The checks
+   below are about a room never being treated as open by accident. */
+
+test("the lobby has a button for each kind of room", () => {
+  assert.match(indexSrc, /<button id="createBtn"/, "the PIN-room button is missing");
+  assert.match(indexSrc, /<button id="createOpenBtn"/, "the open-room button is missing");
+  const src = withoutComments(appSrc);
+  assert.match(src, /createBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\(false\)/, "the PIN-room button must ask for a PIN room");
+  assert.match(src, /createOpenBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\(true\)/, "the open-room button must ask for an open room");
+});
+
+test("the two create buttons are only ever switched together", () => {
+  /* One left enabled while the other waits lets a second create go out. */
+  const src = withoutComments(appSrc);
+  const helper = topLevelFunctions(src).get("setCreateButtons");
+  assert.ok(helper, "setCreateButtons not found");
+  assert.ok(helper.includes("createBtn.disabled") && helper.includes("createOpenBtn.disabled"));
+  const outside = src.replace(helper, "");
+  assert.ok(!/create(Open)?Btn\.disabled\s*=/.test(outside),
+    "a create button is switched on its own somewhere — use setCreateButtons()");
+});
+
+test("a room is treated as open only on an explicit true", () => {
+  /* An older server sends no flag, and anything else truthy is a mistake.
+     Reading `if (open)` would skip the PIN dialog for a room that wants one. */
+  const src = withoutComments(appSrc);
+  /* Matched directly: topLevelFunctions() expects a closing brace in column 0,
+     and the one-line function just above this one does not have it. */
+  const list = (src.match(/function renderSessionList\(sessions\)\s*\{[\s\S]*?\n\}/) || [])[0];
+  assert.ok(list, "renderSessionList not found");
+  assert.ok(list.includes("open === true"), "the room list must compare the flag with true");
+  assert.ok(list.includes("joinOpenRoom(") && list.includes("openPinModal("), "the list must offer both ways in");
+
+  const created = src.match(/case "session-created": \{[\s\S]*?\n      break;/);
+  assert.ok(created, "session-created case not found");
+  assert.ok(created[0].includes("data.open === true"), "the host's own panel must compare the flag with true");
+});
+
+test("joining an open room sends its name and nothing else", () => {
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("joinOpenRoom");
+  assert.ok(fn, "joinOpenRoom not found");
+  assert.match(fn, /wsSend\(\{\s*type:\s*"join-session",\s*sessionId\s*\}\)/);
+  assert.ok(fn.includes("pendingRoomSecret = null"),
+    "an open join has no invite-link secret — a stale one must not be carried into it");
+});
+
+test("a refused join is routed by the guard", () => {
+  const signaling = withoutComments(appSrc).match(/async function handleSignaling\(data\)[\s\S]*?\n\}/)[0];
+  const refused = signaling.match(/case "pin-error": \{[\s\S]*?\n      break;/);
+  assert.ok(refused, "pin-error case not found");
+  assert.ok(refused[0].includes("joinRefusalTarget("), "the pin-error case must ask the guard where the reason goes");
+  assert.ok(!/if \(_isAutoJoin\b/.test(refused[0]), "routing on how the page was opened is the bug the guard replaced");
+});

@@ -47,9 +47,33 @@ Breaking that rule would remove the protection while everything carried on worki
 - The guard checks `roomSecret`, `pendingRoomSecret` **and** `_autoSecret`. The join is sent while the secret is still in `pendingRoomSecret` — `roomSecret` is only assigned once the server confirms — so checking one variable would leave the guard inert during the very message most likely to carry it.
 - `test/client-source.test.js` fails if any `wsSend` payload mentions a secret, if `join-session` grows a field beyond `sessionId`/`pin`/`token`, or if a new secret-holding variable appears without being added to `roomSecretsInPlay()`.
 
+### Two kinds of room
+
+The lobby has a button for each. Both hold the host and **one** guest.
+
+| | PIN room | Open room |
+| --- | --- | --- |
+| Created with | `create-session` | `create-session` with `open: true` |
+| To get in from the list | type the 6-digit PIN | tap Join — nothing to type |
+| Invite link | works, and authenticates the key exchange | the same |
+| Join locks | apply to PIN guesses | do not apply — there is nothing to guess |
+| Shown in the list as | 🔒 and "PIN" | 🔓 and "open" |
+
+An open room is first come, first served: whoever taps it first is in, it leaves the list, and anyone after that is told it is full. That is the whole meaning of "open" — **it is not a room for more than two people.**
+
+A few rules keep a room from being open by accident:
+
+- **Only exactly `open: true` makes a room open**, on the server and in the client. A string, a number, or a missing flag from an older server all mean a PIN room. The lobby compares with `=== true` for the same reason: reading the flag loosely would skip the PIN dialog for a room that wants one.
+- **The server decides, not the list.** If the client taps a room it believed was open and it is not, the server answers `pin-required` — without counting it as a wrong guess — and the client opens the PIN dialog instead.
+- **`joinVerdict` holds the rule** alongside the lock rules, with every combination tested: a PIN room never admits without its PIN or its token.
+
+What an open room costs, said plainly: anyone who can see the list can connect to the host, which means they can message them, send them files, ring them, and — as with any peer-to-peer connection — learn their IP address. The host's panel says who can come in rather than leaving "no PIN" to be worked out. Someone arriving from the list has no invite-link secret, so the shield is amber exactly as it is for a PIN join.
+
+`PUBLIC_SESSION_LIST=0` hides the list, and with it the only way to find an open room without its link.
+
 ### PIN joins have no secret
 
-Someone joining by typing the 6-digit PIN never received a link, so there is nothing to mix in. Those connections fall back to plain ECDH plus the manual verification code, and the shield in the chat header stays amber until the code is confirmed.
+Someone joining by typing the 6-digit PIN — or by tapping an open room in the list — never received a link, so there is nothing to mix in. Those connections fall back to plain ECDH plus the manual verification code, and the shield in the chat header stays amber until the code is confirmed.
 
 The host cannot know in advance which way a guest will arrive, so it derives **both** candidate keys and adopts whichever one opens the guest's confirmation packet. That is why an attacker forcing the weaker path is visible — the shield turns amber instead of green — rather than silent.
 
@@ -168,6 +192,8 @@ Three wrong attempts lock an address out for 30 seconds; fifteen against one roo
 
 **A correct PIN does not.** If a right PIN were admitted during a lock, the lock would stop nothing — the guesser would keep going until one landed. Someone can therefore still lock a room against PIN joiners; that is the price of a guess limit on a short code, and the invite link is the way round it.
 
+**An open room is outside both locks**, for the same reason as the token: nothing is being guessed. And arriving at a PIN room with no PIN and no token is not a guess either — it gets `pin-required` and is not counted, where a wrong PIN is. Counting it would lock people out for looking.
+
 Because nothing limits how often a token may be tried, both secrets are compared in constant time (`secretMatches`).
 
 ## Phone keyboards
@@ -201,9 +227,9 @@ Node's built-in runner, no dependencies.
 
 
 - `test/protocol.test.js` — invite-link parsing (including malformed input, which must not throw at page load), room secrets, key derivation, and the framing. Includes a man-in-the-middle case asserting that an attacker who substitutes both public keys cannot reach a working key without the room secret.
-- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, an invite token getting through a locked room, one room per socket, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
+- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, an invite token getting through a locked room, open rooms (one guest, no PIN, never open by accident), one room per socket, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
 - `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
-- `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and all 32 combinations of `joinVerdict`. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
+- `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and every combination of `joinVerdict`'s seven inputs. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.
 - `test/connstats.test.js` — which route ICE chose, link quality, byte totals, with a plain Map standing in for the stats report.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.

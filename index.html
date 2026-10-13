@@ -69,7 +69,19 @@
       <div class="card">
         <p class="card-label" data-i18n="createLabel">Шинээр өрөө үүсгэх</p>
         <input id="sessionId" type="text" data-i18n-ph="sessionPlaceholder" placeholder="Өрөөний нэр оруулах">
-        <button id="createBtn" data-i18n="createBtnLabel">Өрөөг үүсгэх</button>
+        <!-- Two kinds of room. The PIN room is the filled button because it is
+             the one that asks who is coming in; an open room lets in whoever
+             taps it first. Both hold two people and no more. -->
+        <div class="create-actions">
+          <button id="createBtn">
+            <i class="ti ti-lock" aria-hidden="true"></i>
+            <span data-i18n="createBtnLabel">КОДтой өрөө</span>
+          </button>
+          <button id="createOpenBtn" class="btn-quiet">
+            <i class="ti ti-lock-open" aria-hidden="true"></i>
+            <span data-i18n="createOpenBtnLabel">КОДгүй өрөө</span>
+          </button>
+        </div>
         <div id="createInfo" class="create-info"></div>
       </div>
 

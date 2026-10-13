@@ -94,16 +94,26 @@ function safeLabel(value, max = 32) {
  * Wrong PINs can still lock a room against other PIN joiners. That is what a
  * guess limit on a short code costs, and the invite link is the way round it.
  *
- * @param {{tokenOk: boolean, pinOk: boolean, full: boolean,
- *          roomLocked: boolean, ipLimited: boolean}} o
- * @returns {"admit"|"full"|"room-locked"|"ip-limited"|"wrong"}
+ * An open room — one created without a PIN — asks for nothing, so there is
+ * nothing to guess and neither lock has anything to protect. It admits whoever
+ * arrives first and is full after that, like every other room.
+ *
+ * Arriving at a PIN room with no PIN and no token is not a guess either: it is
+ * a browser whose list was out of date, or someone who has not typed anything
+ * yet. That gets "pin-required" and is not counted against anyone, where a
+ * wrong PIN is.
+ *
+ * @param {{open: boolean, tokenOk: boolean, pinOk: boolean, noCredential: boolean,
+ *          full: boolean, roomLocked: boolean, ipLimited: boolean}} o
+ * @returns {"admit"|"full"|"room-locked"|"ip-limited"|"pin-required"|"wrong"}
  */
 function joinVerdict(o) {
-  if (o.tokenOk)    return o.full ? "full" : "admit";
+  if (o.open || o.tokenOk) return o.full ? "full" : "admit";
   if (o.roomLocked) return "room-locked";
   if (o.full)       return "full";
   if (o.ipLimited)  return "ip-limited";
-  return o.pinOk ? "admit" : "wrong";
+  if (o.pinOk)      return "admit";
+  return o.noCredential ? "pin-required" : "wrong";
 }
 
 module.exports = { slidingAllow, pruneExpired, safeLabel, joinVerdict };

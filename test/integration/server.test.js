@@ -530,3 +530,147 @@ test("a peer leaving is reported with the room it happened in", async () => {
   const gone = await waitFor(host, "peer-disconnected");
   assert.equal(gone && gone.sessionId, "room-named");
 });
+
+/* ══════════════════════════════════════════
+   Open rooms — created without a PIN
+══════════════════════════════════════════ */
+
+async function listed(sessionId) {
+  const probe = await client();
+  probe.send_({ type: "list-sessions" });
+  const list = await waitFor(probe, "session-list");
+  return list.sessions.find(s => s.sessionId === sessionId) || null;
+}
+
+test("an open room is created without a PIN and listed as open", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-basic", open: true });
+  const created = await waitFor(host, "session-created");
+  assert.ok(created, "no session-created");
+  assert.equal(created.open, true);
+  assert.equal(created.pin, null, "an open room has no PIN to hand out");
+  assert.ok(created.token && created.token.length >= 20, "it still gets a token for the invite link");
+
+  const entry = await listed("open-basic");
+  assert.ok(entry, "the open room should be in the list");
+  assert.equal(entry.open, true);
+});
+
+test("an ordinary room is listed as not open", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-not" });
+  const created = await waitFor(host, "session-created");
+  assert.equal(created.open, false);
+  assert.match(created.pin, /^\d{6}$/);
+  assert.equal((await listed("open-not")).open, false);
+});
+
+test("only exactly open:true makes a room open", async () => {
+  /* A room must never become open by accident — not from a string, a number,
+     or a field someone added for another reason. */
+  let n = 0;
+  for (const value of ["true", 1, "yes", {}, [], null]) {
+    const host = await client();
+    const name = `open-strict-${n++}`;
+    host.send_({ type: "create-session", sessionId: name, open: value });
+    const created = await waitFor(host, "session-created");
+    assert.equal(created.open, false, `open:${JSON.stringify(value)} must still make a PIN room`);
+    assert.match(created.pin, /^\d{6}$/);
+
+    const stranger = await client();
+    stranger.send_({ type: "join-session", sessionId: name });
+    const refused = await waitFor(stranger, "pin-error");
+    assert.equal(refused && refused.code, "pin-required", `open:${JSON.stringify(value)} let a stranger in`);
+  }
+});
+
+test("anyone can join an open room with nothing but its name", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-join", open: true });
+  await waitFor(host, "session-created");
+
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "open-join" });
+  assert.ok(await waitFor(guest, "session-joined"), "the guest should be let straight in");
+  assert.ok(await waitFor(host, "guest-joined"), "the host should be told");
+});
+
+test("an open room still holds only one guest", async () => {
+  /* "No PIN" is not "no limit". */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-one", open: true });
+  await waitFor(host, "session-created");
+
+  const first = await client();
+  first.send_({ type: "join-session", sessionId: "open-one" });
+  assert.ok(await waitFor(first, "session-joined"));
+
+  const second = await client();
+  second.send_({ type: "join-session", sessionId: "open-one" });
+  const refused = await waitFor(second, "pin-error");
+  assert.equal(refused && refused.code, "full");
+
+  assert.equal(await listed("open-one"), null, "an occupied open room should leave the list");
+});
+
+test("an open room lets in someone whose address is locked out of a PIN room", async () => {
+  /* The lockout is for PIN guessing. It says nothing about a room with no PIN. */
+  const pinHost = await client();
+  pinHost.send_({ type: "create-session", sessionId: "open-vs-lock-pin" });
+  const pinRoom = await waitFor(pinHost, "session-created");
+  const wrong = pinRoom.pin === "000000" ? "111111" : "000000";
+
+  const person = await client();
+  for (let i = 0; i < 3; i++) person.send_({ type: "join-session", sessionId: "open-vs-lock-pin", pin: wrong });
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline && person.inbox.filter(m => m.type === "pin-error").length < 3) await sleep(25);
+  assert.equal(person.inbox.filter(m => m.code === "rate-limited").length >= 1, true, "setup: the address should be locked out");
+
+  const openHost = await client();
+  openHost.send_({ type: "create-session", sessionId: "open-vs-lock-open", open: true });
+  await waitFor(openHost, "session-created");
+  person.send_({ type: "join-session", sessionId: "open-vs-lock-open" });
+  assert.ok(await waitFor(person, "session-joined"), "a PIN lockout must not keep someone out of an open room");
+});
+
+test("knocking on a PIN room with nothing is not counted as a wrong guess", async () => {
+  /* A stale list, or a client that has not asked for the PIN yet. Counting it
+     would lock people out for looking — and lock the room for everyone. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-knock" });
+  const created = await waitFor(host, "session-created");
+
+  const guest = await client();
+  for (let i = 0; i < 6; i++) {
+    guest.inbox.length = 0;
+    guest.send_({ type: "join-session", sessionId: "open-knock" });
+    const answer = await waitFor(guest, "pin-error");
+    assert.equal(answer && answer.code, "pin-required", `knock ${i + 1}`);
+    assert.equal(answer.sessionId, "open-knock", "the answer should say which room wants a PIN");
+  }
+  /* Six knocks would be two lockouts' worth of wrong PINs. The right PIN still works. */
+  guest.send_({ type: "join-session", sessionId: "open-knock", pin: created.pin });
+  assert.ok(await waitFor(guest, "session-joined"), "knocking must not have used up the guest's attempts");
+});
+
+test("a host cannot join their own open room either", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-own", open: true });
+  await waitFor(host, "session-created");
+  host.send_({ type: "join-session", sessionId: "open-own" });
+  const refused = await waitFor(host, "pin-error");
+  assert.equal(refused && refused.code, "own-room");
+});
+
+test("an open room lets in someone who typed a PIN anyway", async () => {
+  /* A browser that believed the room wanted a PIN sends one. There is no PIN
+     to compare it with — the room's is null — and that must be a plain "no
+     match", not an error that leaves the join unanswered. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "open-with-pin", open: true });
+  await waitFor(host, "session-created");
+
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "open-with-pin", pin: "123456" });
+  assert.ok(await waitFor(guest, "session-joined"), "a PIN sent to an open room should be ignored, not choked on");
+});

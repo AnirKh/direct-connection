@@ -256,6 +256,33 @@
     return Boolean(o) && Boolean(o.isAutoJoin) && Boolean(o.joinSent) && !o.joined;
   }
 
+  /**
+   * The server refused a join. Where does the reason go?
+   *
+   * There are three ways to ask to join, and each has its own place for a "no":
+   *
+   *   "dialog"  a PIN typed into the dialog — the dialog is on screen and has a
+   *             line for errors
+   *   "toast"   a tap on an open room in the list — nothing is on screen for
+   *             it, so it has to be said some other way
+   *   "lobby"   an invite link — the lobby is waiting on it
+   *
+   * Decided by which join is still waiting for an answer, never by how the page
+   * was opened. That was a real bug: a page that arrived by invite link kept
+   * routing every later refusal to the lobby, so a wrong PIN typed afterwards
+   * was reported behind the dialog and left its button dead.
+   *
+   * @param {{pinJoin: boolean, listJoin: boolean, autoJoinPage: boolean}} o
+   * @returns {"dialog"|"toast"|"lobby"}
+   */
+  function joinRefusalTarget(o) {
+    if (!o) return "dialog";
+    if (o.pinJoin)      return "dialog";
+    if (o.listJoin)     return "toast";
+    if (o.autoJoinPage) return "lobby";
+    return "dialog";
+  }
+
   /* ══════════════════════════════════════════
      Room events from the server
   ══════════════════════════════════════════ */
@@ -284,7 +311,7 @@
     mayAcceptPeerKey, shieldState,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
-    shouldRetryAutoJoin,
+    shouldRetryAutoJoin, joinRefusalTarget,
     mayApplyRoomEvent
   };
 });

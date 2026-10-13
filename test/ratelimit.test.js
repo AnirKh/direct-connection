@@ -221,3 +221,62 @@ test("every combination gives one of the five known answers", () => {
     }
   }
 });
+
+/* ══════════════════════════════════════════
+   joinVerdict — open rooms, and arriving with nothing
+══════════════════════════════════════════ */
+
+const knock = o => Object.assign(
+  { open: false, tokenOk: false, pinOk: false, noCredential: false, full: false, roomLocked: false, ipLimited: false }, o);
+
+test("an open room admits someone who brings nothing", () => {
+  assert.equal(joinVerdict(knock({ open: true, noCredential: true })), "admit");
+});
+
+test("an open room holds one guest like any other room", () => {
+  /* "No PIN" is not "no limit": the first person in fills it. */
+  assert.equal(joinVerdict(knock({ open: true, noCredential: true, full: true })), "full");
+});
+
+test("neither lock applies to an open room", () => {
+  /* The locks slow PIN guessing. With no PIN there is nothing to guess, and an
+     address locked out of some other room has done nothing wrong here. */
+  assert.equal(joinVerdict(knock({ open: true, noCredential: true, ipLimited: true })), "admit");
+  assert.equal(joinVerdict(knock({ open: true, noCredential: true, roomLocked: true })), "admit");
+});
+
+test("arriving at a PIN room with nothing is asked for the PIN, not marked wrong", () => {
+  /* A browser whose list was out of date, or someone who has typed nothing
+     yet. Counting it as a failed guess would lock people out for looking. */
+  assert.equal(joinVerdict(knock({ noCredential: true })), "pin-required");
+});
+
+test("a wrong PIN is still a wrong PIN", () => {
+  assert.equal(joinVerdict(knock({ noCredential: false })), "wrong");
+});
+
+test("arriving with nothing never gets past a lock or into a full room", () => {
+  assert.equal(joinVerdict(knock({ noCredential: true, roomLocked: true })), "room-locked");
+  assert.equal(joinVerdict(knock({ noCredential: true, ipLimited: true })), "ip-limited");
+  assert.equal(joinVerdict(knock({ noCredential: true, full: true })), "full");
+});
+
+test("across every combination, a PIN room never admits without its PIN or token", () => {
+  const known = new Set(["admit", "full", "room-locked", "ip-limited", "pin-required", "wrong"]);
+  for (let bits = 0; bits < 128; bits++) {
+    const o = {
+      open: Boolean(bits & 1), tokenOk: Boolean(bits & 2), pinOk: Boolean(bits & 4), noCredential: Boolean(bits & 8),
+      full: Boolean(bits & 16), roomLocked: Boolean(bits & 32), ipLimited: Boolean(bits & 64)
+    };
+    const verdict = joinVerdict(o);
+    const where = JSON.stringify(o);
+    assert.ok(known.has(verdict), `unexpected verdict ${verdict} for ${where}`);
+    if (verdict === "admit") {
+      assert.ok(o.open || o.tokenOk || o.pinOk, `admitted with nothing to show: ${where}`);
+      assert.equal(o.full, false, `admitted into a full room: ${where}`);
+      /* A PIN alone must never beat a lock. */
+      if (!o.open && !o.tokenOk) assert.ok(!o.roomLocked && !o.ipLimited, `a PIN got through a lock: ${where}`);
+    }
+    if (verdict === "pin-required") assert.ok(!o.open && o.noCredential, `pin-required for the wrong reason: ${where}`);
+  }
+});
