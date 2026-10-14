@@ -24,7 +24,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610141222-db5c1daf"></script>
+  <script src="framebust.js?v=202610141240-ad304408"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -41,7 +41,7 @@
         integrity="sha384-XAeMOW3g/ahgKWjRcH7Xp+LVEQ/hkKrV0zkAUTnFwlaWK1aXfd9vVufdwqr/836i"
         crossorigin="anonymous"
         referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="style.css?v=202610141222-db5c1daf">
+  <link rel="stylesheet" href="style.css?v=202610141240-ad304408">
 </head>
 <body>
 
@@ -51,20 +51,24 @@
     <button class="lang-btn" data-lang="en">EN</button>
   </div>
 
-  <!-- Approval Modal -->
-  <div id="overlay" class="overlay">
-    <div class="modal">
-      <div class="modal-icon"><i class="ti ti-arrows-left-right" aria-hidden="true"></i></div>
-      <h2 data-i18n="modalTitle">Шууд холбоос</h2>
-      <p data-i18n="modalDesc">Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.</p>
-      <button id="approveBtn" data-i18n="modalBtn">Зөвшөөрөх &amp; үргэлжлүүлэх</button>
-    </div>
-  </div>
-
   <!-- LOBBY SCREEN -->
   <div id="lobbyScreen" class="screen">
     <div class="lobby-wrap">
-      <h1 class="lobby-title" data-i18n="lobbyTitle">Шууд холбогдох хэсэг</h1>
+      <!-- What the page is for, on request. It used to be a dialog in front of
+           every visit with an "approve" button that approved nothing — it only
+           closed the dialog — so returning visitors dismissed it every time. -->
+      <div class="lobby-head">
+        <h1 class="lobby-title" data-i18n="lobbyTitle">Шууд холбогдох хэсэг</h1>
+        <details id="aboutDropdown" class="about">
+          <summary class="icon-btn" data-i18n-aria="aboutLabel" aria-label="Энэ хуудасны тухай">
+            <i class="ti ti-info-circle" aria-hidden="true"></i>
+          </summary>
+          <div class="about-panel">
+            <div class="about-title" data-i18n="aboutTitle">Шууд холбоос</div>
+            <p data-i18n="aboutDesc">Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.</p>
+          </div>
+        </details>
+      </div>
 
       <div class="card">
         <p class="card-label" data-i18n="createLabel">Шинээр өрөө үүсгэх</p>
@@ -301,14 +305,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610141222-db5c1daf"></script>
-  <script src="connstats.js?v=202610141222-db5c1daf"></script>
-  <script src="guards.js?v=202610141222-db5c1daf"></script>
-  <script src="i18n.js?v=202610141222-db5c1daf"></script>
+  <script src="protocol.js?v=202610141240-ad304408"></script>
+  <script src="connstats.js?v=202610141240-ad304408"></script>
+  <script src="guards.js?v=202610141240-ad304408"></script>
+  <script src="i18n.js?v=202610141240-ad304408"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610141222-db5c1daf"></script>
-  <script src="pake.js?v=202610141222-db5c1daf"></script>
-  <script src="app.js?v=202610141222-db5c1daf"></script>
+  <script src="vendor/noble.js?v=202610141240-ad304408"></script>
+  <script src="pake.js?v=202610141240-ad304408"></script>
+  <script src="app.js?v=202610141240-ad304408"></script>
 </body>
 </html>

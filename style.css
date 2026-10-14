@@ -317,8 +317,37 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .lobby-wrap { width: 100%; max-width: 480px; }
 .lobby-title {
   text-align: center; font-size: 24px; font-weight: 700;
-  margin-bottom: 24px; letter-spacing: -0.5px;
+  letter-spacing: -0.5px;
 }
+/* The title with the about button beside it. Positioned so the panel hangs
+   from the whole row — centred under the title — rather than from the button,
+   which would push a wide panel off the right edge of a phone. */
+.lobby-head {
+  position: relative;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  margin-bottom: 24px;
+}
+.about summary { list-style: none; }
+.about summary::-webkit-details-marker { display: none; }
+.about summary.icon-btn {
+  width: 36px; height: 36px; min-height: 36px;
+  font-size: 20px; color: var(--muted); cursor: pointer;
+}
+.about[open] summary.icon-btn { background: rgba(255,255,255,0.07); color: var(--text); }
+.about-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0; right: 0; margin: 0 auto;
+  width: min(360px, 100%);
+  z-index: 50;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+}
+.about-title { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+.about-panel p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text); }
 .card {
   background: var(--card); padding: 20px;
   border-radius: 14px; margin-bottom: 16px;
@@ -713,7 +742,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── PHONE ─────────────────────────────────── */
 @media (max-width: 480px) {
-  .lobby-title { font-size: 21px; margin-bottom: 18px; }
+  .lobby-title { font-size: 21px; }
+  /* Below 480px the title row reaches the language switcher fixed in the
+     top-right corner, and the about button ended up underneath it — a tap
+     meant for one landed on the other. Start the row below the switcher. */
+  .lobby-head { margin-top: 28px; margin-bottom: 18px; }
   .card { padding: 16px; border-radius: 12px; }
   .modal { padding: 24px 18px; border-radius: 14px; }
   .bubble-row { max-width: 88%; }

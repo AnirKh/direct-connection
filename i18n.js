@@ -23,9 +23,9 @@ let LANG = localStorage.getItem("lang") || "mn";
 const I18N = {
   mn: {
     // Modal
-    modalTitle:      "Шууд холбоос",
-    modalDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
-    modalBtn:        "Зөвшөөрөх & үргэлжлүүлэх",
+    aboutLabel:      "Энэ хуудасны тухай",
+    aboutTitle:      "Шууд холбоос",
+    aboutDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
     // Lobby
     lobbyTitle:      "Шууд холбогдох хэсэг",
     createLabel:     "Шинээр өрөө үүсгэх",
@@ -185,9 +185,9 @@ const I18N = {
     callDecline:     "Татгалзах",
   },
   en: {
-    modalTitle:      "Direct Connection",
-    modalDesc:       "This link was created to communicate without sharing your information through any third party.",
-    modalBtn:        "Approve & Continue",
+    aboutLabel:      "About this page",
+    aboutTitle:      "Direct Connection",
+    aboutDesc:       "This link was created to communicate without sharing your information through any third party.",
     lobbyTitle:      "Direct Connection",
     createLabel:     "Create a New Room",
     sessionPlaceholder: "Enter room name",

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610141222-db5c1daf";
+const APP_BUILD = "202610141240-ad304408";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -109,6 +109,10 @@ function applyI18n() {
     const val = I18N[LANG][key];
     if (typeof val === "string") el.placeholder = val;
   });
+  document.querySelectorAll("[data-i18n-aria]").forEach(el => {
+    const val = I18N[LANG][el.dataset.i18nAria];
+    if (typeof val === "string") el.setAttribute("aria-label", val);
+  });
   // lang toggle active state
   document.querySelectorAll(".lang-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.lang === LANG);
@@ -137,8 +141,7 @@ document.querySelectorAll(".lang-btn").forEach(btn => {
 });
 
 /* ── DOM refs ────────────────────────────────── */
-const overlay          = document.getElementById("overlay");
-const approveBtn       = document.getElementById("approveBtn");
+const aboutDropdown    = document.getElementById("aboutDropdown");
 const lobbyScreen      = document.getElementById("lobbyScreen");
 const chatScreen       = document.getElementById("chatScreen");
 const sessionIdInput   = document.getElementById("sessionId");
@@ -840,15 +843,15 @@ window.addEventListener("resize", fitToVisibleArea);
 fitToVisibleArea();
 
 /* ══════════════════════════════════════════════
-   APPROVAL / AUTO-JOIN
+   ABOUT THIS PAGE
+   ─────────────────────────────────────────────
+   Opened by its own button. A tap anywhere else closes it, as a dropdown is
+   expected to; a tap inside — selecting the text — leaves it open.
 ══════════════════════════════════════════════ */
 
-if (_isAutoJoin) overlay.classList.add("hidden");
-
-approveBtn.onclick = () => {
-  overlay.classList.add("hidden");
-  // WS already connecting in background — nothing else needed
-};
+document.addEventListener("click", (e) => {
+  if (aboutDropdown.open && !aboutDropdown.contains(e.target)) aboutDropdown.open = false;
+});
 
 /** Both create buttons, always together — a second create while one is in
     flight is the same mistake whichever button it comes from. */
