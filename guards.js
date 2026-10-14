@@ -156,6 +156,10 @@
    */
   const CLEAR_TYPES = Object.freeze([
     "e2e-pubkey", "e2e-confirm", "e2e-fail", "e2e-dc",
+    /* SPAKE2 handshake for a code room — runs before any key exists, and
+       carries only public values (a curve point, a confirmation tag). See
+       pake.js. The word itself never travels; it is proven, not sent. */
+    "pake-msg", "pake-confirm",
     "text", "ack", "typing", "typing-stop"
   ]);
 
@@ -284,6 +288,36 @@
   }
 
   /* ══════════════════════════════════════════
+     Code rooms (SPAKE2)
+  ══════════════════════════════════════════ */
+
+  /** How many wrong-code attempts a host accepts before locking the room for a
+      cooldown. SPAKE2 already limits an attacker to one guess per connection;
+      this caps how fast those guesses can be made at all. */
+  const CODE_MAX_ATTEMPTS = 10;
+
+  /**
+   * A guest just failed the SPAKE2 check on a code room. May the host accept
+   * another attempt, or is it locked?
+   *
+   * The word is proven between the two phones, so the server cannot rate-limit
+   * it — the host does, here. A short word has few possibilities, so without
+   * this a stranger could reconnect and guess, one try per connection, as fast
+   * as the link allows. After CODE_MAX_ATTEMPTS the host turns new guests away
+   * until `until`.
+   *
+   * @param {{failures: number, now: number, lockedUntil: number}} o
+   * @returns {{locked: boolean, until: number}}
+   */
+  function codeAttemptState(o) {
+    const now = (o && o.now) || 0;
+    if (o && o.lockedUntil && o.lockedUntil > now) return { locked: true, until: o.lockedUntil };
+    const failures = (o && o.failures) || 0;
+    if (failures >= CODE_MAX_ATTEMPTS) return { locked: true, until: now + 5 * 60 * 1000 };
+    return { locked: false, until: 0 };
+  }
+
+  /* ══════════════════════════════════════════
      Room events from the server
   ══════════════════════════════════════════ */
 
@@ -357,6 +391,7 @@
     isNewerBuild, updateAction,
     mayCaptureForCall, consentedVideo,
     mayAcceptPeerKey, shieldState,
+    CODE_MAX_ATTEMPTS, codeAttemptState,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

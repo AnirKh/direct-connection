@@ -31,7 +31,8 @@ const grab = (pattern, what) => {
 const SOURCE = [
   grab(/^const SHIELD_LOOK = \{[\s\S]*?^\};/m,               "SHIELD_LOOK"),
   grab(/^function updateShield\(\)\s*\{[\s\S]*?^\}/m,        "updateShield"),
-  grab(/^const MESSAGE_CIPHER = "[^"]*";/m,                  "MESSAGE_CIPHER"),
+  grab(/^const MESSAGE_CIPHER_ECDH\s*=\s*"[^"]*";/m,         "MESSAGE_CIPHER_ECDH"),
+  grab(/^const MESSAGE_CIPHER_SPAKE2\s*=\s*"[^"]*";/m,       "MESSAGE_CIPHER_SPAKE2"),
   grab(/^const CALL_CIPHER\s*=\s*"[^"]*";/m,                 "CALL_CIPHER"),
   grab(/^function renderShieldFacts\(\)\s*\{[\s\S]*?^\}/m,   "renderShieldFacts")
 ].join("\n");
@@ -52,10 +53,10 @@ function element() {
 /** Draws the shield for one situation and hands back what is on screen.
     t() returns the key it was asked for, so a sentence can be named exactly. */
 function draw({ ready = false, secure = false, verified = false, path = null, addresses = null,
-                peer = null, mine = { os: "android", browser: "chrome" } } = {}) {
+                peer = null, mine = { os: "android", browser: "chrome" }, keyAgreement = "ECDH" } = {}) {
   const dom = Object.fromEntries(ELEMENTS.map(name => [name, element()]));
-  const names  = ["G", "DCS", "t", "e2eReady", "e2eSecureMode", "e2eVerified", "_lastPath", "_lastAddresses", "peerDevice", "MY_DEVICE", ...ELEMENTS];
-  const values = [G, DCS, key => key, ready, secure, verified, path, addresses, peer, mine, ...ELEMENTS.map(n => dom[n])];
+  const names  = ["G", "DCS", "t", "e2eReady", "e2eSecureMode", "e2eVerified", "_lastPath", "_lastAddresses", "peerDevice", "MY_DEVICE", "keyAgreement", ...ELEMENTS];
+  const values = [G, DCS, key => key, ready, secure, verified, path, addresses, peer, mine, keyAgreement, ...ELEMENTS.map(n => dom[n])];
   new Function(...names, `${SOURCE}\nupdateShield();`)(...values);
   return {
     dom,
@@ -194,4 +195,10 @@ test("nothing the other side wrote appears in the panel", () => {
 test("no chat means no device is claimed for the other side", () => {
   /* Even if a description is somehow still held from before. */
   assert.equal(draw({ ready: false, peer: { os: "iphone", browser: "safari" } }).theirs, "—");
+});
+
+test("a code room's panel names SPAKE2 as the key exchange", () => {
+  /* The cipher line follows how the key was actually agreed. */
+  assert.match(draw({ ready: true, verified: true, keyAgreement: "SPAKE2" }).cipher, /SPAKE2 P-256/);
+  assert.match(draw({ ready: true, keyAgreement: "ECDH" }).cipher, /ECDH P-256/);
 });

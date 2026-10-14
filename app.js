@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610140213-c84b869c";
+const APP_BUILD = "202610140813-6edc540c";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -144,6 +144,13 @@ const chatScreen       = document.getElementById("chatScreen");
 const sessionIdInput   = document.getElementById("sessionId");
 const createBtn        = document.getElementById("createBtn");
 const createOpenBtn    = document.getElementById("createOpenBtn");
+const createCodeBtn    = document.getElementById("createCodeBtn");
+const codeOverlay      = document.getElementById("codeOverlay");
+const codeTitle        = document.getElementById("codeTitle");
+const codeHint         = document.getElementById("codeHint");
+const codeInput        = document.getElementById("codeInput");
+const codeConfirmBtn   = document.getElementById("codeConfirmBtn");
+const codeCancelBtn    = document.getElementById("codeCancelBtn");
 const createInfo       = document.getElementById("createInfo");
 const sessionsList     = document.getElementById("sessionsList");
 const refreshBtn       = document.getElementById("refreshBtn");
@@ -203,6 +210,7 @@ const factPeerIpValue     = document.getElementById("factPeerIpValue");
 const factYourDeviceValue = document.getElementById("factYourDeviceValue");
 const factPeerDeviceValue = document.getElementById("factPeerDeviceValue");
 const keyVerifyCode  = document.getElementById("keyVerifyCode");
+const keyVerifyHint  = document.getElementById("keyVerifyHint");
 const keyVerifyInput = document.getElementById("keyVerifyInput");
 const keyVerifyStatus= document.getElementById("keyVerifyStatus");
 
@@ -360,6 +368,21 @@ let e2ePendingConfirm = null;  // confirm that landed before derivation finished
 let e2ePeerKeySeen   = false;  // a peer public key has arrived on this channel
 let e2eConfirmTimer  = null;
 
+/* ── Code rooms (SPAKE2) ──────────────────────
+   A code room agrees its key from a secret word with SPAKE2 (see pake.js)
+   instead of plain ECDH. Both sides must run the same path, so the kind is
+   remembered for the life of the room. */
+const PAKE = window.DCPake;
+let roomKind       = "pin";   // "pin" | "open" | "code" — set on create and on join
+let pakeCode       = null;    // the secret word for this room (never sent to the server)
+let pakeStarted    = null;    // our SPAKE2 start(): { state, message }
+let pakeSession    = null;    // our SPAKE2 finish(): awaiting the peer's confirmation
+let keyAgreement   = "ECDH";  // how the live key was agreed — for the shield panel
+/* Host-side guard on wrong-code guesses; the server cannot see the word, so it
+   cannot rate-limit it. See guards.js codeAttemptState. */
+let codeFailures   = 0;
+let codeLockedUntil = 0;
+
 const E2E_CONFIRM_TIMEOUT_MS = 15_000;
 
 const makeRoomSecret = DC.makeRoomSecret;
@@ -460,6 +483,111 @@ function sendPeerInfo() {
   if (peerInfoSent) return;
   peerInfoSent = true;
   dcSendE2e({ type: "peer-info", os: MY_DEVICE.os, browser: MY_DEVICE.browser }).catch(() => {});
+}
+
+/* ══════════════════════════════════════════════
+   CODE ROOMS — SPAKE2 over the data channel
+   ─────────────────────────────────────────────
+   Symmetric: each side sends its message, answers the peer's message with a
+   confirmation tag, and verifies the peer's tag. Matching words → the same key,
+   authenticated, so the shield goes green with nothing to compare by hand. A
+   wrong word → the tags do not verify and the channel never opens. The word
+   itself never travels; only public values do (see pake.js, guards.js).
+══════════════════════════════════════════════ */
+
+/** Clears everything a code handshake holds. Called whenever a channel resets. */
+function pakeReset() {
+  pakeStarted = null;
+  pakeSession = null;
+}
+
+/** Start the exchange when the channel opens. Both sides call this. */
+async function pakeBegin() {
+  pakeReset();
+  updateKeyVerifyUi();
+  appendSys(t("e2eWaiting"));
+
+  /* Host holds the gate: a stranger cannot be let on for an endless stream of
+     guesses. If locked from earlier wrong attempts, do not even start. */
+  if (isHost) {
+    const lock = G.codeAttemptState({ failures: codeFailures, lockedUntil: codeLockedUntil, now: Date.now() });
+    if (lock.locked) { pakeFailClosed(true); return; }
+  }
+  if (!PAKE || !pakeCode || !currentSession) { pakeFailClosed(false); return; }
+
+  try {
+    pakeStarted = PAKE.start(isHost ? "host" : "guest", pakeCode, currentSession.sessionId);
+    /* Raw send: the handshake runs before any key exists. */
+    dataChannel.send(JSON.stringify({ type: "pake-msg", msg: pakeStarted.message }));
+  } catch (err) {
+    console.error("SPAKE2 start failed:", err);
+    pakeFailClosed(false);
+  }
+}
+
+/** The peer's SPAKE2 message arrived. Derive, and answer with our tag. */
+async function handlePakeMessage(data) {
+  if (!pakeStarted || pakeSession) return;   // not started, or already answered
+  try {
+    pakeSession = PAKE.finish(pakeStarted.state, data.msg);
+    dataChannel.send(JSON.stringify({ type: "pake-confirm", tag: pakeSession.confirmToSend }));
+  } catch (err) {
+    /* An invalid point, or a degenerate shared value — never an honest peer. */
+    console.warn("SPAKE2 message rejected:", err && err.message);
+    pakeFailClosed(false);
+  }
+}
+
+/** The peer's confirmation tag arrived. If it verifies, the word matched. */
+async function handlePakeConfirm(data) {
+  if (!pakeSession) return;
+  if (!pakeSession.verifyPeerConfirm(String(data.tag || ""))) {
+    pakeFailClosed(false);
+    return;
+  }
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw", pakeSession.sessionKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    codeFailures = 0;             // a success clears the host's wrong-guess count
+    keyAgreement = "SPAKE2";
+    pakeReset();
+    /* Authenticated by the shared word, exactly like the invite-link secret. */
+    e2eActivate(key, true);
+  } catch (err) {
+    console.error("SPAKE2 key import failed:", err);
+    pakeFailClosed(false);
+  }
+}
+
+/**
+ * The code handshake failed — a wrong word, a tampered message, or the lockout.
+ * The channel never opens. The guest returns to the lobby so they can try again;
+ * the host counts the miss and, past the limit, locks the room for a cooldown.
+ */
+function pakeFailClosed(locked) {
+  pakeReset();
+  keyAgreement = "ECDH";
+  e2eReady = false; e2eVerified = false; e2eSecureMode = false;
+  sendBtn.disabled = true; voiceCallBtn.disabled = true; videoCallBtn.disabled = true;
+  updateKeyVerifyUi();
+
+  if (isHost && !locked) {
+    codeFailures++;
+    const lock = G.codeAttemptState({ failures: codeFailures, lockedUntil: codeLockedUntil, now: Date.now() });
+    if (lock.locked) codeLockedUntil = lock.until;
+  }
+
+  showToast(t("codeWrong"), "error");
+  if (isHost) {
+    /* Drop this guest; the room reopens for the next attempt (or the right one),
+       unless we have now locked it. */
+    appendSys(t(codeLockedUntil > Date.now() ? "codeLocked" : "codeWrong"));
+  } else {
+    /* Guest: leave, so the room's slot frees and they can rejoin with the
+       right word. */
+    appendSys(t("codeWrong"));
+    setTimeout(() => { if (!e2eReady) leaveBtn.click(); }, 1200);
+  }
 }
 
 /** Refuse to open the channel. Better a dead chat than a silently readable one. */
@@ -727,7 +855,33 @@ approveBtn.onclick = () => {
 function setCreateButtons(disabled) {
   createBtn.disabled     = disabled;
   createOpenBtn.disabled = disabled;
+  createCodeBtn.disabled = disabled;
 }
+
+/* ── The shared-word dialog ───────────────────
+   Used both ways: the host choosing a word, the guest entering it. One
+   callback, set per use. */
+let _codeOnConfirm = null;
+function askForCode({ title, hint, confirmLabel, onConfirm }) {
+  _codeOnConfirm = onConfirm;
+  codeTitle.textContent = title;
+  codeHint.textContent = hint;
+  codeConfirmBtn.textContent = confirmLabel;
+  codeInput.value = "";
+  codeOverlay.classList.remove("hidden");
+  setTimeout(() => codeInput.focus(), 100);
+}
+function closeCodeDialog() { codeOverlay.classList.add("hidden"); _codeOnConfirm = null; }
+function submitCode() {
+  const word = codeInput.value.trim();
+  if (!word) { codeInput.focus(); return; }
+  const cb = _codeOnConfirm;
+  closeCodeDialog();
+  if (cb) cb(word);
+}
+codeConfirmBtn.onclick = submitCode;
+codeCancelBtn.onclick = closeCodeDialog;
+codeInput.addEventListener("keydown", e => { if (e.key === "Enter") submitCode(); });
 
 function setLobbyButtons(disabled) {
   setCreateButtons(disabled);
@@ -743,6 +897,7 @@ function checkAutoJoin() {
   if (!_isAutoJoin || _autoJoinSent) return;
   _autoJoinSent = true;
   isConnecting = true;
+  roomKind = "pin"; pakeCode = null;   // an invite link is the ECDH path, not a code room
   pendingRoomSecret = _autoSecret;   // link join — carries the room secret
   setLobbyButtons(true);
   const msg = document.createElement("span");
@@ -879,31 +1034,37 @@ function renderSessionList(sessions) {
     return;
   }
   sessionsList.replaceChildren();
-  _lastSessionList.forEach(({ sessionId, createdAt, open }) => {
-    /* Only an explicit true makes a room open here. An older server sends no
-       flag at all, and its rooms all want a PIN. */
-    const isOpen = open === true;
+  _lastSessionList.forEach(({ sessionId, createdAt, open, kind }) => {
+    /* Three kinds. Anything an older server did not label is a PIN room; only
+       an explicit flag makes it anything else, so a room never changes kind by
+       accident. */
+    const roomIs = kind === "code" ? "code" : (open === true || kind === "open") ? "open" : "pin";
+    const glyph  = { pin: "🔒", open: "🔓", code: "🔑" }[roomIs];
+    const label  = { pin: "roomKindPin", open: "roomKindOpen", code: "roomKindCode" }[roomIs];
     const item = document.createElement("div");
     item.className = "session-item";
     const info = document.createElement("div");
     info.className = "session-item-info";
     const name = document.createElement("div");
     name.className = "session-item-name";
-    name.textContent = `${isOpen ? "🔓" : "🔒"} ${sessionId}`;
+    name.textContent = `${glyph} ${sessionId}`;
     const meta = document.createElement("div");
     meta.className = "session-item-meta";
-    const kind = document.createElement("span");
-    kind.className = isOpen ? "room-kind open" : "room-kind";
-    kind.textContent = t(isOpen ? "roomKindOpen" : "roomKindPin");
-    meta.append(document.createTextNode(I18N[LANG].sessionMeta(timeAgo(createdAt))), kind);
+    const kindTag = document.createElement("span");
+    kindTag.className = roomIs === "pin" ? "room-kind" : `room-kind ${roomIs}`;
+    kindTag.textContent = t(label);
+    meta.append(document.createTextNode(I18N[LANG].sessionMeta(timeAgo(createdAt))), kindTag);
     const joinBtn = document.createElement("button");
     joinBtn.className = "join-btn";
     joinBtn.dataset.id = sessionId;
     joinBtn.textContent = t("joinBtn");
-    /* An open room has nothing to type, so there is no dialog to show. If the
-       list turns out to be wrong about it, the server says so and the dialog
-       opens then — see the pin-required case. */
-    joinBtn.onclick = () => (isOpen ? joinOpenRoom(sessionId) : openPinModal(sessionId));
+    /* An open room has nothing to type. A code room asks for the shared word. A
+       PIN room asks for the PIN. If the list is wrong about a room, the server
+       says so and the right dialog opens then — see the pin-required case. */
+    joinBtn.onclick = () =>
+      roomIs === "open" ? joinOpenRoom(sessionId) :
+      roomIs === "code" ? openCodeJoin(sessionId) :
+                          openPinModal(sessionId);
     info.append(name, meta);
     item.append(info, joinBtn);
     sessionsList.appendChild(item);
@@ -915,24 +1076,54 @@ function timeAgo(ts) {
   return { s: I18N[LANG].timeS, m: I18N[LANG].timeM, h: I18N[LANG].timeH }[unit](value);
 }
 
-/* Two kinds of room, one per button.
+/* Three kinds of room, one per button.
 
      PIN room   the guest types the 6-digit PIN, or uses the invite link
-     open room  no PIN: anyone who can see the list taps Join and is in
+     open room  no secret: anyone who can see the list taps Join and is in
+     code room  the host invents a word, shares it, and the guest types it;
+                SPAKE2 proves the word and turns the chat green with nothing to
+                compare by hand (see pake.js)
 
-   Either way a room holds the host and one guest. An open room is simply
-   first come, first served — and gone from the list the moment someone is in. */
-function createRoom(open) {
+   All three hold the host and one guest. */
+function createRoom(kind) {
   const sessionId = sessionIdInput.value.trim();
   if (!sessionId) { showToast(t("enterSessionName"), "warn"); return; }
   if (isConnecting) return;
+  if (kind === "code" && !pakeCode) { openChooseCode(sessionId); return; }
   isConnecting = true;
   setCreateButtons(true);
   createInfo.textContent = t("creating");
-  wsSend({ type: "create-session", sessionId, open });
+  roomKind = kind;   // so the host takes the code path when the channel opens
+  wsSend({ type: "create-session", sessionId, open: kind === "open", code: kind === "code" });
 }
-createBtn.onclick     = () => createRoom(false);
-createOpenBtn.onclick = () => createRoom(true);
+createBtn.onclick     = () => createRoom("pin");
+createOpenBtn.onclick = () => createRoom("open");
+createCodeBtn.onclick = () => createRoom("code");
+
+/** Host: ask for the word, remember it, then create the room. The word stays
+    in this browser — it is never put in the create message. */
+function openChooseCode(sessionId) {
+  askForCode({
+    title: t("chooseCodeTitle"), hint: t("chooseCodeHint"), confirmLabel: t("createBtnLabelCode"),
+    onConfirm: word => { pakeCode = word; createRoom("code"); }
+  });
+}
+
+/** Guest: ask for the word, then join. Admission is first-come like an open
+    room; the word is proven peer to peer once connected, not sent to join. */
+function openCodeJoin(sessionId) {
+  if (isConnecting || listJoinId || pinJoinInFlight) return;
+  askForCode({
+    title: I18N[LANG].codeJoinTitle(sessionId), hint: t("codeJoinHint"), confirmLabel: t("joinBtn"),
+    onConfirm: word => {
+      pakeCode = word;
+      roomKind = "code";
+      listJoinId = sessionId;
+      pendingRoomSecret = null;
+      wsSend({ type: "join-session", sessionId });
+    }
+  });
+}
 
 /* ── Joining an open room ────────────────────── */
 let listJoinId = null;   // a join sent straight from the list, not yet answered
@@ -942,6 +1133,7 @@ function joinOpenRoom(sessionId) {
      being answered, would leave two answers and no way to tell them apart. */
   if (isConnecting || listJoinId || pinJoinInFlight) return;
   listJoinId = sessionId;
+  roomKind = "open"; pakeCode = null;   // ECDH path, no shared word
   pendingRoomSecret = null;   // no link, so no shared secret — the shield starts amber
   wsSend({ type: "join-session", sessionId });
 }
@@ -978,6 +1170,7 @@ function attemptJoin() {
   pinError.textContent = "";
   pinJoinBtn.disabled = true;
   pinJoinInFlight = true;
+  roomKind = "pin"; pakeCode = null;   // a PIN join is the ECDH path, not a code room
   pendingRoomSecret = null;   // PIN join — no shared secret, manual verification applies
   wsSend({ type: "join-session", sessionId: pendingJoinId, pin });
 }
@@ -1003,6 +1196,11 @@ function closePeerConnection() {
   _lastAddresses = null;
   peerDevice     = null;
   peerInfoSent   = false;
+  /* The code handshake belongs to the channel that just closed. The word and
+     the room kind are kept — a dropped connection to the same room reconnects
+     and runs the handshake again. */
+  pakeReset();
+  keyAgreement = "ECDH";
   e2eVerifyCode = "";
   e2eVerified = false;
   e2eLocalPubRaw = null;
@@ -1125,13 +1323,17 @@ function setupDataChannel() {
   dataChannel.binaryType = "arraybuffer";
 
   dataChannel.onopen = async () => {
-    // sendBtn stays disabled until E2E key exchange completes (usually <100ms)
+    // sendBtn stays disabled until the key exchange completes (usually <100ms)
     voiceCallBtn.disabled = true;
     videoCallBtn.disabled = true;
     /* Nothing is announced yet. The channel being open is not the chat being
        usable — e2eActivate() says "connected" once the key is agreed. */
     e2eReady = false;
-    await e2eInit();
+    /* A code room proves a shared word with SPAKE2; every other room does the
+       plain ECDH exchange. The kind was fixed when the room was created or
+       joined, so both sides take the same branch. */
+    if (roomKind === "code") await pakeBegin();
+    else                     await e2eInit();
     // sendBtn enabled in e2eActivate() once the shared key is confirmed
   };
 
@@ -1229,6 +1431,7 @@ async function handleSignaling(data) {
 
     case "session-created": {
       isHost = true;
+      roomKind = data.kind === "code" ? "code" : (data.open === true ? "open" : "pin");
       currentSession = { sessionId: data.sessionId, token: data.token };
       /* Minted here, in the browser — the server never learns it. */
       roomSecret = makeRoomSecret();
@@ -1240,24 +1443,28 @@ async function handleSignaling(data) {
       ready.style.cssText = "text-align:center;margin-bottom:14px";
       ready.textContent = t("roomReady");
 
+      const isOpen = roomKind === "open";
+      const isCode = roomKind === "code";
+
       const pinBox = document.createElement("div");
       pinBox.style.cssText = "background:var(--sunken);border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
       const pinLabel = document.createElement("div");
       pinLabel.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
-      /* An open room has no PIN to show. The same box says so instead, and
-         says plainly who can come in — the host should not have to work out
-         that "no PIN" means anyone looking at the list. */
-      const isOpen = data.open === true;
-      pinLabel.textContent = isOpen ? t("openRoomTitle") : t("pinCode");
+      /* Each kind fills the same box: a PIN to read out, an open-room notice, or
+         — for a code room — the word the host chose, to share the same way. */
+      pinLabel.textContent = isCode ? t("codeRoomTitle") : isOpen ? t("openRoomTitle") : t("pinCode");
       const pinValue = document.createElement("div");
-      pinValue.style.cssText = isOpen
-        ? "font-size:28px;line-height:1.2;color:var(--orange)"
-        : "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
-      if (isOpen) pinValue.appendChild(tablerIcon("lock-open"));
-      else        pinValue.textContent = data.pin;
+      pinValue.style.cssText = isCode
+        ? "font-size:24px;font-weight:700;color:var(--accent-text);word-break:break-word"
+        : isOpen
+          ? "font-size:28px;line-height:1.2;color:var(--orange)"
+          : "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
+      if (isCode)     pinValue.textContent = pakeCode || "";
+      else if (isOpen) pinValue.appendChild(tablerIcon("lock-open"));
+      else            pinValue.textContent = data.pin;
       const pinHint = document.createElement("div");
       pinHint.style.cssText = "font-size:11px;color:var(--muted);margin-top:4px";
-      pinHint.textContent = isOpen ? t("openRoomHint") : t("pinCodeHint");
+      pinHint.textContent = isCode ? t("codeRoomHint") : isOpen ? t("openRoomHint") : t("pinCodeHint");
       pinBox.append(pinLabel, pinValue, pinHint);
 
       const linkHint = document.createElement("div");
@@ -1276,7 +1483,11 @@ async function handleSignaling(data) {
       copyLinkBtn.style.cssText = "width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0";
       copyLinkBtn.textContent = t("copyBtn");
       linkRow.append(shareUrlInput, copyLinkBtn);
-      createInfo.replaceChildren(ready, pinBox, linkHint, linkRow);
+      /* No invite link for a code room: the link carries the room secret for
+         the ECDH path, which a code room does not use. The word is the only way
+         in, and a link would just fail to connect. */
+      if (isCode) createInfo.replaceChildren(ready, pinBox);
+      else        createInfo.replaceChildren(ready, pinBox, linkHint, linkRow);
 
       copyLinkBtn.onclick = () => {
         navigator.clipboard.writeText(shareUrl).then(() => {
@@ -1495,6 +1706,12 @@ leaveBtn.onclick = () => {
   currentSession = null;
   roomSecret = null;
   pendingRoomSecret = null;
+  /* Leaving ends the code room entirely — the word and the wrong-guess count go
+     with it. */
+  roomKind = "pin";
+  pakeCode = null;
+  codeFailures = 0;
+  codeLockedUntil = 0;
   isHost = false;
   isConnecting = false;
   chatScreen.classList.add("hidden");
@@ -1706,6 +1923,15 @@ function handleTextMessage(data, sealed = false) {
 
     case "e2e-fail":
       e2eFailClosed();
+      break;
+
+    case "pake-msg":
+      /* Only ever on a code room, and only one per channel. */
+      if (roomKind === "code") handlePakeMessage(data);
+      break;
+
+    case "pake-confirm":
+      if (roomKind === "code") handlePakeConfirm(data);
       break;
 
     case "ack":
@@ -2306,9 +2532,11 @@ function updateShield() {
 
 /* What the chat is encrypted with. Written out rather than read from the keys,
    which do not expose it in a form worth showing — so test/client-source.test.js
-   checks these words against the calls that actually do the work. */
-const MESSAGE_CIPHER = "AES-256-GCM · ECDH P-256";
-const CALL_CIPHER    = "DTLS-SRTP";
+   checks these words against the calls that actually do the work. The second
+   half names how the key was agreed: ECDH for most rooms, SPAKE2 for a code one. */
+const MESSAGE_CIPHER_ECDH   = "AES-256-GCM · ECDH P-256";
+const MESSAGE_CIPHER_SPAKE2 = "AES-256-GCM · SPAKE2 P-256";
+const CALL_CIPHER           = "DTLS-SRTP";
 
 /** Fills in the facts under the verification code. Called whenever any of them
     can have changed: the shield's state, the route, or what the peer said. */
@@ -2324,7 +2552,7 @@ function renderShieldFacts() {
   factWhoCanRead.textContent = t({ idle: "factReadIdle", warn: "factReadWarn", ok: "factReadOk" }[state]);
   factWhoCanRead.className   = `fact-read ${state}`;
 
-  factCipherValue.textContent = live ? MESSAGE_CIPHER : "—";
+  factCipherValue.textContent = live ? (keyAgreement === "SPAKE2" ? MESSAGE_CIPHER_SPAKE2 : MESSAGE_CIPHER_ECDH) : "—";
   factCallsValue.textContent  = live ? CALL_CIPHER : "—";
 
   const path = _lastPath;
@@ -2351,10 +2579,20 @@ function renderShieldFacts() {
 function updateKeyVerifyUi() {
   updateShield();
   if (!keyVerifyCode || !keyVerifyInput || !keyVerifyStatus) return;
+
+  /* A code room (SPAKE2) verifies from the shared word and produces no
+     comparison code, so the code box and the "compare the code" hint would sit
+     empty and misleading. Show them only when there is a code to compare — the
+     ECDH paths, whether verified by hand or by the invite link. */
+  const hasCode = Boolean(e2eVerifyCode);
+  keyVerifyCode.classList.toggle("hidden", !hasCode);
+  if (keyVerifyHint) keyVerifyHint.classList.toggle("hidden", !hasCode);
   keyVerifyCode.textContent = e2eVerifyCode || "----";
   if (!e2eVerifyCode) keyVerifyInput.value = "";
+
   if (e2eSecureMode) {
-    /* Authenticated by the invite-link secret — nothing for the user to compare. */
+    /* Authenticated by the invite-link secret or the shared word — nothing for
+       the user to compare. */
     keyVerifyInput.classList.add("hidden");
     keyVerifyStatus.textContent = t("verifyAuto");
   } else {

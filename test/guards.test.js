@@ -428,3 +428,32 @@ test("a device description is only believed from inside the envelope", () => {
   assert.equal(G.mayHandleFrame("peer-info", true), true);
   assert.ok(!G.CLEAR_TYPES.includes("peer-info"));
 });
+
+/* ══════════════════════════════════════════
+   codeAttemptState — the host's limit on wrong-code guesses
+══════════════════════════════════════════ */
+
+const now = 1_000_000;
+
+test("a fresh code room accepts attempts", () => {
+  assert.deepEqual(G.codeAttemptState({ failures: 0, lockedUntil: 0, now }), { locked: false, until: 0 });
+  assert.equal(G.codeAttemptState({ failures: G.CODE_MAX_ATTEMPTS - 1, lockedUntil: 0, now }).locked, false);
+});
+
+test("the room locks once the wrong-guess limit is reached", () => {
+  /* SPAKE2 gives one guess per connection; this caps how many connections of
+     guesses a stranger gets before the host shuts the door. */
+  const s = G.codeAttemptState({ failures: G.CODE_MAX_ATTEMPTS, lockedUntil: 0, now });
+  assert.equal(s.locked, true);
+  assert.ok(s.until > now, "it locks for a cooldown, not forever");
+});
+
+test("a standing lock holds until it expires, then releases", () => {
+  assert.equal(G.codeAttemptState({ failures: 0, lockedUntil: now + 1000, now }).locked, true);
+  assert.equal(G.codeAttemptState({ failures: 0, lockedUntil: now - 1, now }).locked, false);
+});
+
+test("a missing argument does not throw and is not locked", () => {
+  assert.equal(G.codeAttemptState(undefined).locked, false);
+  assert.equal(G.codeAttemptState({}).locked, false);
+});

@@ -10,6 +10,8 @@ AnirKh.github.io/direct-connection
 | `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
 | `guards.js` | The safety decisions as pure functions — may the camera open, may this message be believed, may the microphone open, may this voice note be sent, which room is the server talking about, what the verification shield says. See below. |
 | `connstats.js` | Everything derived from an `RTCStatsReport`: which route ICE chose, direct or relayed, link quality, byte totals, and the address each device shows the other. Also the coarse description of a device, and the fixed table of what may be displayed about the other side's. Pure. |
+| `pake.js` | SPAKE2 (RFC 9382) over P-256 — the password-authenticated key agreement a **code room** uses, so a short shared word verifies the chat with nothing to compare by hand. Pure; pinned to the RFC test vectors. See "Code rooms". |
+| `vendor/noble.js` | The audited elliptic-curve + hashing library `pake.js` stands on (`@noble/curves`, `@noble/hashes`), bundled into one self-hosted file by `npm run build-vendor`. Used unmodified; do not edit by hand. |
 | `app.js` | Everything stateful and everything with an effect: WebRTC, data channel, calls, chat UI. Asks the two modules above rather than deciding for itself. |
 | `csp.js` | The Content-Security-Policy, defined once (see below). |
 | `clientip.js` | Works out the real client address from `X-Forwarded-For`. Every rate limit depends on it, so it is separate and tested. |
@@ -48,19 +50,35 @@ Breaking that rule would remove the protection while everything carried on worki
 - The guard checks `roomSecret`, `pendingRoomSecret` **and** `_autoSecret`. The join is sent while the secret is still in `pendingRoomSecret` — `roomSecret` is only assigned once the server confirms — so checking one variable would leave the guard inert during the very message most likely to carry it.
 - `test/client-source.test.js` fails if any `wsSend` payload mentions a secret, if `join-session` grows a field beyond `sessionId`/`pin`/`token`, or if a new secret-holding variable appears without being added to `roomSecretsInPlay()`.
 
-### Two kinds of room
+### Three kinds of room
 
-The lobby has a button for each. Both hold the host and **one** guest.
+The lobby has a button for each. All hold the host and **one** guest.
 
-| | PIN room | Open room |
-| --- | --- | --- |
-| Created with | `create-session` | `create-session` with `open: true` |
-| To get in from the list | type the 6-digit PIN | tap Join — nothing to type |
-| Invite link | works, and authenticates the key exchange | the same |
-| Join locks | apply to PIN guesses | do not apply — there is nothing to guess |
-| Shown in the list as | 🔒 and "PIN" | 🔓 and "open" |
+| | PIN room | Open room | Code room |
+| --- | --- | --- | --- |
+| Created with | `create-session` | `create-session` `open:true` | `create-session` `code:true` |
+| To get in from the list | type the 6-digit PIN | tap Join — nothing to type | type the shared **word** |
+| Invite link | works, authenticates the key | the same | **none** — the word is the only way in |
+| Verified (green) without comparing a code | only via the invite link | only via the invite link | **always**, once the word matches |
+| Join locks | apply to PIN guesses | nothing to guess | host-side, on wrong-word attempts |
+| Shown in the list as | 🔒 "PIN" | 🔓 "open" | 🔑 "word" |
 
 An open room is first come, first served: whoever taps it first is in, it leaves the list, and anyone after that is told it is full. That is the whole meaning of "open" — **it is not a room for more than two people.**
+
+### Code rooms — a short word, verified automatically (SPAKE2)
+
+A PIN join is amber until the two people compare a code by hand, because the server makes the PIN and so cannot be shut out of the key agreement. A **code room** removes the hand step: the host invents a word, shares it out of band (says it, texts it), the guest types it, and the chat turns **green on its own**. The server never sees the word.
+
+What makes a *short* word safe is that it can only be guessed **online, one try per connection**. There is nothing an attacker can capture and grind through offline. That property does not come from mixing the word into the key — doing that would hand an attacker exactly the offline dictionary attack to avoid — it comes from a real **PAKE**: **SPAKE2** (RFC 9382) over P-256.
+
+- **`pake.js`** is the SPAKE2 protocol; **`vendor/noble.js`** is the audited elliptic-curve library it stands on (`@noble/curves`, bundled by `npm run build-vendor`, used unmodified). The curve math is never hand-rolled.
+- **`test/pake.test.js` pins every step to the official RFC 9382 test vector** — `pA`, `pB`, the shared point `K`, the transcript, the derived keys, and both confirmation tags all match the RFC byte for byte. A second, independent check that the implementation is correct is not needed when it reproduces the specification's own numbers.
+- The handshake runs over the data channel in place of ECDH: each side sends its SPAKE2 message, answers with a confirmation tag, and verifies the peer's. Matching words → the same key, authenticated → `e2eActivate(key, true)` → green. A wrong word → the tags do not verify → the channel never opens. Only public values cross the wire (a curve point, a tag); the word is **proven, never sent**, which is why `pake-msg`/`pake-confirm` are the only new types allowed outside the encrypted envelope.
+- **The word reaches no server message.** `create-session` carries a boolean `code:true`, never the word; a test fails if any `wsSend` payload mentions `pakeCode`.
+- **A code room offers no invite link.** The link carries the ECDH room secret, which this path does not use, so it would only fail to connect. The way in is the word.
+- **Rate limit.** SPAKE2 already caps an attacker to one guess per connection; `codeAttemptState` in `guards.js` caps how many wrong attempts the host accepts at all before locking the room for a cooldown, since the server cannot rate-limit a word it never sees. A wrong guess sends the guest back to the lobby so the room frees for the right person.
+
+Admission is the open-room model: the server lets the first person connect (it has no word to check), and the SPAKE2 handshake between the two browsers is the real gate. Only an explicit `code:true` makes a code room — anything else is still a PIN room.
 
 A few rules keep a room from being open by accident:
 
@@ -172,7 +190,8 @@ Two things travel on the data channel: frames in the clear, and an `e2e-dc` enve
 
 | May arrive in the clear | Why |
 | --- | --- |
-| `e2e-pubkey`, `e2e-confirm`, `e2e-fail` | the handshake — there is no key yet |
+| `e2e-pubkey`, `e2e-confirm`, `e2e-fail` | the ECDH handshake — there is no key yet |
+| `pake-msg`, `pake-confirm` | the SPAKE2 handshake for a code room — also before any key, and only public values (a curve point, a tag) |
 | `e2e-dc` | the envelope itself |
 | `text` | carries its own ciphertext; `mayRenderText` drops it without one |
 | `ack`, `typing`, `typing-stop` | nothing a watcher of packet timing could not already see |
@@ -272,6 +291,7 @@ Node's built-in runner, no dependencies.
 - `test/guards.test.js` — the safety decisions, every combination.
 - `test/connstats.test.js` — which route ICE chose, link quality, byte totals, and which addresses are shown, with a plain Map standing in for the stats report. Also device descriptions, including that nothing a peer sends as one reaches the screen as it was sent.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
+- `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 

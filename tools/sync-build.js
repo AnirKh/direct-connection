@@ -49,7 +49,8 @@ const ROOT = path.join(__dirname, "..");
 /** Everything a browser downloads from us. A change to any of them is a new build. */
 const CLIENT_FILES = [
   "index.html", "style.css",
-  "framebust.js", "protocol.js", "connstats.js", "guards.js", "i18n.js", "app.js"
+  "framebust.js", "protocol.js", "connstats.js", "guards.js", "i18n.js",
+  "vendor/noble.js", "pake.js", "app.js"
 ];
 
 /** The files index.html loads, which is where the stamp has to appear. */

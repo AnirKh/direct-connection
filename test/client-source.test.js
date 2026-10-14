@@ -391,9 +391,11 @@ test("failures are still reported in the chat", () => {
 test("the lobby has a button for each kind of room", () => {
   assert.match(indexSrc, /<button id="createBtn"/, "the PIN-room button is missing");
   assert.match(indexSrc, /<button id="createOpenBtn"/, "the open-room button is missing");
+  assert.match(indexSrc, /<button id="createCodeBtn"/, "the code-room button is missing");
   const src = withoutComments(appSrc);
-  assert.match(src, /createBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\(false\)/, "the PIN-room button must ask for a PIN room");
-  assert.match(src, /createOpenBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\(true\)/, "the open-room button must ask for an open room");
+  assert.match(src, /createBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\("pin"\)/, "the PIN-room button must ask for a PIN room");
+  assert.match(src, /createOpenBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\("open"\)/, "the open-room button must ask for an open room");
+  assert.match(src, /createCodeBtn\.onclick\s*=\s*\(\)\s*=>\s*createRoom\("code"\)/, "the code-room button must ask for a code room");
 });
 
 test("the two create buttons are only ever switched together", () => {
@@ -500,15 +502,22 @@ test("the panel names the encryption the code actually uses", () => {
   /* The label is written out by hand. If the cipher, the key size or the curve
      ever changes, this is what stops the panel going on describing the old one. */
   const src = withoutComments(appSrc);
-  const label = (src.match(/const MESSAGE_CIPHER = "([^"]+)";/) || [])[1];
-  assert.ok(label, "MESSAGE_CIPHER not found");
+  const ecdh   = (src.match(/const MESSAGE_CIPHER_ECDH\s*=\s*"([^"]+)";/) || [])[1];
+  const spake2 = (src.match(/const MESSAGE_CIPHER_SPAKE2\s*=\s*"([^"]+)";/) || [])[1];
+  assert.ok(ecdh && spake2, "the message-cipher labels were not found");
 
   const protocolSrc = fs.readFileSync(path.join(__dirname, "..", "protocol.js"), "utf8");
   assert.match(protocolSrc, /\{\s*name:\s*"AES-GCM",\s*length:\s*256\s*\}/, "protocol.js no longer derives an AES-GCM 256 key");
-  assert.match(label, /AES-256-GCM/, "the label must name the message cipher");
+  assert.match(ecdh, /AES-256-GCM/, "the label must name the message cipher");
+  assert.match(spake2, /AES-256-GCM/, "the code-room label must name the message cipher too");
 
   assert.match(src, /generateKey\(\s*\{\s*name:\s*"ECDH",\s*namedCurve:\s*"P-256"\s*\}/, "app.js no longer generates an ECDH P-256 key pair");
-  assert.match(label, /ECDH P-256/, "the label must name the key exchange");
+  assert.match(ecdh, /ECDH P-256/, "the ECDH label must name the key exchange");
+
+  /* The code room agrees its key with SPAKE2 (pake.js), so its label says so. */
+  const pakeSrc = fs.readFileSync(path.join(__dirname, "..", "pake.js"), "utf8");
+  assert.match(pakeSrc, /SPAKE2/, "pake.js is where SPAKE2 lives");
+  assert.match(spake2, /SPAKE2 P-256/, "the code-room label must name SPAKE2");
 
   assert.match(src, /const CALL_CIPHER\s*=\s*"DTLS-SRTP";/);
 });
@@ -596,4 +605,60 @@ test("the guest introduces itself first, and each side only once", () => {
 
   const handler = withoutComments(appSrc).match(/case "peer-info":[\s\S]*?break;/)[0];
   assert.ok(handler.includes("sendPeerInfo()"), "the host answers when the guest's introduction arrives");
+});
+
+/* ── Code rooms (SPAKE2) ──────────────────────
+   A code room agrees its key from a shared word with SPAKE2. The word is
+   proven between the two phones; these guard what must never slip. */
+
+test("the shared word is never sent to the server", () => {
+  /* Every wsSend payload is a flat object literal; none may carry the word.
+     create-session sends a boolean `code:` flag, not the word itself. */
+  const src = withoutComments(appSrc);
+  for (const m of src.matchAll(/wsSend\(\s*\{[^}]*\}/g)) {
+    assert.ok(!/pakeCode/.test(m[0]), `a wsSend payload references the word:\n${m[0]}`);
+  }
+  /* And the create message carries only the flag. */
+  const create = src.match(/wsSend\(\{ type: "create-session"[^}]*\}\)/);
+  assert.ok(create && /code: kind === "code"/.test(create[0]), "create-session must send a code flag, not the word");
+});
+
+test("a code room runs SPAKE2, every other room runs ECDH", () => {
+  const onopen = withoutComments(appSrc).match(/dataChannel\.onopen\s*=[\s\S]*?\n  \};/)[0];
+  assert.match(onopen, /if \(roomKind === "code"\) await pakeBegin\(\);/);
+  assert.match(onopen, /else\s+await e2eInit\(\);/);
+});
+
+test("the handshake messages are believed only on a code room", () => {
+  const src = withoutComments(appSrc);
+  const dispatch = topLevelFunctions(src).get("handleTextMessage");
+  assert.ok(dispatch, "handleTextMessage not found");
+  for (const type of ["pake-msg", "pake-confirm"]) {
+    const branch = dispatch.match(new RegExp('case "' + type + '":[\\s\\S]*?break;'));
+    assert.ok(branch, "no " + type + " case");
+    assert.ok(/roomKind === "code"/.test(branch[0]), type + " must act only on a code room");
+  }
+  /* And they are allowed through the clear-frame guard, since they precede any key. */
+  const { CLEAR_TYPES } = require("../guards.js");
+  assert.ok(CLEAR_TYPES.includes("pake-msg") && CLEAR_TYPES.includes("pake-confirm"));
+});
+
+test("a matched word authenticates the channel, a wrong one closes it", () => {
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  const confirm = fns.get("handlePakeConfirm");
+  assert.ok(confirm, "handlePakeConfirm not found");
+  assert.ok(confirm.includes("verifyPeerConfirm("), "it must check the peer's tag");
+  assert.ok(/e2eActivate\(key, true\)/.test(confirm), "a match means an authenticated, green channel");
+  assert.ok(confirm.includes("pakeFailClosed"), "no match must fail closed");
+
+  const fail = fns.get("pakeFailClosed");
+  assert.ok(fail && fail.includes("e2eReady = false"), "a failed handshake must not leave the channel open");
+});
+
+test("a code room offers no invite link", () => {
+  /* The link carries the ECDH room secret, which a code room does not use —
+     a guest clicking it would just fail to connect. */
+  const created = withoutComments(appSrc).match(/case "session-created": \{[\s\S]*?\n      break;/)[0];
+  assert.ok(/if \(isCode\) createInfo\.replaceChildren\(ready, pinBox\)/.test(created),
+    "a code room's panel must omit the invite link");
 });

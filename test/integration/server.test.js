@@ -729,3 +729,47 @@ test("a hello with nonsense in it is harmless", async () => {
   assert.ok(await stillServing());
   assert.equal(live.readyState, WebSocket.OPEN);
 });
+
+/* ══════════════════════════════════════════
+   Code rooms — created without a PIN, admit first-come
+══════════════════════════════════════════ */
+
+test("a code room is created without a PIN and listed as a code room", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "code-basic", code: true });
+  const created = await waitFor(host, "session-created");
+  assert.equal(created.kind, "code");
+  assert.equal(created.pin, null, "a code room has no server PIN — the word is proven between the peers");
+  assert.ok(created.token, "it still gets a token");
+
+  const probe = await client();
+  probe.send_({ type: "list-sessions" });
+  const list = await waitFor(probe, "session-list");
+  const entry = list.sessions.find(s => s.sessionId === "code-basic");
+  assert.ok(entry && entry.kind === "code", "the list must mark it a code room");
+});
+
+test("anyone is admitted to a code room with just its name — the word is not a join credential", async () => {
+  /* The server never sees the word; it admits like an open room, and the SPAKE2
+     handshake between the two browsers is the real gate. */
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "code-admit", code: true });
+  await waitFor(host, "session-created");
+
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "code-admit" });
+  assert.ok(await waitFor(guest, "session-joined"), "the guest is admitted; the word is proven afterwards");
+  assert.ok(await waitFor(host, "guest-joined"));
+});
+
+test("only an explicit code flag makes a code room", async () => {
+  let n = 0;
+  for (const value of ["code", 1, {}, "true"]) {
+    const host = await client();
+    const name = `code-strict-${n++}`;
+    host.send_({ type: "create-session", sessionId: name, code: value });
+    const created = await waitFor(host, "session-created");
+    assert.notEqual(created.kind, "code", `code:${JSON.stringify(value)} must not make a code room`);
+    assert.match(created.pin, /^\d{6}$/, "it stays a PIN room with a PIN");
+  }
+});

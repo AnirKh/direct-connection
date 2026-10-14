@@ -188,7 +188,7 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js", "/guards.js", "/style.css"], (req, res) => {
+app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js", "/guards.js", "/pake.js", "/vendor/noble.js", "/style.css"], (req, res) => {
   res.sendFile(path.join(__dirname, req.path.slice(1)));
 });
 
@@ -476,7 +476,7 @@ function publicSessions() {
     /* `open` lets the lobby show which rooms can be entered without a PIN, and
        skip the PIN dialog for them. It gives nothing away: the server answers
        the same question for anyone who tries the door. */
-    .map(([sessionId, s]) => ({ sessionId, createdAt: s.createdAt, open: s.open === true }));
+    .map(([sessionId, s]) => ({ sessionId, createdAt: s.createdAt, open: s.open === true, kind: s.kind || "pin" }));
 }
 
 const listSessionsHits   = new Map();
@@ -644,22 +644,25 @@ wss.on("connection", (ws, req) => {
            elsewhere, and when it expired the notice ended the chat in the
            second. Opening a room now lets go of the previous one. */
         cleanupClient(ws);
-        /* Two kinds of room. A PIN room is the default and stays the default
-           for anything that is not exactly `open: true` — a room must never
-           become open by accident. An open room has no PIN to hand out; it
-           still gets a token, because the invite link is what authenticates the
-           key exchange and that is worth having either way. */
-        const open  = data.open === true;
-        const pin   = open ? null : generatePin();
+        /* Three kinds of room. "pin" is the default and stays the default for
+           anything not spelled out — a room must never change kind by accident.
+           "open" admits the first person with no secret at all. "code" admits
+           the first person too, but the two of them then prove a secret word to
+           each other with SPAKE2 (see pake.js); the server never sees that word,
+           so for admission a code room behaves exactly like an open one.
+           Both open and code get a token, for the invite link. */
+        const kind = data.code === true ? "code" : (data.open === true ? "open" : "pin");
+        const open = kind === "open" || kind === "code";   // admission: first come
+        const pin  = kind === "pin" ? generatePin() : null;
         const token = generateToken();
         sessions.set(data.sessionId, {
           host: ws, guest: null, offer: null,
-          open, pin, token, createdAt: Date.now(),
+          kind, open, pin, token, createdAt: Date.now(),
           joinLockedUntil: 0,
           failedJoinWindowStart: 0,
           failedJoinCount: 0
         });
-        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token, open }));
+        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token, open, kind }));
         broadcastSessionList();
         console.log(`Session ${sessionLogId(data.sessionId)} created`);
         break;
