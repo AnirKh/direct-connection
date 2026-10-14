@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610130821-3420669c";
+const APP_BUILD = "202610140213-c84b869c";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -194,6 +194,14 @@ const callDeclineBtn   = document.getElementById("callDeclineBtn");
 const keyVerifyDropdown = document.getElementById("keyVerifyDropdown");
 const keyVerifyBtn   = document.getElementById("keyVerifyBtn");
 const keyVerifyIcon  = document.getElementById("keyVerifyIcon");
+const factWhoCanRead      = document.getElementById("factWhoCanRead");
+const factCipherValue     = document.getElementById("factCipherValue");
+const factCallsValue      = document.getElementById("factCallsValue");
+const factPathValue       = document.getElementById("factPathValue");
+const factYourIpValue     = document.getElementById("factYourIpValue");
+const factPeerIpValue     = document.getElementById("factPeerIpValue");
+const factYourDeviceValue = document.getElementById("factYourDeviceValue");
+const factPeerDeviceValue = document.getElementById("factPeerDeviceValue");
 const keyVerifyCode  = document.getElementById("keyVerifyCode");
 const keyVerifyInput = document.getElementById("keyVerifyInput");
 const keyVerifyStatus= document.getElementById("keyVerifyStatus");
@@ -235,6 +243,22 @@ let _lastSessionList = [];  // cache for re-render on language change
    runs while this file is still parsing and reads it, which a `let` further down
    would refuse — the badge is translated, so it has to be reachable that early. */
 let _lastPath = null;
+
+/* What the shield's panel says about the two devices.
+
+   _lastAddresses  from this browser's own connection statistics — nothing the
+                   peer said goes into it
+   peerDevice      what the other side said it is: two short codes. It can say
+                   anything, so it is only ever shown through DCS.deviceLabel,
+                   which turns known codes into words and everything else into
+                   nothing
+   peerInfoSent    this side has described itself on the current channel */
+let _lastAddresses = null;
+let peerDevice     = null;
+let peerInfoSent   = false;
+
+/* This device, described once. System and browser only — see describeDevice. */
+const MY_DEVICE = DCS.describeDevice({ userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints });
 
 const recvBuffers = {};
 
@@ -349,6 +373,9 @@ async function e2eInit() {
   e2eKeyPending = null;
   e2ePendingConfirm = null;
   e2ePeerKeySeen = false;
+  /* A new channel is a new introduction. */
+  peerDevice   = null;
+  peerInfoSent = false;
   updateKeyVerifyUi();
   e2eKeyPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
@@ -417,6 +444,22 @@ function e2eActivate(key, secure) {
      How the chat was verified is the shield's job now; the code is in its
      panel. */
   appendSys(t("sysConnected"));
+
+  /* The guest introduces itself; the host answers when that arrives (see the
+     peer-info case). Not both at once: the host reaches this line before it
+     has sent the confirmation that makes the guest ready, and an envelope that
+     overtook the confirmation would be dropped on arrival — the guest would
+     never learn what it is talking to. The guest only gets here because the
+     host is already listening. */
+  if (!isHost) sendPeerInfo();
+}
+
+/** Tells the other side which system and browser this is — once per channel,
+    and only inside the encrypted envelope. */
+function sendPeerInfo() {
+  if (peerInfoSent) return;
+  peerInfoSent = true;
+  dcSendE2e({ type: "peer-info", os: MY_DEVICE.os, browser: MY_DEVICE.browser }).catch(() => {});
 }
 
 /** Refuse to open the channel. Better a dead chat than a silently readable one. */
@@ -955,6 +998,11 @@ function closePeerConnection() {
   e2eReady = false;
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   renderConnectionPath(null);   // no connection, no path — the badge must not linger
+  /* Nor may the last chat's addresses or device: the panel would be describing
+     someone who is no longer there. */
+  _lastAddresses = null;
+  peerDevice     = null;
+  peerInfoSent   = false;
   e2eVerifyCode = "";
   e2eVerified = false;
   e2eLocalPubRaw = null;
@@ -1498,32 +1546,44 @@ function renderConnectionPath(path) {
   connectionPath.className   = `path-badge path-${path.kind}`;
 }
 
+async function pollStats() {
+  const conn = pc;
+  if (!conn) return;
+  try {
+    const stats = await conn.getStats();
+    /* The connection can end, or be replaced, while that was being fetched.
+       What came back then describes a chat that is over, and writing it would
+       put the last peer's route and address back on screen. */
+    if (pc !== conn) return;
+    const path  = describeConnectionPath(stats);
+    const pair  = selectedCandidatePair(stats);
+
+    const { sent, recv } = DCS.trafficTotals(stats, pair);
+    const quality = DCS.qualityFromRtt(pair && pair.currentRoundTripTime);
+
+    const parts = [];
+    if (quality) {
+      parts.push(`RTT: ${quality.ms}ms`);
+      setQuality(`⬤ ${t(quality.key)}`, quality.cls);
+    }
+    renderConnectionPath(path);
+    _lastAddresses = DCS.pathAddresses(stats);
+    renderShieldFacts();
+
+    if (sent)  parts.push(`↑ ${fmtBytes(sent)}`);
+    if (recv)  parts.push(`↓ ${fmtBytes(recv)}`);
+    /* The header says direct or relayed in words; the detail belongs here. */
+    if (path) parts.push(`${path.local.candidateType} → ${path.remote.candidateType}`);
+    statsBar.textContent = parts.join("   ");
+  } catch (_) {}
+}
+
 function startStatsPolling() {
   if (statsInterval) clearInterval(statsInterval);
-  statsInterval = setInterval(async () => {
-    if (!pc) return;
-    try {
-      const stats = await pc.getStats();
-      const path  = describeConnectionPath(stats);
-      const pair  = selectedCandidatePair(stats);
-
-      const { sent, recv } = DCS.trafficTotals(stats, pair);
-      const quality = DCS.qualityFromRtt(pair && pair.currentRoundTripTime);
-
-      const parts = [];
-      if (quality) {
-        parts.push(`RTT: ${quality.ms}ms`);
-        setQuality(`⬤ ${t(quality.key)}`, quality.cls);
-      }
-      renderConnectionPath(path);
-
-      if (sent)  parts.push(`↑ ${fmtBytes(sent)}`);
-      if (recv)  parts.push(`↓ ${fmtBytes(recv)}`);
-      /* The header says direct or relayed in words; the detail belongs here. */
-      if (path) parts.push(`${path.local.candidateType} → ${path.remote.candidateType}`);
-      statsBar.textContent = parts.join("   ");
-    } catch (_) {}
-  }, 2000);
+  statsInterval = setInterval(pollStats, 2000);
+  /* And once now. The route is known the moment the connection is up; waiting
+     for the first tick left the badge and the panel blank for two seconds. */
+  pollStats();
 }
 
 const fmtBytes = DCS.fmtBytes;
@@ -1663,6 +1723,17 @@ function handleTextMessage(data, sealed = false) {
     case "typing-stop":
       peerTyping = false;
       typingIndicator.classList.add("hidden");
+      break;
+
+    case "peer-info":
+      /* The other side describing its device. Two fields are kept and nothing
+         else, and neither is ever written to the page as it arrived — see
+         peerDevice. Reaching here at all means the envelope opened it:
+         peer-info is not on the list of types accepted in the clear, so whoever
+         carries the packets cannot plant a device name in the security panel. */
+      peerDevice = { os: data.os, browser: data.browser };
+      renderShieldFacts();
+      sendPeerInfo();   // the host's answer; a no-op for the guest, who went first
       break;
 
     case "transfer-meta": {
@@ -2228,6 +2299,53 @@ function updateShield() {
   keyVerifyIcon.className = `ti ti-${look.icon}`;
   keyVerifyBtn.title = label;
   keyVerifyBtn.setAttribute("aria-label", label);
+  /* The panel's first line says in a sentence what the shield says in a
+     colour, so the two are redrawn together and cannot disagree. */
+  renderShieldFacts();
+}
+
+/* What the chat is encrypted with. Written out rather than read from the keys,
+   which do not expose it in a form worth showing — so test/client-source.test.js
+   checks these words against the calls that actually do the work. */
+const MESSAGE_CIPHER = "AES-256-GCM · ECDH P-256";
+const CALL_CIPHER    = "DTLS-SRTP";
+
+/** Fills in the facts under the verification code. Called whenever any of them
+    can have changed: the shield's state, the route, or what the peer said. */
+function renderShieldFacts() {
+  if (!factWhoCanRead) return;
+  const state = G.shieldState({ ready: e2eReady, secure: e2eSecureMode, verified: e2eVerified });
+  const live  = state !== "idle";
+
+  /* "Only the two of you" is a claim about there being no middleman, and it is
+     only true once that has been checked. An unverified chat is encrypted to
+     whoever is on the other end of the key exchange — which is the peer, unless
+     someone got in between. So the amber sentence says that instead. */
+  factWhoCanRead.textContent = t({ idle: "factReadIdle", warn: "factReadWarn", ok: "factReadOk" }[state]);
+  factWhoCanRead.className   = `fact-read ${state}`;
+
+  factCipherValue.textContent = live ? MESSAGE_CIPHER : "—";
+  factCallsValue.textContent  = live ? CALL_CIPHER : "—";
+
+  const path = _lastPath;
+  factPathValue.textContent = path
+    ? t({ direct: "pathDirect", local: "pathLocal", relayed: "pathRelayed" }[path.kind])
+    : "—";
+
+  /* An address the browser will not give is said to be hidden. A dash means
+     there is nothing to show yet, or that a relay stands in for the devices.
+     Only a real address is set in the fixed-width face — words in it read as
+     if they were one. */
+  const showAddress = (el, value) => {
+    el.textContent = _lastAddresses ? (value || t("factHidden")) : "—";
+    el.classList.toggle("mono",  Boolean(_lastAddresses && value));
+    el.classList.toggle("quiet", Boolean(_lastAddresses && !value));
+  };
+  showAddress(factYourIpValue, _lastAddresses && _lastAddresses.local);
+  showAddress(factPeerIpValue, _lastAddresses && _lastAddresses.remote);
+
+  factYourDeviceValue.textContent = DCS.deviceLabel(MY_DEVICE) || t("factUnknown");
+  factPeerDeviceValue.textContent = live ? (DCS.deviceLabel(peerDevice) || t("factUnknown")) : "—";
 }
 
 function updateKeyVerifyUi() {
@@ -2260,6 +2378,11 @@ if (keyVerifyInput) {
     updateShield();
   });
 }
+
+/* Draw the shield and its panel once at load, so neither is ever blank — the
+   markup alone has an empty sentence and no state. Placed here because
+   everything they read is declared above this line. */
+updateShield();
 
 function ensureOutgoingCallTransceivers(withVideo) {
   if (!callPc) return;

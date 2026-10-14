@@ -239,6 +239,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+  /* The panel is taller than the space left under the header once a phone
+     keyboard is up — and its text box is what brings the keyboard up. `100%`
+     here is the header's own height, since that is what the panel hangs from. */
+  max-height: calc(var(--app-height) - 100% - 14px);
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .key-verify-title {
   font-size: 13px;
@@ -278,6 +284,29 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .key-verify-status.ok { color: var(--green); }
 .key-verify-status.bad { color: var(--danger); }
+
+/* The facts under the code: who can read the chat, how it is encrypted, and
+   what the two devices are showing each other. */
+.shield-facts {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px; line-height: 1.45;
+}
+/* Coloured like the shield, because it says the same thing in a sentence. */
+.fact-read { margin: 0 0 8px; color: var(--muted); }
+.fact-read.ok   { color: var(--green); }
+.fact-read.warn { color: var(--orange); }
+.shield-facts dl { margin: 0; }
+/* Label left, value right; a long value drops to its own line rather than
+   squeezing the label. An IPv6 address is 39 characters. */
+.fact {
+  display: flex; flex-wrap: wrap; justify-content: space-between;
+  gap: 0 10px; padding: 3px 0;
+}
+.fact dt { color: var(--muted); }
+.fact dd { margin: 0 0 0 auto; color: var(--text); text-align: right; overflow-wrap: anywhere; }
+.fact dd.mono  { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.fact dd.quiet { color: var(--muted); }
 
 /* ── LOBBY ─────────────────────────────────── */
 #lobbyScreen {
@@ -380,11 +409,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .chat-session-name  { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Dot + text quality indicator */
-.quality-label      { font-size: 11px; color: var(--muted); margin-top: 1px; display: flex; align-items: center; gap: 4px; }
+/* Wraps, so a long path badge drops under the state on a narrow phone instead
+   of squeezing it — "⬤ Холбогдсон" was being broken across two lines. */
+.quality-label      { font-size: 11px; color: var(--muted); margin-top: 1px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
 .quality-label.connected #connectionState { color: var(--green); }
 .quality-label.poor      #connectionState { color: var(--orange); }
 .quality-label.failed    #connectionState { color: var(--danger); }
-#connectionState { display: inline-flex; align-items: center; gap: 4px; }
+#connectionState { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 
 /* ── CONNECTION PATH BADGE ─────────────────── */
 /* Sits immediately after the state, and carries its own colour: the state says

@@ -9,7 +9,7 @@ AnirKh.github.io/direct-connection
 | `protocol.js` | Pure wire-protocol logic: invite links, ECDH→HKDF key derivation, verification code, binary chunk framing. No DOM, no sockets, no state — loaded as `window.DCProtocol` in the browser and `require`d by the tests. |
 | `i18n.js` | All user-visible strings, Mongolian and English. Pure data. |
 | `guards.js` | The safety decisions as pure functions — may the camera open, may this message be believed, may the microphone open, may this voice note be sent, which room is the server talking about, what the verification shield says. See below. |
-| `connstats.js` | Everything derived from an `RTCStatsReport`: which route ICE chose, direct or relayed, link quality, byte totals. Pure. |
+| `connstats.js` | Everything derived from an `RTCStatsReport`: which route ICE chose, direct or relayed, link quality, byte totals, and the address each device shows the other. Also the coarse description of a device, and the fixed table of what may be displayed about the other side's. Pure. |
 | `app.js` | Everything stateful and everything with an effect: WebRTC, data channel, calls, chat UI. Asks the two modules above rather than deciding for itself. |
 | `csp.js` | The Content-Security-Policy, defined once (see below). |
 | `clientip.js` | Works out the real client address from `X-Forwarded-For`. Every rate limit depends on it, so it is separate and tested. |
@@ -89,6 +89,18 @@ The shield button in the chat header is the only standing sign of which of these
 | ok | authenticated by the invite-link secret, or by typing the other side's code | green | shield with a tick |
 
 Tapping it opens the code to compare. That panel is the only place the code appears: the chat itself says one word when a room connects — "Connected" — and it says it once the key is agreed, not when the channel opens, so a chat that fails the key check never claims it. The three lines that used to be written on every join (the transport, "setting up encryption…", the code) were removed on request as more than anyone read.
+
+#### What the panel says
+
+Under the code, the panel states what the chat is. It is the security panel, so every line has to be true, and three of them took some care:
+
+- **Who can read it follows the shield.** "Only the two of you. The server cannot." is a claim that nobody is in the middle, so it is said only once that has been checked. An unverified chat gets a different sentence — encrypted, but a middleman cannot be ruled out until the code is compared. Both are drawn by `renderShieldFacts()`, which `updateShield()` calls, so the sentence and the colour cannot disagree.
+- **The encryption is written out by hand** (`AES-256-GCM · ECDH P-256`, and `DTLS-SRTP` for calls), because the keys do not expose it in a form worth showing. `test/client-source.test.js` checks those words against the calls that do the work, so a change of cipher cannot leave the panel describing the old one.
+- **Each device's IP address** comes from this browser's own connection statistics (`pathAddresses` in `connstats.js`) and from nothing the peer sent. "Your IP" on a direct connection is the public address a STUN server reported — the one the other side actually sees — not the device's address on its own network, which is what the route itself names. On a shared network it is the two local addresses. A relayed route shows none: those addresses belong to the relay. Browsers hide local addresses from pages (they arrive as random `….local` names), and a hidden address is shown as hidden, never guessed.
+
+The panel also shows **each side's device** — system and browser, no version, no model. This is the one line that comes from the peer: each side sends two short codes (`peer-info`) inside the encrypted envelope, the guest first and the host in answer. What a peer sends is never written to the page. The codes are looked up in a fixed table (`deviceLabel`) and the words shown are ours, because a device "name" of the peer's choosing in the security panel — "✅ verified by server" — would be believed. It is still only what the other side *says* it is.
+
+Showing addresses makes something visible that was already true: on a direct connection each side can see the other's IP. Before, that took developer tools; now it is one tap. In an open room that means anyone who joins sees the host's address.
 
 This used to be a full-width warning banner across the chat. It was removed on request as more than the situation needed, and the shield took over its job, so a few things are now load-bearing:
 
@@ -258,7 +270,8 @@ Node's built-in runner, no dependencies.
 - `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
 - `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and every combination of `joinVerdict`'s seven inputs. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.
-- `test/connstats.test.js` — which route ICE chose, link quality, byte totals, with a plain Map standing in for the stats report.
+- `test/connstats.test.js` — which route ICE chose, link quality, byte totals, and which addresses are shown, with a plain Map standing in for the stats report. Also device descriptions, including that nothing a peer sends as one reaches the screen as it was sent.
+- `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 

@@ -13,6 +13,13 @@
 
   Nothing in this file touches the DOM or any module state — pass the report in,
   get the answer back.
+
+  Two things here feed the shield's panel and are not about quality at all:
+  which addresses the two devices are showing each other, and a coarse
+  description of a device. They live here because they are derived facts of the
+  same kind — and the second because what a peer says about its device is
+  untrusted, and the list of what may be displayed should sit next to the code
+  that displays it.
 */
 
 (function (root, factory) {
@@ -82,6 +89,153 @@
     return { kind, local, remote };
   }
 
+  /* ══════════════════════════════════════════
+     Addresses
+  ══════════════════════════════════════════ */
+
+  /**
+   * A candidate's address, or null when the browser is keeping it back.
+   *
+   * Browsers hide a device's own network address from the page: a local
+   * address arrives as a random `….local` name, and some remote ones arrive
+   * blank. Neither is an address anyone could use, so neither is shown as one.
+   */
+  function usableAddress(candidate) {
+    const address = candidate && (candidate.address || candidate.ip);
+    if (typeof address !== "string" || address === "") return null;
+    if (/\.local\.?$/i.test(address)) return null;
+    return address;
+  }
+
+  const isV6 = address => typeof address === "string" && address.indexOf(":") !== -1;
+
+  /**
+   * This device's public address, as a STUN server reported it.
+   *
+   * Needed because the route in use almost never names it. ICE files a
+   * server-reflexive candidate under the local one it was discovered from, so
+   * the chosen pair's local end is the device's address on its own network —
+   * 192.168.x.x, or hidden altogether — while what the other side actually
+   * sees is the public one. That is the one worth showing under "your IP".
+   *
+   * A device can have several (IPv4 and IPv6). The one in the same family as
+   * the route is the one in use; with nothing to go on, any is still true.
+   */
+  function publicLocalAddress(stats, family) {
+    let sameFamily = null, any = null;
+    stats.forEach(r => {
+      if (!r || r.type !== "local-candidate" || r.candidateType !== "srflx") return;
+      const address = usableAddress(r);
+      if (!address) return;
+      if (!any) any = address;
+      if (!sameFamily && family !== null && isV6(address) === family) sameFamily = address;
+    });
+    return family === null ? any : sameFamily;
+  }
+
+  /**
+   * The address each device is showing the other.
+   *
+   *   direct   your public address, and theirs
+   *   local    both addresses on the shared network
+   *   relayed  null — a relay stands in for at least one of them, so the
+   *            addresses on the route are the relay's, not a device's
+   *
+   * Either side may come back null: the browser hides what it hides, and a
+   * blank is reported as a blank rather than guessed at.
+   *
+   * @returns {{local: string|null, remote: string|null}|null} null while there
+   *          is no route, or when it is relayed.
+   */
+  function pathAddresses(stats) {
+    const path = describePath(stats);
+    if (!path || path.kind === "relayed") return null;
+
+    let local    = usableAddress(path.local);
+    const remote = usableAddress(path.remote);
+
+    /* A local end that is already server- or peer-reflexive is the public
+       address. Only a host candidate needs looking up. */
+    if (path.kind === "direct" && path.local.candidateType === "host") {
+      const known  = local || remote;
+      const family = known ? isV6(known) : null;
+      const pub    = publicLocalAddress(stats, family);
+      if (pub) local = pub;
+    }
+    return { local, remote };
+  }
+
+  /* ══════════════════════════════════════════
+     Devices
+  ══════════════════════════════════════════ */
+
+  /* Everything a device can be described as. This is also the complete list of
+     what may be DISPLAYED about the other side: a peer sends two short codes,
+     and only a code found here turns into text on screen. The description sits
+     in the security panel, where "✅ verified by server" typed into a device
+     name would be believed. */
+  const OS_NAMES = Object.freeze({
+    android: "Android", iphone: "iPhone", ipad: "iPad",
+    windows: "Windows", macos: "macOS", linux: "Linux", chromeos: "ChromeOS"
+  });
+  const BROWSER_NAMES = Object.freeze({
+    chrome: "Chrome", edge: "Edge", firefox: "Firefox",
+    safari: "Safari", samsung: "Samsung Internet", opera: "Opera"
+  });
+
+  /**
+   * A coarse description of the device this is running on: its system and its
+   * browser, nothing finer. No version and no model — the browser no longer
+   * gives a model anyway, and the less this says the less it identifies.
+   *
+   * Order matters in both lists. Nearly every browser claims to be several
+   * others — Edge says Chrome and Safari, Chrome says Safari — and an iPad
+   * says it is a Mac; only the touch screen gives it away.
+   *
+   * @param {{userAgent: string, maxTouchPoints: number}} nav
+   * @returns {{os: string, browser: string}} codes from the tables above, or "other"
+   */
+  function describeDevice(nav) {
+    const ua    = String((nav && nav.userAgent) || "");
+    const touch = Number((nav && nav.maxTouchPoints) || 0);
+
+    let os = "other";
+    if      (/Android/i.test(ua))                         os = "android";
+    else if (/iPhone|iPod/i.test(ua))                     os = "iphone";
+    else if (/iPad/i.test(ua))                            os = "ipad";
+    else if (/Macintosh|Mac OS X/i.test(ua) && touch > 1) os = "ipad";
+    else if (/Windows/i.test(ua))                         os = "windows";
+    else if (/CrOS/.test(ua))                             os = "chromeos";
+    else if (/Macintosh|Mac OS X/i.test(ua))              os = "macos";
+    else if (/Linux|X11/i.test(ua))                       os = "linux";
+
+    let browser = "other";
+    if      (/Edg(?:e|A|iOS)?\//.test(ua))            browser = "edge";
+    else if (/OPR\/|Opera/.test(ua))                  browser = "opera";
+    else if (/SamsungBrowser\//.test(ua))             browser = "samsung";
+    else if (/Firefox\/|FxiOS\//.test(ua))            browser = "firefox";
+    else if (/Chrome\/|CriOS\/|Chromium\//.test(ua))  browser = "chrome";
+    else if (/Safari\//.test(ua))                     browser = "safari";
+
+    return { os, browser };
+  }
+
+  function named(table, code) {
+    return typeof code === "string" && Object.prototype.hasOwnProperty.call(table, code) ? table[code] : null;
+  }
+
+  /**
+   * The text to show for a device — or null when there is nothing safe to say.
+   *
+   * Takes whatever a peer sent. Nothing it sent reaches the screen: the two
+   * codes are looked up, and the words come from the tables above.
+   */
+  function deviceLabel(device) {
+    if (!device || typeof device !== "object") return null;
+    const parts = [named(OS_NAMES, device.os), named(BROWSER_NAMES, device.browser)].filter(Boolean);
+    return parts.length ? parts.join(" · ") : null;
+  }
+
   /**
    * Quality bucket for a round-trip time.
    * @param {number|null|undefined} seconds as reported by getStats
@@ -133,6 +287,8 @@
   return {
     RTT_GOOD, RTT_FAIR,
     selectedCandidatePair, describePath,
+    usableAddress, pathAddresses,
+    OS_NAMES, BROWSER_NAMES, describeDevice, deviceLabel,
     qualityFromRtt, trafficTotals, fmtBytes, timeAgo
   };
 });

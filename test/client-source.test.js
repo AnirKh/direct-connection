@@ -491,3 +491,109 @@ test("a fresh page is always fetched under an address no cache has seen", () => 
   assert.match(fn, /location\.replace\(`\$\{location\.pathname\}\?r=\$\{encodeURIComponent\(build\)\}\$\{location\.hash\}`\)/);
   assert.ok(!/location\.reload\(/.test(withoutComments(appSrc)), "location.reload() can hand back the cached page — use fetchNewPage()");
 });
+
+/* ── The facts in the shield's panel ──────────
+   Who can read the chat, how it is encrypted, and what the two devices show
+   each other. It is the security panel, so each line has to be true. */
+
+test("the panel names the encryption the code actually uses", () => {
+  /* The label is written out by hand. If the cipher, the key size or the curve
+     ever changes, this is what stops the panel going on describing the old one. */
+  const src = withoutComments(appSrc);
+  const label = (src.match(/const MESSAGE_CIPHER = "([^"]+)";/) || [])[1];
+  assert.ok(label, "MESSAGE_CIPHER not found");
+
+  const protocolSrc = fs.readFileSync(path.join(__dirname, "..", "protocol.js"), "utf8");
+  assert.match(protocolSrc, /\{\s*name:\s*"AES-GCM",\s*length:\s*256\s*\}/, "protocol.js no longer derives an AES-GCM 256 key");
+  assert.match(label, /AES-256-GCM/, "the label must name the message cipher");
+
+  assert.match(src, /generateKey\(\s*\{\s*name:\s*"ECDH",\s*namedCurve:\s*"P-256"\s*\}/, "app.js no longer generates an ECDH P-256 key pair");
+  assert.match(label, /ECDH P-256/, "the label must name the key exchange");
+
+  assert.match(src, /const CALL_CIPHER\s*=\s*"DTLS-SRTP";/);
+});
+
+test("\"only the two of you\" is said only about a verified chat", () => {
+  /* The sentence is a claim that nobody is in the middle. On an unverified
+     chat that has not been checked, so it must say so instead of promising. */
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("renderShieldFacts");
+  assert.ok(fn, "renderShieldFacts not found");
+  assert.ok(fn.includes("shieldState("), "the sentence must follow the shield's own state");
+  assert.match(fn, /\{\s*idle:\s*"factReadIdle",\s*warn:\s*"factReadWarn",\s*ok:\s*"factReadOk"\s*\}\[state\]/,
+    "each state needs its own sentence, chosen by the state and nothing else");
+
+  /* And the shield and the sentence are redrawn together, so they cannot disagree. */
+  assert.ok(topLevelFunctions(withoutComments(appSrc)).get("updateShield").includes("renderShieldFacts("),
+    "updateShield must redraw the facts");
+});
+
+test("the unverified sentence does not claim what the verified one does", () => {
+  /* Read from the strings themselves, in both languages. */
+  const i18nSrc = fs.readFileSync(path.join(__dirname, "..", "i18n.js"), "utf8");
+  const I18N = new Function("localStorage", `${i18nSrc}; return I18N;`)({ getItem: () => null });
+  for (const lang of ["mn", "en"]) {
+    assert.notEqual(I18N[lang].factReadWarn, I18N[lang].factReadOk);
+    assert.ok(I18N[lang].factReadWarn.length > 0 && I18N[lang].factReadOk.length > 0);
+  }
+  assert.match(I18N.en.factReadWarn, /not verified/i);
+  assert.ok(!/only the two of you/i.test(I18N.en.factReadWarn), "an unverified chat must not be told it is private to two people");
+  assert.ok(!/зөвхөн та хоёр/i.test(I18N.mn.factReadWarn), "an unverified chat must not be told it is private to two people");
+});
+
+test("what the peer says about its device never reaches the page directly", () => {
+  const src = withoutComments(appSrc);
+
+  /* Two fields are kept, and nothing else of the message. */
+  const handler = src.match(/case "peer-info":[\s\S]*?break;/);
+  assert.ok(handler, "peer-info case not found");
+  assert.match(handler[0], /peerDevice = \{\s*os:\s*data\.os,\s*browser:\s*data\.browser\s*\};/);
+
+  /* Every read of it goes through the lookup that only returns our own words. */
+  const reads = Array.from(src.matchAll(/[^\n]*\bpeerDevice\b[^\n]*/g)).map(m => m[0].trim())
+    .filter(line => !/^let peerDevice\b/.test(line) && !/peerDevice\s*=\s*(null|\{)/.test(line));
+  assert.ok(reads.length >= 1, "expected peerDevice to be displayed somewhere");
+  for (const line of reads) {
+    assert.ok(/DCS\.deviceLabel\(peerDevice\)/.test(line), `peerDevice is used outside deviceLabel: ${line}`);
+  }
+});
+
+test("the addresses shown come from this browser's own statistics", () => {
+  /* Never from anything the other side sent. */
+  const src = withoutComments(appSrc);
+  const writes = Array.from(src.matchAll(/_lastAddresses\s*=\s*([^;]+);/g)).map(m => m[1].trim());
+  assert.ok(writes.includes("DCS.pathAddresses(stats)"), "addresses must be read from getStats()");
+  for (const value of writes) {
+    assert.ok(value === "null" || value === "DCS.pathAddresses(stats)", `_lastAddresses is set from something else: ${value}`);
+  }
+});
+
+test("a chat that has ended takes its addresses and device off the panel", () => {
+  const fn = topLevelFunctions(withoutComments(appSrc)).get("closePeerConnection");
+  for (const reset of ["_lastAddresses = null", "peerDevice     = null", "peerInfoSent   = false"]) {
+    assert.ok(fn.includes(reset), `closePeerConnection must reset: ${reset}`);
+  }
+  assert.ok(fn.indexOf("_lastAddresses = null") < fn.indexOf("updateKeyVerifyUi("), "reset first, then redraw");
+
+  /* And a statistics read that was still in flight must not write them back. */
+  const poll = topLevelFunctions(withoutComments(appSrc)).get("pollStats");
+  assert.ok(poll, "pollStats not found");
+  assert.match(poll, /if \(pc !== conn\) return;/);
+  assert.ok(poll.indexOf("if (pc !== conn) return;") < poll.indexOf("_lastAddresses ="), "check before writing");
+});
+
+test("the guest introduces itself first, and each side only once", () => {
+  /* The host activates before it has sent the confirmation that makes the
+     guest ready. An introduction sent then can overtake the confirmation and
+     be dropped, and the guest never learns what it is talking to. */
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  assert.match(fns.get("e2eActivate"), /if \(!isHost\) sendPeerInfo\(\);/);
+
+  const send = fns.get("sendPeerInfo");
+  assert.ok(send, "sendPeerInfo not found");
+  assert.match(send, /if \(peerInfoSent\) return;\s*peerInfoSent = true;/, "once per channel — or two sides answer each other for ever");
+  assert.match(send, /dcSendE2e\(\{\s*type:\s*"peer-info",\s*os:\s*MY_DEVICE\.os,\s*browser:\s*MY_DEVICE\.browser\s*\}\)/,
+    "only the two codes are sent, and only inside the envelope");
+
+  const handler = withoutComments(appSrc).match(/case "peer-info":[\s\S]*?break;/)[0];
+  assert.ok(handler.includes("sendPeerInfo()"), "the host answers when the guest's introduction arrives");
+});

@@ -416,3 +416,15 @@ test("with nothing waiting and no invite link, the dialog is the fallback", () =
   assert.equal(G.joinRefusalTarget(refusal({})), "dialog");
   assert.equal(G.joinRefusalTarget(undefined), "dialog");
 });
+
+/* ══════════════════════════════════════════
+   peer-info — the device description
+══════════════════════════════════════════ */
+
+test("a device description is only believed from inside the envelope", () => {
+  /* It is shown in the security panel. Accepted in the clear, whoever carries
+     the packets could write the other person's device there themselves. */
+  assert.equal(G.mayHandleFrame("peer-info", false), false);
+  assert.equal(G.mayHandleFrame("peer-info", true), true);
+  assert.ok(!G.CLEAR_TYPES.includes("peer-info"));
+});
