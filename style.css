@@ -660,7 +660,18 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border: 2px solid rgba(255,255,255,0.25);
   z-index: 10;
   background: #111;
+  /* Mirrored on this screen only, the way a mirror shows you. This flips the
+     element, not the camera track, so the other side still sees you the right
+     way round. #remoteVideo must never get the same. */
+  transform: scaleX(-1);
+  /* Draggable — see moveSelfView() in app.js. Without touch-action a finger
+     drag scrolls or zooms the page instead of moving the picture. */
+  touch-action: none;
+  cursor: grab;
+  user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
+#localVideo.dragging { cursor: grabbing; }
 .call-status-label {
   position: absolute;
   top: calc(20px + var(--safe-top));

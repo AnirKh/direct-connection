@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610140813-6edc540c";
+const APP_BUILD = "202610141141-fef09f71";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -2494,6 +2494,90 @@ function updateLocalVideoAspect() {
   if (width && height) {
     localVideo.style.setProperty("--local-video-aspect", `${width} / ${height}`);
   }
+}
+
+/* ══════════════════════════════════════════════
+   THE SELF-VIEW: MIRRORED HERE, MOVABLE
+   ─────────────────────────────────────────────
+   The mirror belongs to style.css alone — a transform on #localVideo. It flips
+   the picture on this screen and nothing else: the track sent to the other side
+   is the camera's own, so they see you the right way round. Flipping the track
+   instead would send them a mirror image.
+
+   The self-view can be dragged anywhere inside the call. Until it is, CSS keeps
+   it in its corner; once moved it is placed by left/top, and put back inside
+   whenever the call or the picture changes size — a phone turned on its side,
+   a camera whose shape is known only once it starts — so it can never end up
+   off screen with no way to reach it.
+══════════════════════════════════════════════ */
+
+const SELF_VIEW_MARGIN = 8;
+
+/** Where the self-view goes when asked to sit at (x, y): the nearest spot that
+    keeps all of it inside the call, `margin` clear of every edge. Null when the
+    call or the picture has no size — hidden, so nothing to measure against —
+    because believing a size of 0 would throw it into the top-left corner. */
+function selfViewPosition(o) {
+  if (!(o.w > 0 && o.h > 0 && o.areaW > 0 && o.areaH > 0)) return null;
+  if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) return null;
+  const maxX = Math.max(o.margin, o.areaW - o.w - o.margin);
+  const maxY = Math.max(o.margin, o.areaH - o.h - o.margin);
+  return {
+    x: Math.min(Math.max(o.x, o.margin), maxX),
+    y: Math.min(Math.max(o.y, o.margin), maxY)
+  };
+}
+
+function moveSelfView(x, y) {
+  const at = selfViewPosition({
+    x, y,
+    w: localVideo.offsetWidth, h: localVideo.offsetHeight,
+    areaW: callOverlay.clientWidth, areaH: callOverlay.clientHeight,
+    margin: SELF_VIEW_MARGIN
+  });
+  if (!at) return;
+  localVideo.style.left   = `${at.x}px`;
+  localVideo.style.top    = `${at.y}px`;
+  localVideo.style.right  = "auto";
+  localVideo.style.bottom = "auto";
+}
+
+let selfViewDrag = null;   // { id, dx, dy } while a finger or the mouse holds it
+
+localVideo.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  const box = localVideo.getBoundingClientRect();
+  selfViewDrag = { id: e.pointerId, dx: e.clientX - box.left, dy: e.clientY - box.top };
+  localVideo.setPointerCapture(e.pointerId);
+  localVideo.classList.add("dragging");
+  e.preventDefault();
+});
+
+localVideo.addEventListener("pointermove", (e) => {
+  if (!selfViewDrag || e.pointerId !== selfViewDrag.id) return;
+  const area = callOverlay.getBoundingClientRect();
+  moveSelfView(e.clientX - area.left - selfViewDrag.dx, e.clientY - area.top - selfViewDrag.dy);
+});
+
+function endSelfViewDrag(e) {
+  if (!selfViewDrag || e.pointerId !== selfViewDrag.id) return;
+  selfViewDrag = null;
+  localVideo.classList.remove("dragging");
+}
+localVideo.addEventListener("pointerup", endSelfViewDrag);
+localVideo.addEventListener("pointercancel", endSelfViewDrag);
+localVideo.addEventListener("lostpointercapture", endSelfViewDrag);
+
+/* Never moved: CSS has it, and keeps it in its corner. Moved: hold it where it
+   was put, as far as the new size allows. */
+function keepSelfViewInside() {
+  if (!localVideo.style.left) return;
+  moveSelfView(parseFloat(localVideo.style.left), parseFloat(localVideo.style.top));
+}
+if (window.ResizeObserver) {
+  const selfViewSizes = new ResizeObserver(keepSelfViewInside);
+  selfViewSizes.observe(callOverlay);
+  selfViewSizes.observe(localVideo);
 }
 
 const makeSharedVerificationCode = DC.makeSharedVerificationCode;

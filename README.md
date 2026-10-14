@@ -168,6 +168,14 @@ Two rules. `test/guards.test.js` proves they give the right answer; `test/client
 
 The test walks whichever functions call `attachCallMedia` rather than a fixed list of names, because the guard was added to one of the two paths first and the second went unnoticed for a release.
 
+## The self-view: mirrored here, movable
+
+In a video call your own picture is shown **mirrored**, the way a mirror shows you, and the other person sees you the right way round. The mirror is one CSS transform on `#localVideo` and nothing else. It flips the element on this screen; the track that is sent is the camera's own. Flip the track instead — in script, or by redrawing the camera through a canvas — and the other side receives a mirror image. `#remoteVideo` is never flipped: text behind the other person would read backwards.
+
+The self-view can be **dragged** anywhere inside the call, by mouse or finger. Until it is moved, CSS keeps it in its corner; once moved, `moveSelfView()` places it by `left`/`top`, and `selfViewPosition()` keeps all of it at least 8px inside every edge. A `ResizeObserver` puts it back inside whenever the call or the picture changes size — a phone turned on its side, a camera whose shape is only known once it starts — so it can never be left off screen with no way to reach it. A hidden call measures 0×0; that is ignored rather than believed, or the picture would jump to the corner it was moved out of. Where it was put is kept for the next call on the same page, not across reloads.
+
+The call buttons stay on top of it, so dragging it under them never blocks End call.
+
 ## One key exchange per channel
 
 `e2e-pubkey` is accepted once. A second one used to re-derive the verification code while leaving the key actually in use untouched — so the code on screen stopped describing the key, the two sides displayed **different** codes, and the UI still said "verified". On a PIN join that code is the only thing standing between the user and a middleman, so a peer able to set it to anything empties it of meaning.
@@ -293,6 +301,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
+- `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
