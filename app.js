@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610141141-fef09f71";
+const APP_BUILD = "202610141222-db5c1daf";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1247,8 +1247,10 @@ function createPeerConnection() {
 
 function createCallPeerConnection() {
   closeCallPeerConnection();
+  /* Collects what the other side sends. Not given to the picture yet: it is
+     empty, and Safari would keep that empty stream — see showRemoteTracks. */
   remoteCallStream = new MediaStream();
-  remoteVideo.srcObject = remoteCallStream;
+  remoteVideo.srcObject = null;
   callPc = new RTCPeerConnection(ICE_CONFIG);
 
   callPc.onicecandidate = ({ candidate }) => {
@@ -1271,12 +1273,15 @@ function createCallPeerConnection() {
     // Always store the stream even if inCall hasn't been set yet —
     // the callee's ontrack fires during setRemoteDescription(offer),
     // which happens before inCall = true on their side.
-    if (!remoteCallStream) {
-      remoteCallStream = new MediaStream();
-      remoteVideo.srcObject = remoteCallStream;
-    }
+    if (!remoteCallStream) remoteCallStream = new MediaStream();
     if (!remoteCallStream.getTracks().includes(track)) remoteCallStream.addTrack(track);
-    track.onunmute = () => playRemoteCallMedia();
+    showRemoteTracks();
+    track.onunmute = () => {
+      /* Frames have started to arrive. A picture that is still blank by now is
+         the Safari case below in some other order of events: hand it over again. */
+      if (track.kind === "video" && !remoteVideo.videoWidth) showRemoteTracks();
+      playRemoteCallMedia();
+    };
 
     // Play and update status only when the call is actually active
     if (inCall) {
@@ -1289,8 +1294,19 @@ function createCallPeerConnection() {
   };
 }
 
+/* Safari — every browser on an iPhone — keeps playing the sound of a stream
+   while never drawing a video track that was added to it after it was given to
+   the <video>: the other person's picture stays black and their voice comes
+   through. It happened only sometimes, by timing. So the picture is never given
+   a stream to grow; each time a track arrives it gets a fresh one holding
+   every track so far, and so sees the video from its first moment. */
+function showRemoteTracks() {
+  if (!remoteCallStream || !remoteCallStream.getTracks().length) return;
+  remoteVideo.srcObject = new MediaStream(remoteCallStream.getTracks());
+}
+
 function playRemoteCallMedia() {
-  if (!remoteVideo.srcObject && remoteCallStream) remoteVideo.srcObject = remoteCallStream;
+  if (!remoteVideo.srcObject) showRemoteTracks();
   remoteVideo.play().catch(() => {});
 }
 
@@ -2756,9 +2772,30 @@ async function drainCallIceQueue() {
   }
 }
 
+/** A call that could not be set up: no camera, a refused permission, a
+    description the browser would not take.
+
+    Ended here every time — the call may have been hung up while the camera was
+    still opening, and ending it again is what turns that camera back off. The
+    other side is told only if the call was still on; if it was not, whoever
+    ended it already told them. It used to end quietly on every path, and the
+    other side sat on a dark "Connecting…" screen until someone pressed End. */
+function callSetupFailed(where, err) {
+  const stillOn = inCall;
+  endCall(stillOn);
+  if (!stillOn) return;
+  console.error(`${where}:`, err);
+  appendSys(I18N[LANG].sysCallFailed(err?.message || String(err)));
+}
+
 async function handleCallAnswer(data) {
   if (!callPc || !inCall) return;
-  await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
+  try {
+    await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
+  } catch (e) {
+    callSetupFailed("Call answer rejected", e);
+    return;
+  }
   await drainCallIceQueue();
   callStatusLabel.textContent = t("callConnected");
   appendSys(t("sysCallSecure"));
@@ -2805,9 +2842,7 @@ async function initiateCallOffer(peerWantsVideo) {
       withVideo
     });
   } catch (e) {
-    console.error("Call offer error:", e);
-    endCall(false);
-    appendSys(I18N[LANG].sysCallFailed(e.message));
+    callSetupFailed("Call offer error", e);
   }
 }
 
@@ -2847,9 +2882,7 @@ async function handleIncomingCallOffer(data) {
       playRemoteCallMedia();
     }
   } catch (e) {
-    console.error("Call answer error:", e);
-    endCall(false);
-    appendSys(I18N[LANG].sysCallFailed(e.message));
+    callSetupFailed("Call answer error", e);
   }
 }
 

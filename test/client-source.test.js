@@ -123,6 +123,49 @@ test("every path to the camera asks the guard first", () => {
   }
 });
 
+test("a call that cannot be set up tells the other side", () => {
+  /* Every path that opens the camera or takes the other side's description can
+     fail — a refused permission, a camera another app holds. Those paths used
+     to end the call with endCall(false): this side went back to the chat and
+     the other side was never told, left on a dark "Connecting…" screen.
+
+     Found by what they do rather than by name, like the camera test above. */
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  const settingUp = Array.from(fns)
+    .filter(([name, body]) => name !== "attachCallMedia" &&
+      (body.includes("attachCallMedia(") || body.includes("callPc.setRemoteDescription(")));
+
+  assert.ok(settingUp.length >= 3,
+    `expected the offer, the answer and the accepted answer, found ${settingUp.map(([n]) => n).join(", ")}`);
+
+  for (const [name, body] of settingUp) {
+    assert.ok(body.includes("callSetupFailed("), `${name} must hand its failure to callSetupFailed`);
+    assert.ok(!body.includes("endCall(false)"), `${name} ends the call without telling the other side`);
+    assert.ok(body.indexOf("try {") < body.indexOf("callPc.setRemoteDescription(") ||
+              !body.includes("callPc.setRemoteDescription("),
+      `${name} takes a description outside its try — a failure there is never handled`);
+  }
+});
+
+test("callSetupFailed tells the other side only while the call is still on", () => {
+  /* Run, not read: the two halves pull opposite ways. Hung up while the camera
+     was opening, the call must still be ended — that is what turns the camera
+     back off — but a second "call ended" must not be sent. */
+  const src = topLevelFunctions(appSrc).get("callSetupFailed");
+  assert.ok(src, "callSetupFailed not found");
+
+  const run = inCall => {
+    const did = { endCall: [], sys: [] };
+    new Function("inCall", "endCall", "appendSys", "I18N", "LANG", "console", `${src}\ncallSetupFailed("x", new Error("no camera"));`)(
+      inCall, notify => did.endCall.push(notify), line => did.sys.push(line),
+      { en: { sysCallFailed: msg => `failed: ${msg}` } }, "en", { error() {} });
+    return did;
+  };
+
+  assert.deepEqual(run(true),  { endCall: [true],  sys: ["failed: no camera"] }, "still on: end it, tell them, say why");
+  assert.deepEqual(run(false), { endCall: [false], sys: [] }, "already over: release the camera, say nothing more");
+});
+
 test("the peer cannot add video to a call the user asked to keep voice-only", () => {
   /* withVideo rides in on the peer's messages; pendingCallVideo is what the
      user actually pressed. Answering a voice call with withVideo:true would

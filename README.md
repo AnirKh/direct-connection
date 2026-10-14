@@ -176,6 +176,24 @@ The self-view can be **dragged** anywhere inside the call, by mouse or finger. U
 
 The call buttons stay on top of it, so dragging it under them never blocks End call.
 
+## The other person's picture on an iPhone
+
+Reported from an iPhone: sometimes, in a video call, the other person's picture stayed black — while their voice came through, your own picture showed, and they could see you. The call was working; the picture was never drawn.
+
+The `<video>` used to be handed an empty `MediaStream` when the call began, and the other side's tracks were added to that same stream as they arrived. Safari — the engine of every browser on an iPhone — keeps playing the sound of such a stream but may never draw a video track added after the stream was attached. Whether it did depended on the order things happened in, hence "sometimes".
+
+So the picture is never given a stream to grow. `showRemoteTracks()` hands it a **fresh** stream holding every track so far, each time one arrives, so the video is there from the stream's first moment. As a second line, when the video track starts receiving frames and the picture is still 0 pixels wide, it is handed over once more. A picture already showing is left alone — re-attaching restarts the player, a hiccup in the sound for nothing.
+
+`test/remotevideo.test.js` runs the real code against a stand-in `<video>`; three of its tests fail against the old code. It cannot run Safari, so the fix is confirmed on a phone or not at all.
+
+## A call that cannot start says so to both sides
+
+Setting a call up can fail on either phone: camera permission refused, a camera another app is holding, a description the browser will not take. Every such failure used to end the call with `endCall(false)` — this side went back to the chat with "call failed", and **the other side was never told**. It sat on a dark "Connecting…" screen until someone pressed End.
+
+Each of those paths now goes through `callSetupFailed()`, which sends `call-reject` so the other side closes its call screen too. Accepting the other side's answer (`handleCallAnswer`) had no `try` at all and is now inside one.
+
+One subtlety holds it together: **the call is ended on every failure, but the other side is told only if it was still on.** Hung up while the camera was still opening, the failure arrives after the call is over. Ending it again is what turns that camera back off — skipping it would leave the camera running with no call — but the hang-up already told the other side, so a second `call-reject` is not sent. `test/client-source.test.js` runs `callSetupFailed()` both ways, and checks that every function that opens the camera or takes a description hands its failure to it.
+
 ## One key exchange per channel
 
 `e2e-pubkey` is accepted once. A second one used to re-derive the verification code while leaving the key actually in use untouched — so the code on screen stopped describing the key, the two sides displayed **different** codes, and the UI still said "verified". On a PIN join that code is the only thing standing between the user and a middleman, so a peer able to set it to anything empties it of meaning.
@@ -302,6 +320,7 @@ Node's built-in runner, no dependencies.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
+- `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.
