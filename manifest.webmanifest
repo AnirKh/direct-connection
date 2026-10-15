@@ -1,0 +1,17 @@
+{
+  "name": "Шууд холбоос — Direct Connection",
+  "short_name": "Шууд холбоос",
+  "description": "Хоёр хүний шууд, шифрлэгдсэн чат ба дуудлага. Private, end-to-end encrypted chat and calls between two people.",
+  "lang": "mn",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#15151a",
+  "theme_color": "#15151a",
+  "icons": [
+    { "src": "icons/icon-192.png",          "sizes": "192x192", "type": "image/png",     "purpose": "any" },
+    { "src": "icons/icon-512.png",          "sizes": "512x512", "type": "image/png",     "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png",     "purpose": "maskable" },
+    { "src": "icons/icon.svg",              "sizes": "any",     "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -50,8 +50,14 @@ const ROOT = path.join(__dirname, "..");
 const CLIENT_FILES = [
   "index.html", "style.css",
   "framebust.js", "protocol.js", "connstats.js", "guards.js", "i18n.js",
-  "vendor/noble.js", "pake.js", "app.js"
+  "vendor/noble.js", "pake.js", "app.js",
+  "manifest.webmanifest", "icons/icon.svg", "icons/apple-touch-icon.png"
 ];
+
+/* Pictures are hashed as the bytes they are. Read as text, two different
+   pictures could hash the same: every byte that is not valid UTF-8 decodes to
+   the same replacement character, and the CRLF fold below would edit them. */
+const BINARY = /\.png$/;
 
 /** The files index.html loads, which is where the stamp has to appear. */
 const STAMPED_ASSETS = CLIENT_FILES.filter(f => f !== "index.html");
@@ -78,7 +84,7 @@ function contentHash() {
   const hash = crypto.createHash("sha256");
   for (const name of CLIENT_FILES) {
     hash.update(name + "\n");
-    hash.update(normalised(name, read(name)));
+    hash.update(BINARY.test(name) ? fs.readFileSync(path.join(ROOT, name)) : normalised(name, read(name)));
     hash.update("\n\u0000");
   }
   return hash.digest("hex").slice(0, 8);

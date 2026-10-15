@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Direct Connection: a speech bubble with a lock in it. Every part sits
+       inside the central circle a launcher may crop an icon to. -->
+  <rect width="512" height="512" rx="112" fill="#1d1d24"/>
+  <path fill="#7fa8d4" d="M140 116h232a44 44 0 0 1 44 44v136a44 44 0 0 1-44 44H250l-76 58 10-58h-44a44 44 0 0 1-44-44V160a44 44 0 0 1 44-44z"/>
+  <path fill="none" stroke="#15151a" stroke-width="20" stroke-linecap="round" d="M226 216v-22a30 30 0 0 1 60 0v22"/>
+  <rect x="204" y="212" width="104" height="80" rx="16" fill="#15151a"/>
+  <circle cx="256" cy="244" r="11" fill="#7fa8d4"/>
+  <rect x="250" y="248" width="12" height="24" rx="6" fill="#7fa8d4"/>
+</svg>

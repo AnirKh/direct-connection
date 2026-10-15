@@ -17,6 +17,7 @@ AnirKh.github.io/direct-connection
 | `clientip.js` | Works out the real client address from `X-Forwarded-For`. Every rate limit depends on it, so it is separate and tested. |
 | `ratelimit.js` | Sliding-window counters, their expiry sweep, `safeLabel` for anything client-supplied that reaches a log line, and `joinVerdict` — which join lock applies to which credential. Same reason as above: small, pure, security-relevant. |
 | `framebust.js` | Refuses to run inside a frame. The only such protection on GitHub Pages (see below). |
+| `manifest.webmanifest`, `icons/` | What makes the site installable as an app: its name, colours and icons. `icons/icon.svg` is the drawing; the PNGs are rendered from it. See "Installable as an app". |
 | `server.js` | Signaling, PIN/token auth, rate limits, `/api/send-message`. |
 
 Adding a string means adding it to **both** languages in `i18n.js` — `t()` falls back to the key name, so a missing translation shows up as raw text in the UI.
@@ -164,6 +165,23 @@ The split gives the two test files different jobs:
 Under the title the lobby has three tabs — **Rooms | Create room | Email** — and shows one section at a time. It opens on Rooms, because most people arriving are joining someone, and returns there after a chat. The Rooms tab carries a count of open rooms, so it can be seen from the other two. A created room brings its host to the Create tab, where the PIN and link are; a room that expires while its host is on another tab is also said as a toast. Arrow keys, Home and End move along the tabs (`showLobbyTab`, `lobbyTabKeyTarget` in `app.js`).
 
 **`#lobbyStatus` is for news that belongs to no tab.** The create card's status line used to carry everything: the server waking up, "Joining…" from an invite link, a link that was refused. With Rooms open by default, all of that would have been said inside a hidden tab. It now goes on a status line above the panels, shown on every tab and taking no room when empty. `#createInfo` keeps only what is about creating: "Creating…", the PIN and link, the room expiring.
+
+## Installable as an app
+
+The site can be installed: an icon on the home screen or desktop that opens in its own window, with no browser bar. `manifest.webmanifest` names it and lists the icons; `index.html` links it, plus the `apple-touch-icon` and `apple-*` lines iPhones read instead.
+
+An **Install app** button sits at the bottom left of the lobby, and only where it can do something (`installOffer` in `guards.js`):
+
+| Where | What the button does |
+| --- | --- |
+| Chrome, Edge, Samsung Internet | The browser offers to install (`beforeinstallprompt`); the offer is held, and the button spends it — the browser's own install window opens. An offer is good once, so the button goes with it. |
+| iPhone, iPad | No page can install itself there. The button opens three steps: Share, Add to Home Screen, Add. iOS has no Mongolian, so those names stay in English. An iPad describes itself as a Mac; a Mac with a touch screen is taken for one. |
+| Already running as the installed app | No button. |
+| Firefox, Safari on a Mac | Cannot install a site from a button: no button. |
+
+**No service worker.** Chrome and Edge no longer need one to offer the install — checked with the browser's own installability report, which lists nothing missing. A worker that cached files would also fight "One version in the browser at a time": it is exactly a second copy of the client that can go stale.
+
+**Icons.** `icon.svg` is drawn on a 512 grid with everything inside the central circle a launcher may crop to. `icon-192.png` and `icon-512.png` are it with see-through corners; `icon-maskable-512.png` and `apple-touch-icon.png` are the same drawing on a full square, since Android crops a maskable icon to its own shape and iOS rounds the home-screen icon itself. The manifest, the SVG and the apple icon are in the build stamp, and pictures are hashed as bytes rather than text. The other PNGs are named only in the manifest and so are not stamped: if one is redrawn, give it a new name.
 
 ## Calls: consent is local, never taken from the wire
 
@@ -362,6 +380,7 @@ Node's built-in runner, no dependencies.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
 - `test/i18n.test.js` — both languages have the same keys, every key `app.js` asks for by name exists in both, and every `data-i18n`, `data-i18n-ph` and `data-i18n-aria` key in `index.html` does too, since a missing one falls back silently. Also that the page opens straight to the lobby, with "about this page" as a dropdown beside the title rather than the dialog every visit used to start with, and that on a phone that button sits below the fixed language switcher rather than under it.
+- `test/install.test.js` — installing as an app: `installOffer` for each browser and the installed app, the button's block lifted out of `app.js` and run against a stand-in window (offer held, spent once, gone when installed; the iPhone steps open and close), and the manifest and icons read from disk — sizes, relative addresses, no see-through corners where the icon is cropped, and every one served by `server.js`.
 - `test/lobby.test.js` — the lobby's tabs: the markup (three tabs, each naming its panel, Rooms open first, each section's controls inside its own panel, the status line outside them all), that nothing unrelated to creating is written into the Create tab, and `showLobbyTab()`, `lobbyTabKeyTarget()` and `renderSessionList()`'s room count lifted out of `app.js` and run.
 - `test/message.test.js` — long messages and read-aloud: `sendTextMessage`, `updateMessageCounter`, `announce`, `appendBubble`, `appendSys` and the `text` case lifted out of `app.js` and run. The limit's arithmetic against the wire and Safari's argument cap; at the limit sent and shown, one past it refused on both sides with a reason; a failed send keeps its text; the counter's states; what is read out, what is not, and that the page carries the region.
 - `test/receive.test.js` — receiving files: the real `sendBinary`, `handleTransferMeta`, `acceptChunk`, `handleBinaryChunk`, `assembleTransfer` and the transfer cases of the message switch, lifted out of `app.js` and run as two sides against each other. Honest files, pictures and voice notes arrive whole and correctly typed; a changed app's oversized, overlong, short, mistyped or too-many transfers are turned away, and an honest sender that is turned away stops sending.

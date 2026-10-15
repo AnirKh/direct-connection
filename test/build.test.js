@@ -207,3 +207,28 @@ test("builds are ordered by when they were made, not by their hash", () => {
   assert.equal(G.isNewerBuild("202610131741-ffffffff", "202610131742-00000000"), false);
   assert.equal(G.isNewerBuild(NEW, NEW), false);
 });
+
+test("a changed picture changes the stamp, even where a text reading could not tell", () => {
+  /* The icons are part of the build. Read as text, every byte that is not
+     valid UTF-8 decodes to the same replacement character — so changing the
+     PNG signature's 0x89 to 0x8A, both invalid on their own, would leave the
+     hash unchanged and an old icon in browsers' caches. Pictures are hashed
+     as the bytes they are. */
+  const icon = path.join(__dirname, "..", "icons", "apple-touch-icon.png");
+  assert.ok(build.CLIENT_FILES.includes("icons/apple-touch-icon.png"));
+  const before = build.contentHash();
+  const realRead = fs.readFileSync;
+  fs.readFileSync = function (file, ...rest) {
+    const out = realRead.call(this, file, ...rest);
+    if (path.resolve(String(file)) !== path.resolve(icon) || rest.length) return out;
+    const copy = Buffer.from(out);
+    copy[0] = 0x8a;
+    return copy;
+  };
+  try {
+    assert.notEqual(build.contentHash(), before);
+  } finally {
+    fs.readFileSync = realRead;
+  }
+  assert.equal(build.contentHash(), before);
+});

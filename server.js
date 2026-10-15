@@ -188,7 +188,9 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js", "/guards.js", "/pake.js", "/vendor/noble.js", "/style.css"], (req, res) => {
+app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js", "/guards.js", "/pake.js", "/vendor/noble.js", "/style.css",
+         "/manifest.webmanifest", "/icons/icon.svg", "/icons/apple-touch-icon.png",
+         "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"], (req, res) => {
   res.sendFile(path.join(__dirname, req.path.slice(1)));
 });
 

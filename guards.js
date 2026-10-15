@@ -435,6 +435,41 @@
   }
 
   /* ══════════════════════════════════════════
+     Installing as an app
+  ══════════════════════════════════════════ */
+
+  /** An iPhone or iPad. iPadOS describes itself as a Mac, so a Mac with a
+      touch screen counts too — no Mac has one. */
+  function isAppleTouchDevice(userAgent, maxTouchPoints) {
+    const ua = String(userAgent || "");
+    if (/iPhone|iPad|iPod/.test(ua)) return true;
+    return /Macintosh/.test(ua) && Number(maxTouchPoints) > 1;
+  }
+
+  /**
+   * What the Install button does here, if anything.
+   *
+   *   "prompt"    the browser has offered to install this site (Chrome, Edge,
+   *               Samsung Internet — beforeinstallprompt): the button asks it to
+   *   "ios-help"  an iPhone or iPad, where no page can install itself: the
+   *               button shows the taps that do it by hand
+   *   "none"      already running as the installed app, or a browser that
+   *               cannot install a site at all (Firefox): no button
+   *
+   * Running installed wins over everything: a button offering to install the
+   * app you are already in would be nonsense.
+   *
+   * @param {{standalone: boolean, canPrompt: boolean, userAgent: string, maxTouchPoints: number}} o
+   * @returns {"prompt"|"ios-help"|"none"}
+   */
+  function installOffer(o) {
+    if (!o || o.standalone === true) return "none";
+    if (o.canPrompt === true) return "prompt";
+    if (isAppleTouchDevice(o.userAgent, o.maxTouchPoints)) return "ios-help";
+    return "none";
+  }
+
+  /* ══════════════════════════════════════════
      Room events from the server
   ══════════════════════════════════════════ */
 
@@ -511,6 +546,7 @@
     CODE_MAX_ATTEMPTS, codeAttemptState,
     SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, incomingTransfer, withinDeclaredSize,
     MAX_MESSAGE_CHARS, messageFits, draftState,
+    isAppleTouchDevice, installOffer,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150445-cd40ff6a";
+const APP_BUILD = "202610150507-bfe31670";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1067,6 +1067,56 @@ function wsSend(obj) {
 
 function requestSessionList() { wsSend({ type: "list-sessions" }); }
 refreshBtn.onclick = requestSessionList;
+
+/* ── Install as an app ──────────────────────
+   The button at the bottom left. Chrome, Edge and Samsung Internet offer to
+   install a site that has a manifest; the offer arrives as beforeinstallprompt,
+   is held here, and is spent when the button is pressed — the browser shows
+   its own install window, one tap more puts the icon on the home screen or
+   desktop. No page can install itself on an iPhone: there the button shows
+   the taps that do it. Already installed, or a browser that cannot install a
+   site (Firefox): no button. The decision is G.installOffer.              */
+const installBtn     = document.getElementById("installBtn");
+const installOverlay = document.getElementById("installOverlay");
+let installPrompt = null;   // the browser's offer; good for one use
+
+function runningInstalled() {
+  return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+}
+
+function updateInstallButton() {
+  const offer = G.installOffer({
+    standalone: runningInstalled(), canPrompt: Boolean(installPrompt),
+    userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints
+  });
+  installBtn.dataset.offer = offer;
+  installBtn.classList.toggle("hidden", offer === "none");
+}
+
+async function installApp() {
+  if (installBtn.dataset.offer === "ios-help") { installOverlay.classList.remove("hidden"); return; }
+  const offer = installPrompt;
+  if (!offer) return;
+  installPrompt = null;            // a browser's offer can be shown once
+  offer.prompt();
+  await offer.userChoice.catch(() => null);
+  updateInstallButton();
+}
+
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();              // no banner of the browser's own: the button is the offer
+  installPrompt = e;
+  updateInstallButton();
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  updateInstallButton();
+  showToast(t("appInstalled"), "info");
+});
+installBtn.onclick = installApp;
+document.getElementById("installCloseBtn").onclick = () => installOverlay.classList.add("hidden");
+installOverlay.onclick = e => { if (e.target === installOverlay) installOverlay.classList.add("hidden"); };
+updateInstallButton();
 
 /* ── Tabs: Rooms | Create room | Email ──────
    One section at a time, so the lobby is one screen instead of three cards
