@@ -773,3 +773,134 @@ test("only an explicit code flag makes a code room", async () => {
     assert.match(created.pin, /^\d{6}$/, "it stays a PIN room with a PIN");
   }
 });
+
+/* ══════════════════════════════════════════
+   A code room outlives its guest
+
+   Admission to a code room is first-come; the word is proven afterwards,
+   between the browsers. A guest leaving used to delete the room, so one wrong
+   guess — or one stranger joining and leaving — destroyed it, and the right
+   word could only find "not found". Now the seat is freed and the host told.
+══════════════════════════════════════════ */
+
+async function codeRoomWithGuest(name) {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: name, code: true });
+  assert.ok(await waitFor(host, "session-created"), "setup: room not created");
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: name });
+  assert.ok(await waitFor(guest, "session-joined"), "setup: guest not admitted");
+  assert.ok(await waitFor(host, "guest-joined"));
+  return { host, guest };
+}
+
+async function listedNames() {
+  const probe = await client();
+  probe.send_({ type: "list-sessions" });
+  const list = await waitFor(probe, "session-list");
+  return list.sessions.map(s => s.sessionId);
+}
+
+test("a code room's guest leaving frees the seat, keeps the room, and tells the host", async () => {
+  const { host, guest } = await codeRoomWithGuest("code-keep-leave");
+  guest.send_({ type: "leave-session" });
+  const left = await waitFor(host, "guest-left");
+  assert.ok(left, "the host is told the seat is free");
+  assert.equal(left.sessionId, "code-keep-leave");
+  assert.ok(!host.inbox.some(m => m.type === "peer-disconnected"), "not told the room is gone");
+  assert.ok((await listedNames()).includes("code-keep-leave"), "listed again for the next attempt");
+
+  const next = await client();
+  next.send_({ type: "join-session", sessionId: "code-keep-leave" });
+  assert.ok(await waitFor(next, "session-joined"), "the next guest gets in");
+});
+
+test("a code room's guest vanishing also frees the seat rather than deleting the room", async () => {
+  const { host, guest } = await codeRoomWithGuest("code-keep-close");
+  guest.close();
+  assert.ok(await waitFor(host, "guest-left"));
+  assert.ok((await listedNames()).includes("code-keep-close"));
+});
+
+test("the host of a code room can turn its guest away, and the seat is free again", async () => {
+  const { host, guest } = await codeRoomWithGuest("code-release");
+  host.send_({ type: "release-guest", sessionId: "code-release" });
+  const told = await waitFor(guest, "peer-disconnected");
+  assert.ok(told && told.sessionId === "code-release", "the guest is told");
+  assert.ok((await listedNames()).includes("code-release"));
+  /* The guest leaving afterwards changes nothing: it is no longer in the room. */
+  guest.send_({ type: "leave-session" });
+  await sleep(300);
+  assert.ok((await listedNames()).includes("code-release"));
+});
+
+test("only the host can turn a guest away, and only in a code room", async () => {
+  const { host, guest } = await codeRoomWithGuest("code-release-guest-tries");
+  guest.send_({ type: "release-guest", sessionId: "code-release-guest-tries" });
+  const stranger = await client();
+  stranger.send_({ type: "release-guest", sessionId: "code-release-guest-tries" });
+  await sleep(400);
+  assert.ok(!guest.inbox.some(m => m.type === "peer-disconnected"), "nobody but the host may free the seat");
+  assert.ok(!(await listedNames()).includes("code-release-guest-tries"), "still occupied, so still unlisted");
+
+  const pinHost = await client();
+  pinHost.send_({ type: "create-session", sessionId: "pin-no-release" });
+  const created = await waitFor(pinHost, "session-created");
+  const pinGuest = await client();
+  pinGuest.send_({ type: "join-session", sessionId: "pin-no-release", pin: created.pin });
+  assert.ok(await waitFor(pinGuest, "session-joined"));
+  pinHost.send_({ type: "release-guest", sessionId: "pin-no-release" });
+  await sleep(400);
+  assert.ok(!pinGuest.inbox.some(m => m.type === "peer-disconnected"), "a PIN room's guest is not turned away");
+  host.close();
+});
+
+test("PIN and open rooms still close when their guest leaves; a code room still closes when its host does", async () => {
+  const pinHost = await client();
+  pinHost.send_({ type: "create-session", sessionId: "pin-closes" });
+  const created = await waitFor(pinHost, "session-created");
+  const pinGuest = await client();
+  pinGuest.send_({ type: "join-session", sessionId: "pin-closes", pin: created.pin });
+  assert.ok(await waitFor(pinGuest, "session-joined"));
+  pinGuest.send_({ type: "leave-session" });
+  assert.ok(await waitFor(pinHost, "peer-disconnected"), "a PIN room's host is told the room is gone");
+  assert.ok(!(await listedNames()).includes("pin-closes"));
+
+  const { host, guest } = await codeRoomWithGuest("code-host-leaves");
+  host.send_({ type: "leave-session" });
+  assert.ok(await waitFor(guest, "peer-disconnected"), "the guest is told");
+  assert.ok(!(await listedNames()).includes("code-host-leaves"));
+});
+
+/* ══════════════════════════════════════════
+   Uploads at once
+══════════════════════════════════════════ */
+
+/** An upload that has started but not finished: the server is reading it. */
+function slowUpload(ip) {
+  const B = "----dcSlow";
+  const req = http.request({
+    host: "127.0.0.1", port: PORT, path: "/api/send-message", method: "POST",
+    headers: { "Content-Type": `multipart/form-data; boundary=${B}`, "X-DC-Client": "1",
+               "X-Forwarded-For": ip, "Transfer-Encoding": "chunked" }
+  });
+  req.on("error", () => {});
+  req.write(`--${B}\r\nContent-Disposition: form-data; name="file"; filename="slow.bin"\r\n` +
+            `Content-Type: application/octet-stream\r\n\r\n` + "A".repeat(64 * 1024));
+  return req;
+}
+
+test("a third upload while two are being read is turned away, before its body is read", async () => {
+  const first = slowUpload("198.51.100.71"), second = slowUpload("198.51.100.72");
+  await sleep(400);
+  const up = oversizedUpload();
+  const third = await post(up.body, { "Content-Type": up.type, "X-DC-Client": "1", "X-Forwarded-For": "198.51.100.73" });
+  assert.equal(third.status, 503, "the third is turned away; 413 would mean it was buffered first");
+  assert.ok(await stillServing());
+
+  /* The two finish — here, give up — and the server takes uploads again. */
+  first.destroy(); second.destroy();
+  await sleep(400);
+  const after = await post('{"message":"hi"}', { "Content-Type": "application/json", "X-DC-Client": "1", "X-Forwarded-For": "198.51.100.74" });
+  assert.notEqual(after.status, 503, "the slots were let go when those uploads ended");
+});

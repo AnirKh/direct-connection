@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150641-d6c00501";
+const APP_BUILD = "202610150710-ba966a57";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -430,6 +430,8 @@ let pakeSession    = null;    // our SPAKE2 finish(): awaiting the peer's confir
 let keyAgreement   = "ECDH";  // how the live key was agreed — for the shield panel
 /* Host-side guard on wrong-code guesses; the server cannot see the word, so it
    cannot rate-limit it. See guards.js codeAttemptState. */
+let wordMatched    = false;   // this channel's SPAKE2 succeeded: a real chat, not an attempt
+let roomReadyInfo  = null;    // what session-created said, to draw the ready panel again
 let codeFailures   = 0;
 let codeLockedUntil = 0;
 
@@ -499,6 +501,8 @@ function armConfirmTimeout() {
 /** Adopt the agreed key and open the chat. `secure` = room secret authenticated it. */
 function e2eActivate(key, secure) {
   clearTimeout(e2eConfirmTimer);
+  clearConnectWatch();
+  keepScreenOn(true);    // a late connection after the give-up note let the screen go
   e2eKey        = key;
   e2eReady      = true;
   e2eSecureMode = secure;
@@ -554,6 +558,7 @@ function pakeReset() {
 /** Start the exchange when the channel opens. Both sides call this. */
 async function pakeBegin() {
   pakeReset();
+  wordMatched = false;
   updateKeyVerifyUi();
   appendSys(t("e2eWaiting"));
 
@@ -599,6 +604,7 @@ async function handlePakeConfirm(data) {
     const key = await crypto.subtle.importKey(
       "raw", pakeSession.sessionKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
     codeFailures = 0;             // a success clears the host's wrong-guess count
+    wordMatched = true;
     keyAgreement = "SPAKE2";
     pakeReset();
     /* Authenticated by the shared word, exactly like the invite-link secret. */
@@ -627,17 +633,50 @@ function pakeFailClosed(locked) {
     if (lock.locked) codeLockedUntil = lock.until;
   }
 
-  showToast(t("codeWrong"), "error");
   if (isHost) {
-    /* Drop this guest; the room reopens for the next attempt (or the right one),
-       unless we have now locked it. */
-    appendSys(t(codeLockedUntil > Date.now() ? "codeLocked" : "codeWrong"));
+    /* Turn this guest away — the server frees the seat and keeps the room —
+       and go back to waiting, for the next attempt or the right one. This
+       used to stay on a dead chat screen while the guest's leaving deleted
+       the room, so "try again" could only ever find "not found". */
+    if (currentSession) wsSend({ type: "release-guest", sessionId: currentSession.sessionId });
+    returnToWaitingRoom(codeLockedUntil > Date.now() ? "codeLocked" : "codeWrongHost");
   } else {
-    /* Guest: leave, so the room's slot frees and they can rejoin with the
-       right word. */
+    /* Guest: back to the lobby, where the room is listed again. */
+    showToast(t("codeWrong"), "error");
     appendSys(t("codeWrong"));
     setTimeout(() => { if (!e2eReady) leaveBtn.click(); }, 1200);
   }
+}
+
+/**
+ * A code room's host, back to waiting after an attempt that did not become a
+ * chat — a wrong word, or a guest who left first. The room is still on the
+ * server (see release-guest, guest-left); the ready panel is drawn again with
+ * a note to say what happened. Called twice for one attempt — the host's own
+ * failure, then the server's guest-left — the second changes nothing.
+ */
+function returnToWaitingRoom(noteKey) {
+  const alreadyWaiting = chatScreen.classList.contains("hidden");
+  wordMatched = false;
+  clearConnectWatch();
+  /* Our own closing must not run the channel's close handler: it would write
+     "connection closed" into a chat nobody is in, and let the screen sleep. */
+  if (dataChannel) dataChannel.onclose = null;
+  endCall(false);
+  closePeerConnection();
+  if (alreadyWaiting && !noteKey) return;
+  chatScreen.classList.add("hidden");
+  lobbyScreen.classList.remove("hidden");
+  document.getElementById("langSwitcher").style.display = "";
+  showLobbyTab("create");
+  if (roomReadyInfo) showRoomReady(roomReadyInfo);
+  if (noteKey) {
+    const note = document.createElement("div");
+    note.style.cssText = "text-align:center;color:var(--orange);margin-bottom:12px";
+    note.textContent = `⚠️ ${t(noteKey)}`;
+    createInfo.prepend(note);
+  }
+  keepScreenOn(true);              // still hosting: a lock now would take the room
 }
 
 /** Refuse to open the channel. Better a dead chat than a silently readable one. */
@@ -1610,6 +1649,75 @@ function setupDataChannel() {
   };
 }
 
+/** The host's "room is ready" panel: the PIN, the open-room notice, or the
+    code room's word, and the invite link where there is one. Drawn when the
+    room is made, and again when a code room's host is back waiting after an
+    attempt that failed. */
+function showRoomReady(data) {
+  const shareUrl = `${location.origin}${location.pathname}#${DC.buildInviteHash(data.sessionId, data.token, roomSecret)}`;
+  createInfo.style.textAlign = "left";
+  const ready = document.createElement("div");
+  ready.style.cssText = "text-align:center;margin-bottom:14px";
+  ready.textContent = t("roomReady");
+
+  const isOpen = roomKind === "open";
+  const isCode = roomKind === "code";
+
+  const pinBox = document.createElement("div");
+  pinBox.style.cssText = "background:var(--sunken);border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
+  const pinLabel = document.createElement("div");
+  pinLabel.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
+  /* Each kind fills the same box: a PIN to read out, an open-room notice, or
+     — for a code room — the word the host chose, to share the same way. */
+  pinLabel.textContent = isCode ? t("codeRoomTitle") : isOpen ? t("openRoomTitle") : t("pinCode");
+  const pinValue = document.createElement("div");
+  pinValue.style.cssText = isCode
+    ? "font-size:24px;font-weight:700;color:var(--accent-text);word-break:break-word"
+    : isOpen
+      ? "font-size:28px;line-height:1.2;color:var(--orange)"
+      : "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
+  if (isCode)     pinValue.textContent = pakeCode || "";
+  else if (isOpen) pinValue.appendChild(tablerIcon("lock-open"));
+  else            pinValue.textContent = data.pin;
+  const pinHint = document.createElement("div");
+  pinHint.style.cssText = "font-size:11px;color:var(--muted);margin-top:4px";
+  pinHint.textContent = isCode ? t("codeRoomHint") : isOpen ? t("openRoomHint") : t("pinCodeHint");
+  pinBox.append(pinLabel, pinValue, pinHint);
+
+  const linkHint = document.createElement("div");
+  linkHint.style.cssText = "font-size:12px;color:var(--muted);margin-bottom:6px";
+  linkHint.textContent = t("linkHint");
+  const linkRow = document.createElement("div");
+  linkRow.style.cssText = "display:flex;gap:6px;align-items:center";
+  const shareUrlInput = document.createElement("input");
+  shareUrlInput.id = "shareUrlInput";
+  shareUrlInput.type = "text";
+  shareUrlInput.value = shareUrl;
+  shareUrlInput.readOnly = true;
+  shareUrlInput.style.cssText = "font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:var(--sunken);color:var(--accent-text);border:1px solid var(--border)";
+  const copyLinkBtn = document.createElement("button");
+  copyLinkBtn.id = "copyLinkBtn";
+  copyLinkBtn.style.cssText = "width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0";
+  copyLinkBtn.textContent = t("copyBtn");
+  linkRow.append(shareUrlInput, copyLinkBtn);
+  /* No invite link for a code room: the link carries the room secret for
+     the ECDH path, which a code room does not use. The word is the only way
+     in, and a link would just fail to connect. */
+  if (isCode) createInfo.replaceChildren(ready, pinBox);
+  else        createInfo.replaceChildren(ready, pinBox, linkHint, linkRow);
+
+  copyLinkBtn.onclick = () => {
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      copyLinkBtn.textContent = t("copiedBtn");
+      setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = t("copyBtn"); }, 2000);
+    }).catch(() => {
+      shareUrlInput.select();
+      document.execCommand("copy");
+      copyLinkBtn.textContent = t("copiedBtn");
+    });
+  };
+}
+
 /* ══════════════════════════════════════════════
    SIGNALING HANDLER
 ══════════════════════════════════════════════ */
@@ -1682,8 +1790,6 @@ async function handleSignaling(data) {
       /* Minted here, in the browser — the server never learns it. */
       roomSecret = makeRoomSecret();
 
-      const shareUrl = `${location.origin}${location.pathname}#${DC.buildInviteHash(data.sessionId, data.token, roomSecret)}`;
-
       /* The PIN and link go in the Create tab. A host who wandered to another
          tab while the server was waking up is brought back to them. */
       showLobbyTab("create");
@@ -1691,67 +1797,8 @@ async function handleSignaling(data) {
       keepScreenOn(true);
       /* The list may already show this room, with a Join button. */
       renderSessionList(_lastSessionList);
-      createInfo.style.textAlign = "left";
-      const ready = document.createElement("div");
-      ready.style.cssText = "text-align:center;margin-bottom:14px";
-      ready.textContent = t("roomReady");
-
-      const isOpen = roomKind === "open";
-      const isCode = roomKind === "code";
-
-      const pinBox = document.createElement("div");
-      pinBox.style.cssText = "background:var(--sunken);border-radius:10px;padding:14px;margin-bottom:12px;text-align:center";
-      const pinLabel = document.createElement("div");
-      pinLabel.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px";
-      /* Each kind fills the same box: a PIN to read out, an open-room notice, or
-         — for a code room — the word the host chose, to share the same way. */
-      pinLabel.textContent = isCode ? t("codeRoomTitle") : isOpen ? t("openRoomTitle") : t("pinCode");
-      const pinValue = document.createElement("div");
-      pinValue.style.cssText = isCode
-        ? "font-size:24px;font-weight:700;color:var(--accent-text);word-break:break-word"
-        : isOpen
-          ? "font-size:28px;line-height:1.2;color:var(--orange)"
-          : "font-size:28px;font-weight:700;letter-spacing:10px;color:var(--text)";
-      if (isCode)     pinValue.textContent = pakeCode || "";
-      else if (isOpen) pinValue.appendChild(tablerIcon("lock-open"));
-      else            pinValue.textContent = data.pin;
-      const pinHint = document.createElement("div");
-      pinHint.style.cssText = "font-size:11px;color:var(--muted);margin-top:4px";
-      pinHint.textContent = isCode ? t("codeRoomHint") : isOpen ? t("openRoomHint") : t("pinCodeHint");
-      pinBox.append(pinLabel, pinValue, pinHint);
-
-      const linkHint = document.createElement("div");
-      linkHint.style.cssText = "font-size:12px;color:var(--muted);margin-bottom:6px";
-      linkHint.textContent = t("linkHint");
-      const linkRow = document.createElement("div");
-      linkRow.style.cssText = "display:flex;gap:6px;align-items:center";
-      const shareUrlInput = document.createElement("input");
-      shareUrlInput.id = "shareUrlInput";
-      shareUrlInput.type = "text";
-      shareUrlInput.value = shareUrl;
-      shareUrlInput.readOnly = true;
-      shareUrlInput.style.cssText = "font-size:11px;padding:8px 10px;border-radius:8px;flex:1;min-width:0;background:var(--sunken);color:var(--accent-text);border:1px solid var(--border)";
-      const copyLinkBtn = document.createElement("button");
-      copyLinkBtn.id = "copyLinkBtn";
-      copyLinkBtn.style.cssText = "width:auto;margin:0;padding:8px 14px;font-size:13px;min-height:36px;border-radius:8px;flex-shrink:0";
-      copyLinkBtn.textContent = t("copyBtn");
-      linkRow.append(shareUrlInput, copyLinkBtn);
-      /* No invite link for a code room: the link carries the room secret for
-         the ECDH path, which a code room does not use. The word is the only way
-         in, and a link would just fail to connect. */
-      if (isCode) createInfo.replaceChildren(ready, pinBox);
-      else        createInfo.replaceChildren(ready, pinBox, linkHint, linkRow);
-
-      copyLinkBtn.onclick = () => {
-        navigator.clipboard.writeText(shareUrl).then(() => {
-          copyLinkBtn.textContent = t("copiedBtn");
-          setTimeout(() => { const b = document.getElementById("copyLinkBtn"); if (b) b.textContent = t("copyBtn"); }, 2000);
-        }).catch(() => {
-          shareUrlInput.select();
-          document.execCommand("copy");
-          copyLinkBtn.textContent = t("copiedBtn");
-        });
-      };
+      roomReadyInfo = data;
+      showRoomReady(data);
 
       setCreateButtons(false);
       isConnecting = false;
@@ -1845,6 +1892,28 @@ async function handleSignaling(data) {
       /* What a locked screen looks like from here: the other side's page is
          paused and its link to the server cut. If the link between the two
          phones is still up, the chat goes on — see G.serverLeaveEndsChat. */
+      if (!G.serverLeaveEndsChat({ channelOpen: dataChannel?.readyState === "open", iceState: pc?.iceConnectionState })) {
+        serverRoomGone = true;
+        break;
+      }
+      appendSys(t("sysPeerLeft"));
+      endCall(false);
+      closePeerConnection();
+      showReconnectButton();
+      break;
+
+    case "guest-left":
+      /* A code room's guest has gone and the server kept the room. */
+      if (!roomEventIsOurs(data) || !isHost) break;
+      if (!wordMatched) {
+        /* Never became a chat — a stranger, or a word that did not match. */
+        returnToWaitingRoom();
+        break;
+      }
+      /* A real chat: theirs is the same news as peer-disconnected. The room
+         goes, as every room does once its chat has been — offering the seat
+         to someone else mid-chat would be wrong. */
+      wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
       if (!G.serverLeaveEndsChat({ channelOpen: dataChannel?.readyState === "open", iceState: pc?.iceConnectionState })) {
         serverRoomGone = true;
         break;
@@ -1994,8 +2063,37 @@ document.addEventListener("pointerdown", () => {
   if (screenLockWanted && !screenLock) keepScreenOn(true);
 });
 
+/* ── A connection that never comes up ───────
+   Some networks block direct connections, and with no relay server two such
+   devices cannot reach each other at all. Both sides used to sit on
+   "Connecting…" for as long as anyone watched. After CONNECT_GIVE_UP_MS with
+   no channel, the chat says so and what to try (G.connectStalled). It keeps
+   trying underneath: a slow network that gets there late still connects. */
+const CONNECT_GIVE_UP_MS = 30_000;
+let connectWatch = null;
+
+function watchConnecting() {
+  clearConnectWatch();
+  connectWatch = setTimeout(() => {
+    connectWatch = null;
+    if (!G.connectStalled({
+      chatOpen: !chatScreen.classList.contains("hidden"),
+      channelOpen: dataChannel?.readyState === "open",
+      keyAgreed: e2eReady
+    })) return;
+    appendSys(t("sysNoDirectRoute"));
+    showReconnectButton();
+  }, CONNECT_GIVE_UP_MS);
+}
+
+function clearConnectWatch() {
+  clearTimeout(connectWatch);
+  connectWatch = null;
+}
+
 function switchToChat(sessionId) {
   keepScreenOn(true);
+  watchConnecting();
   lobbyScreen.classList.add("hidden");
   chatScreen.classList.remove("hidden");
   document.getElementById("langSwitcher").style.display = "none";
@@ -2009,6 +2107,7 @@ function switchToChat(sessionId) {
 
 leaveBtn.onclick = () => {
   keepScreenOn(false);
+  clearConnectWatch();
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();
@@ -3767,6 +3866,9 @@ leaveSendBtn.onclick = async () => {
       headers: { "X-DC-Client": "1" },
       body: fd
     });
+    /* Turned away because other messages were being sent at that moment —
+       said in the user's language, not the server's English. */
+    if (res.status === 503) { setLeaveStatus(t("emailBusy"), "err"); return; }
     const json = await res.json();
     if (res.ok && json.ok) {
       setLeaveStatus(t("msgSent"), "ok");

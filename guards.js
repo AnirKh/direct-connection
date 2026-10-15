@@ -479,6 +479,25 @@
   }
 
   /* ══════════════════════════════════════════
+     A connection that never comes up
+  ══════════════════════════════════════════ */
+
+  /**
+   * The give-up time has passed since the chat screen opened. Is the
+   * connection stuck — and worth telling the user about?
+   *
+   * Only while the chat screen is showing, and only if the channel between the
+   * two devices never opened. A channel that opened and then failed its key
+   * check has said so already (e2eFailClosed), and a chat that works needs
+   * nothing said.
+   *
+   * @param {{chatOpen: boolean, channelOpen: boolean, keyAgreed: boolean}} o
+   */
+  function connectStalled(o) {
+    return Boolean(o) && o.chatOpen === true && o.channelOpen !== true && o.keyAgreed !== true;
+  }
+
+  /* ══════════════════════════════════════════
      The host's own room
   ══════════════════════════════════════════ */
 
@@ -675,7 +694,7 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, callPauseNote,
-    waitingRoomLost, isOwnRoom,
+    waitingRoomLost, isOwnRoom, connectStalled,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

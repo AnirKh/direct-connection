@@ -710,7 +710,12 @@ test("a matched word authenticates the channel, a wrong one closes it", () => {
 test("a code room offers no invite link", () => {
   /* The link carries the ECDH room secret, which a code room does not use —
      a guest clicking it would just fail to connect. */
-  const created = withoutComments(appSrc).match(/case "session-created": \{[\s\S]*?\n      break;/)[0];
-  assert.ok(/if \(isCode\) createInfo\.replaceChildren\(ready, pinBox\)/.test(created),
+  /* The panel is drawn by showRoomReady — on creating the room, and again when
+     a code room's host is back waiting after a failed attempt. */
+  const panel = topLevelFunctions(withoutComments(appSrc)).get("showRoomReady");
+  assert.ok(panel, "showRoomReady not found");
+  assert.ok(/if \(isCode\) createInfo\.replaceChildren\(ready, pinBox\)/.test(panel),
     "a code room's panel must omit the invite link");
+  const created = withoutComments(appSrc).match(/case "session-created": \{[\s\S]*?\n      break;/)[0];
+  assert.match(created, /showRoomReady\(data\)/, "the room's creation draws that panel");
 });

@@ -7,8 +7,10 @@
   - PIN verification on join
   - Offer / answer / ICE relay
   - Renegotiation offer/answer relay
-  - Call offer/answer relay
+  - (no call relay: call signalling travels end-to-end encrypted, peer to peer)
   - Peer disconnect notification
+  - A code room outlives its guest: the seat is freed and the host told
+  - At most UPLOADS_AT_ONCE leave-a-message uploads read at a time
   - Session cleanup on disconnect
   - WebSocket heartbeat (30s ping/pong) drops clients that vanished silently
   - Stale session pruner (10 min)
@@ -267,6 +269,29 @@ function requireClientHeader(req, res, next) {
   next();
 }
 
+/* At most this many uploads are read at once. multer holds each in memory —
+   up to LEAVE_MESSAGE_MAX_FILE_BYTES — and the rate limit below is per
+   address, so nothing else bounded how many arrive together: a handful of
+   large ones from a few addresses could exhaust the instance's memory, and
+   the restart would drop every live chat. One past the limit is turned away
+   before a byte of its body is read, and does not count against its sender's
+   allowance — it was the server that was busy, not them. */
+const UPLOADS_AT_ONCE = 2;
+let uploadsInFlight = 0;
+
+function limitConcurrentUploads(req, res, next) {
+  if (uploadsInFlight >= UPLOADS_AT_ONCE) {
+    res.setHeader("Retry-After", "10");
+    return res.status(503).json({ error: "The server is busy — try again in a moment." });
+  }
+  uploadsInFlight++;
+  let released = false;
+  const release = () => { if (!released) { released = true; uploadsInFlight--; } };
+  res.on("finish", release);     // answered
+  res.on("close", release);      // or the connection went first
+  next();
+}
+
 function enforceEmailRateLimit(req, res, next) {
   const limit = checkEmailRateLimit(getClientIp(req));
   if (!limit.allowed) {
@@ -277,6 +302,7 @@ function enforceEmailRateLimit(req, res, next) {
 
 app.post("/api/send-message",
   requireClientHeader,
+  limitConcurrentUploads,
   enforceEmailRateLimit,
   upload.single("file"),
   asyncRoute(async (req, res) => {
@@ -547,6 +573,16 @@ function broadcastSessionList() {
     Also what enforces one room per socket: creating or joining calls it first. */
 function cleanupClient(ws) {
   for (const [sessionId, session] of sessions) {
+    /* A code room outlives its guest. Admission to one is first-come — the
+       word is proven afterwards, between the two browsers — so anyone can take
+       the seat, and leaving used to delete the room: one wrong guess, or one
+       stranger joining and leaving, and the room was gone, the right word with
+       it. Now the seat is freed and the host told; the host knows whether a
+       chat just ended or an attempt failed, and says which (guest-left). */
+    if (session.kind === "code" && session.guest === ws) {
+      freeGuestSeat(sessionId, session);
+      continue;
+    }
     if (session.host === ws || session.guest === ws) {
       const other = session.host === ws ? session.guest : session.host;
       if (other && other.readyState === WebSocket.OPEN) {
@@ -557,6 +593,18 @@ function cleanupClient(ws) {
       broadcastSessionList();
     }
   }
+}
+
+/** Empties a code room's seat and opens it to the next guest. The host is
+    told; the guest, if still connected, already knows — it left, or was
+    turned away (release-guest). */
+function freeGuestSeat(sessionId, session) {
+  session.guest = null;
+  session.waitingSince = Date.now();     // the ten minutes to find a guest start again
+  if (session.host && session.host.readyState === WebSocket.OPEN) {
+    session.host.send(JSON.stringify({ type: "guest-left", sessionId }));
+  }
+  broadcastSessionList();
 }
 
 function relayToOther(ws, sessionId, payload) {
@@ -823,6 +871,23 @@ wss.on("connection", (ws, req) => {
 
       case "leave-session": cleanupClient(ws); break;
 
+      /* The host of a code room turning away a guest whose word did not match,
+         so the seat is free for the next attempt — or the right one. Only the
+         host, only a code room, and only a seat that is taken. The guest is
+         told the way any guest is told its host has gone. */
+      case "release-guest": {
+        const session = sessions.get(data.sessionId);
+        if (!session || session.host !== ws || session.kind !== "code" || !session.guest) break;
+        const guest = session.guest;
+        if (guest.readyState === WebSocket.OPEN) {
+          guest.send(JSON.stringify({ type: "peer-disconnected", sessionId: data.sessionId }));
+        }
+        session.guest = null;
+        session.waitingSince = Date.now();
+        broadcastSessionList();
+        break;
+      }
+
       case "ping": /* keep-alive, no-op */ break;
 
       default:
@@ -885,7 +950,7 @@ setInterval(() => {
       pruned++;
       continue;
     }
-    if (!s.guest && now - s.createdAt > TEN_MIN) {
+    if (!s.guest && now - (s.waitingSince || s.createdAt) > TEN_MIN) {
       /* Its own message, not peer-disconnected: there never was a peer. The
          host is in the lobby looking at a PIN and a link, and needs telling
          that both have stopped working — the old message said "peer left" into
