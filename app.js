@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610141240-ad304408";
+const APP_BUILD = "202610150134-96da8b31";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -272,6 +272,25 @@ let peerInfoSent   = false;
 const MY_DEVICE = DCS.describeDevice({ userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints });
 
 const recvBuffers = {};
+
+/* ── Turned-away transfers ──────────────────
+   A refused or abandoned transfer's chunks keep coming until the sender hears.
+   They are dropped on arrival, not parked as orphans, and its transfer-done or
+   transfer-abort says nothing more — the bubble already shows it failed.
+   Ids only, and only the most recent few hundred.                          */
+const refusedTransfers = new Set();
+const REFUSED_REMEMBERED = 256;
+
+function rememberRefused(id) {
+  refusedTransfers.add(id);
+  if (refusedTransfers.size > REFUSED_REMEMBERED) {
+    refusedTransfers.delete(refusedTransfers.values().next().value);
+  }
+}
+
+/* Our own transfers still sending, by id. A transfer-abort naming one of them
+   means the other side turned it away: the send loop stops at the next chunk. */
+const outgoingTransfers = new Map();
 
 /* ── Early-chunk parking ────────────────────
    transfer-meta travels inside the encrypted e2e-dc envelope, so it is decrypted
@@ -730,6 +749,11 @@ const WS_URL = SERVER_URL.replace(/^http/, "ws");
 const CHUNK_SIZE    = 65536;
 const MAX_DC_MSG    = 200000;
 const MAX_P2P_FILE_BYTES = 150 * 1024 * 1024; // 150 MB hard cap for P2P transfers
+/* What may be arriving at once: two maximum-size files side by side. */
+const INCOMING_BUDGET_BYTES = 2 * MAX_P2P_FILE_BYTES;
+/* The largest chunk body an honest sender makes: IV, then CHUNK_SIZE of
+   plaintext sealed with AES-GCM's 16-byte tag. */
+const MAX_CHUNK_BODY = DC.E2E_BIN_IV_LEN + CHUNK_SIZE + 16;
 
 /** Max size for “leave a message” file; server may raise via /api/ping (Resend email ~40MB cap). */
 let maxLeaveAttachBytes = 28 * 1024 * 1024;
@@ -1369,6 +1393,7 @@ function setupDataChannel() {
     for (const k of Object.keys(recvBuffers)) delete recvBuffers[k];
     for (const k of Object.keys(orphanChunks)) delete orphanChunks[k];
     orphanChunkCount = 0;
+    refusedTransfers.clear();
     showReconnectButton();
   };
 
@@ -1981,24 +2006,28 @@ function handleTextMessage(data, sealed = false) {
       sendPeerInfo();   // the host's answer; a no-op for the guest, who went first
       break;
 
-    case "transfer-meta": {
-      const info = newRecvBuffer(data);
-      recvBuffers[data.id] = info;
-      if (data.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
-      if (data.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
-      if (data.kind === "voice") appendVoicePlaceholder("peer", data.id);
-      /* Chunks that outran this message: feed them through in arrival order. */
-      for (const early of takeOrphanChunks(data.id)) acceptChunk(info, data.id, early);
+    case "transfer-meta":
+      handleTransferMeta(data);
       break;
-    }
 
-    case "transfer-abort":
+    case "transfer-abort": {
+      /* One of ours, turned away by the other side: stop sending it, and say
+         it was not accepted rather than "ask the sender" to the sender. */
+      const outgoing = outgoingTransfers.get(data.id);
+      if (outgoing) {
+        outgoing.stopped = true;
+        failTransfer(data.id, "transferRefused");
+        break;
+      }
+      /* One we already refused: its bubble already says so. */
+      if (refusedTransfers.has(data.id)) break;
       /* The sender gave up. Without this the placeholder waits for a
          transfer-done that is never coming. */
       delete recvBuffers[data.id];
       takeOrphanChunks(data.id);
       failTransfer(data.id);
       break;
+    }
 
     case "transfer-done":
       assembleTransfer(data.id).catch(err => {
@@ -2053,11 +2082,15 @@ async function sendBinary(file, kind) {
 
   const id = makeTransferId();
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+  const mimeType = file.type || "audio/webm";
+  /* A picture the other side would not draw (an SVG, say) goes as a file, so
+     both sides show the same thing. */
+  kind = G.presentAs(kind, mimeType).kind;
 
   await dcSendE2e({
     type: "transfer-meta", id,
     name: file.name || "voice.webm", size: file.size,
-    mimeType: file.type || "audio/webm", kind, totalChunks
+    mimeType, kind, totalChunks
   });
 
   const localUrl = trackBlobUrl(URL.createObjectURL(file));  // tracked — revoked on leave
@@ -2068,8 +2101,13 @@ async function sendBinary(file, kind) {
 
   const idBytes = new TextEncoder().encode(id);
   let lastPct = -1;
+  const outgoing = { stopped: false };
+  outgoingTransfers.set(id, outgoing);
   try {
   for (let i = 0; i < totalChunks; i++) {
+    /* Turned away by the other side; its transfer-abort already marked the
+       bubble failed. Sending the rest would only be dropped. */
+    if (outgoing.stopped) return;
     /* Read one slice at a time. file.arrayBuffer() would pull the whole file
        into the JS heap — 150 MB of it in the worst case — when only 64 KB is
        needed; the File itself stays backed by disk. */
@@ -2094,6 +2132,8 @@ async function sendBinary(file, kind) {
        transfer-done that will never arrive. Tell it. */
     dcSendE2e({ type: "transfer-abort", id }).catch(() => {});
     return;
+  } finally {
+    outgoingTransfers.delete(id);
   }
 
   clearSendProgress(id);
@@ -2105,18 +2145,69 @@ async function sendBinary(file, kind) {
    spilled to disk by the browser rather than kept in the heap. */
 const DECRYPT_BATCH = 32;   // ~2 MB of plaintext per fold
 
-/** Fresh receive state for one incoming transfer. */
-function newRecvBuffer(meta) {
+/** Fresh receive state for one incoming transfer. `shown` is the verdict from
+    G.incomingTransfer: the kind to show it as and the type its blob gets. */
+function newRecvBuffer(meta, shown) {
   return {
     blobParts: [],            // decrypted batches, already out of the heap
     pending:   [],            // decrypted chunks awaiting the next fold
     received:  0,
+    bytes:     0,             // plaintext so far, held to `size`
     failed:    false,
     lastPct:   -1,
     chain:     Promise.resolve(),   // serialises decryption so order is preserved
-    name: meta.name, size: meta.size, mimeType: meta.mimeType,
-    kind: meta.kind, totalChunks: meta.totalChunks
+    name: meta.name, size: meta.size,
+    kind: shown.kind, blobType: shown.blobType, totalChunks: meta.totalChunks
   };
+}
+
+/** A file is announced. Take it, or turn it away before a byte is stored. */
+function handleTransferMeta(data) {
+  if (recvBuffers[data.id]) return;   // already arriving under this id; keep that one
+  if (refusedTransfers.has(data.id)) return;   // turned away once; not again under the same id
+  const buffers = Object.values(recvBuffers);
+  const verdict = G.incomingTransfer({
+    meta: data,
+    maxBytes:    MAX_P2P_FILE_BYTES,
+    budgetBytes: INCOMING_BUDGET_BYTES,
+    activeBytes: buffers.reduce((sum, b) => sum + b.size, 0),
+    activeCount: buffers.length
+  });
+  if (!verdict.ok) { refuseTransfer(data.id, verdict.reason); return; }
+
+  const info = newRecvBuffer(data, verdict);
+  recvBuffers[data.id] = info;
+  if (info.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
+  if (info.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
+  if (info.kind === "voice") appendVoicePlaceholder("peer", data.id);
+  /* Chunks that outran this message: feed them through in arrival order. */
+  for (const early of takeOrphanChunks(data.id)) acceptChunk(info, data.id, early);
+}
+
+/**
+ * Turns a transfer away — announced over the limit, or caught breaking its own
+ * announcement mid-way. Frees what it holds, says so in the chat, drops whatever
+ * more arrives for it, and tells the sender, whose app stops sending.
+ */
+function refuseTransfer(id, reason, info = null) {
+  console.warn(`Transfer ${id}: refused — ${reason}`);
+  const valid = typeof id === "string" && id.length === DC.TRANSFER_ID_LEN;
+  /* `info` is passed from inside a transfer, which may already be off the
+     table — assembleTransfer takes it off before the last chunks finish. */
+  if (!info && valid) info = recvBuffers[id] || null;
+  if (info) {
+    info.failed = true;
+    info.blobParts = [];
+    info.pending = [];
+    if (recvBuffers[id] === info) delete recvBuffers[id];
+  }
+  if (valid) {
+    takeOrphanChunks(id);
+    rememberRefused(id);
+  }
+  if (info) failTransfer(id, "transferRefused");
+  else appendSys(t("transferRefused"));
+  if (valid && dcReady()) dcSendE2e({ type: "transfer-abort", id }).catch(() => {});
 }
 
 /** Decrypt on arrival rather than hoarding ciphertext until transfer-done. */
@@ -2129,7 +2220,17 @@ function acceptChunk(info, id, packet) {
          instead of skipping bytes and delivering a damaged file. */
       const split = DC.splitChunkBody(packet);
       if (!split) throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
-      info.pending.push(await e2eDecryptBytes(split.ct, split.iv));
+      const plain = await e2eDecryptBytes(split.ct, split.iv);
+      if (info.failed) return;   // refused while this chunk was decrypting
+      info.bytes += plain.byteLength;
+      /* The announced size is the most this transfer may hold. One byte past
+         it and the sender is not keeping its word: stop storing now, rather
+         than at a transfer-done that a changed app need never send. */
+      if (!G.withinDeclaredSize(info.bytes, info.size)) {
+        refuseTransfer(id, `more than the ${info.size} bytes announced`, info);
+        return;
+      }
+      info.pending.push(plain);
       if (info.pending.length >= DECRYPT_BATCH) {
         info.blobParts.push(new Blob(info.pending));
         info.pending = [];
@@ -2145,7 +2246,15 @@ function acceptChunk(info, id, packet) {
 function handleBinaryChunk(buffer) {
   const { id, body: chunkData } = DC.unpackChunk(buffer);
 
+  /* Turned away already — the sender has not heard yet. */
+  if (refusedTransfers.has(id)) return;
+
   const info = recvBuffers[id];
+  /* No honest sender makes a chunk this big. Not decrypted, not parked. */
+  if (chunkData.byteLength > MAX_CHUNK_BODY) {
+    if (info) refuseTransfer(id, `a ${chunkData.byteLength}-byte chunk`, info);
+    return;
+  }
   if (info) { acceptChunk(info, id, chunkData); return; }
 
   /* Metadata is still decrypting — hold the chunk rather than dropping it.
@@ -2201,6 +2310,7 @@ function clearSendProgress(id) {
 }
 
 async function assembleTransfer(id) {
+  if (refusedTransfers.has(id)) return;   // turned away; its bubble already says so
   const info = recvBuffers[id];
   delete recvBuffers[id];
   takeOrphanChunks(id);          // metadata never arrived for these, if any
@@ -2213,6 +2323,7 @@ async function assembleTransfer(id) {
 
   await info.chain;   // let any still-queued decryptions finish
 
+  if (refusedTransfers.has(id)) return;   // turned away by one of those last chunks
   if (info.failed) { failTransfer(id); return; }
 
   /* totalChunks is authoritative. A short count means chunks were lost, and a
@@ -2224,11 +2335,19 @@ async function assembleTransfer(id) {
     return;
   }
 
+  /* Every byte announced, and no more — the same promise, checked at the end. */
+  if (info.bytes !== info.size) {
+    console.error(`Transfer ${id}: announced ${info.size} bytes, got ${info.bytes}`);
+    failTransfer(id);
+    return;
+  }
+
   if (info.pending.length) {
     info.blobParts.push(new Blob(info.pending));
     info.pending = [];
   }
-  const blob = new Blob(info.blobParts, { type: info.mimeType });
+  /* blobType, never the sender's own type: see G.presentAs. */
+  const blob = new Blob(info.blobParts, { type: info.blobType });
   info.blobParts = [];
   const url = trackBlobUrl(URL.createObjectURL(blob));  // tracked — revoked on leave
 
@@ -2238,11 +2357,11 @@ async function assembleTransfer(id) {
 }
 
 /** Marks a receiving placeholder as failed rather than delivering a truncated file. */
-function failTransfer(id) {
+function failTransfer(id, messageKey = "transferFailed") {
   const row     = findTransferRow(id);
   const pending = row && row.querySelector(".transfer-pending");
-  if (!pending) { appendSys(t("transferFailed")); return; }
-  pending.textContent = `⚠️ ${t("transferFailed")}`;
+  if (!pending) { appendSys(t(messageKey)); return; }
+  pending.textContent = `⚠️ ${t(messageKey)}`;
   pending.classList.remove("transfer-pending");
   pending.classList.add("transfer-failed");
   pending.style.color = "var(--danger-text)";   // beats the inline colour set on the placeholder
@@ -3047,8 +3166,18 @@ function resolveImagePlaceholder(id, url, name) {
   if (!row) return;
   const bubble = row.querySelector(".bubble");
   const img = document.createElement("img");
+  /* Opening it full size is offered only once it has drawn as a picture. One
+     that will not draw — a HEIC photo outside Safari, or bytes that are no
+     picture at all — is offered as a download instead of a broken image. */
+  img.onload  = () => { img.onclick = () => window.open(url, "_blank"); };
+  img.onerror = () => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.textContent = `🖼️ ${name || t("image")} — ${t("download")}`;
+    img.replaceWith(link);
+  };
   img.src = url; img.alt = name;
-  img.onclick = () => window.open(url, "_blank");
   bubble.replaceChildren(img);
   let meta = row.querySelector(".bubble-meta");
   if (!meta) { meta = document.createElement("div"); meta.className = "bubble-meta"; row.appendChild(meta); }

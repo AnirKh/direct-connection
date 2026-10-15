@@ -178,6 +178,7 @@ const I18N = {
     // P2P file size
     fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
     transferFailed:  "Дамжуулалт тасарлаа — дахин илгээнэ үү",
+    transferRefused: "Файлыг хүлээж авсангүй — хэт том, эсвэл нэг дор хэт олон",
     // Reconnect
     reconnectBtn:    "← Лобби руу буцах",
     // Incoming call modal
@@ -327,6 +328,7 @@ const I18N = {
     // P2P file size
     fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
     transferFailed:  "Transfer incomplete — ask the sender to try again",
+    transferRefused: "File not accepted — too large, or too many at once",
     // Reconnect
     reconnectBtn:    "← Back to Lobby",
     // Incoming call modal

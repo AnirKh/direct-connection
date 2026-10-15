@@ -318,6 +318,91 @@
   }
 
   /* ══════════════════════════════════════════
+     Received files
+  ══════════════════════════════════════════ */
+
+  /** Picture types a received "image" may be drawn and opened as. Raster only:
+      an SVG is a document that can carry script. Anything else sent as a
+      picture is offered as a download instead. */
+  const SHOWABLE_IMAGE_TYPES = Object.freeze([
+    "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif",
+    "image/bmp", "image/heic", "image/heif"
+  ]);
+
+  /** How many transfers may be arriving at once. */
+  const INCOMING_MAX_AT_ONCE = 16;
+
+  /** The transfer id's shape: protocol.js makeTransferId, a v4 UUID. */
+  const TRANSFER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  /** "Image/PNG; q=1" → "image/png". Empty for anything that is not a string. */
+  function baseType(mimeType) {
+    if (typeof mimeType !== "string") return "";
+    return mimeType.split(";")[0].trim().toLowerCase();
+  }
+
+  /**
+   * How a received file is shown, and the type its assembled blob is given.
+   *
+   * The blob's type is what the browser treats it as when it is opened, and
+   * the sender chooses the type. A "picture" typed text/html, opened from the
+   * chat — or a file link long-pressed into a new tab — would load as a page
+   * from this site. So the sender's type is kept only when it can do nothing
+   * but show: a raster picture, or sound. Everything else becomes a plain
+   * download, typed application/octet-stream, which no browser renders.
+   *
+   * The sending side asks the same question, so a picture the receiver would
+   * not draw is sent as a file in the first place, and both sides agree.
+   *
+   * @returns {{kind: "file"|"image"|"voice", blobType: string}}
+   */
+  function presentAs(kind, mimeType) {
+    const type = baseType(mimeType);
+    if (kind === "image" && SHOWABLE_IMAGE_TYPES.includes(type)) return { kind: "image", blobType: type };
+    if (kind === "voice" && /^audio\/[a-z0-9.+-]+$/.test(type))  return { kind: "voice", blobType: type };
+    return { kind: "file", blobType: "application/octet-stream" };
+  }
+
+  /**
+   * A transfer-meta has arrived: take the file, or turn it away?
+   *
+   * The sending app refuses anything over the limit before it sends — but the
+   * other side can run a changed app, and nothing on this side checked. A
+   * stranger in a room with no PIN could stream data until the phone filled up.
+   *
+   *   "malformed"  not a transfer this app could have sent
+   *   "too-big"    over the per-file limit
+   *   "busy"       too many arriving at once, or too many bytes between them
+   *
+   * The declared size is a promise, not a fact; app.js holds the sender to it
+   * byte by byte as the file arrives (withinDeclaredSize).
+   *
+   * @param {{meta: object, maxBytes: number, budgetBytes: number,
+   *          activeBytes: number, activeCount: number}} o
+   * @returns {{ok: true, kind: string, blobType: string} | {ok: false, reason: string}}
+   */
+  function incomingTransfer(o) {
+    const meta = o && o.meta;
+    const refuse = reason => ({ ok: false, reason });
+    if (!meta || typeof meta !== "object") return refuse("malformed");
+    if (typeof meta.id !== "string" || !TRANSFER_ID.test(meta.id)) return refuse("malformed");
+    if (meta.kind !== "file" && meta.kind !== "image" && meta.kind !== "voice") return refuse("malformed");
+    if (!Number.isSafeInteger(meta.size) || meta.size < 0) return refuse("malformed");
+    if (meta.totalChunks !== undefined &&
+        (!Number.isSafeInteger(meta.totalChunks) || meta.totalChunks < 0)) return refuse("malformed");
+    if (!(meta.size <= o.maxBytes)) return refuse("too-big");
+    if ((o.activeCount || 0) >= INCOMING_MAX_AT_ONCE) return refuse("busy");
+    if (!((o.activeBytes || 0) + meta.size <= o.budgetBytes)) return refuse("busy");
+    return { ok: true, ...presentAs(meta.kind, meta.mimeType) };
+  }
+
+  /** Has a transfer still sent no more than it said it would? */
+  function withinDeclaredSize(receivedBytes, declaredBytes) {
+    return Number.isSafeInteger(receivedBytes) && Number.isSafeInteger(declaredBytes) &&
+           receivedBytes >= 0 && receivedBytes <= declaredBytes;
+  }
+
+  /* ══════════════════════════════════════════
      Room events from the server
   ══════════════════════════════════════════ */
 
@@ -392,6 +477,7 @@
     mayCaptureForCall, consentedVideo,
     mayAcceptPeerKey, shieldState,
     CODE_MAX_ATTEMPTS, codeAttemptState,
+    SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, incomingTransfer, withinDeclaredSize,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

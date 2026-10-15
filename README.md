@@ -210,6 +210,25 @@ A transfer that dies must not keep claiming to be running. Three paths cover it:
 
 Before this, the peer leaving mid-transfer left the sender's bubble frozen at whatever percentage it had reached, permanently, next to an unhandled null-reference error. The receiver's bubble sat on "Receiving…" just as long. Neither side was told the file had not arrived.
 
+## A received file is held to what it announced
+
+The sending app refuses a file over 150 MB before it sends. The receiving app used to trust that and check nothing — but the other side can run a changed app, and in a room with no PIN the other side can be anyone. It could stream data until the phone filled up, or send a "picture" typed `text/html` that, opened from the chat, would load as a page from this site.
+
+So the receiver now decides for itself (`incomingTransfer`, `presentAs` and `withinDeclaredSize` in `guards.js`):
+
+| Check | When | What happens |
+| --- | --- | --- |
+| announced size over 150 MB | at `transfer-meta` | turned away before a byte is stored |
+| more than 16 arriving at once, or more than 300 MB between them | at `transfer-meta` | turned away |
+| an id, kind, size or chunk count this app could not have sent | at `transfer-meta` | turned away |
+| one byte more than announced | as each chunk decrypts | cut off then, not at a `transfer-done` a changed app need never send |
+| a chunk bigger than 64 KB plus IV and tag | on arrival | not decrypted, not parked |
+| fewer bytes than announced | at `transfer-done` | failed, as a missing chunk already was |
+
+Turning a transfer away frees what it held, says so in the chat, drops whatever more arrives under its id, and sends `transfer-abort`, which the sending app now obeys: it stops between chunks rather than sending the rest into nothing.
+
+**The type the file is given is never the sender's.** A blob's type is what the browser treats it as when it is opened. A picture keeps its type only if it is a raster image (PNG, JPEG, GIF, WebP, AVIF, BMP, HEIC); a voice note only if it is `audio/…`. Everything else — an SVG, which can carry script, included — arrives as a plain download typed `application/octet-stream`, which no browser renders. The sender asks the same question, so an SVG picked as a picture is sent as a file and both sides show the same thing. A picture can be opened full size only once it has actually drawn; one that will not draw (a HEIC photo outside Safari) becomes a download link instead of a broken image.
+
 ## Only the handshake may arrive unencrypted
 
 Two things travel on the data channel: frames in the clear, and an `e2e-dc` envelope that the agreed key seals. **Anything the app sends sealed is believed only sealed.** `handleTextMessage` takes a `sealed` flag that is true in exactly one place — where `e2eDecrypt` hands over what the envelope held — and asks `mayHandleFrame` before acting on anything.
@@ -322,6 +341,7 @@ Node's built-in runner, no dependencies.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
 - `test/i18n.test.js` — every `data-i18n`, `data-i18n-ph` and `data-i18n-aria` key in `index.html` exists in both languages, since a missing one falls back silently. Also that the page opens straight to the lobby, with "about this page" as a dropdown beside the title rather than the dialog every visit used to start with, and that on a phone that button sits below the fixed language switcher rather than under it.
+- `test/receive.test.js` — receiving files: the real `sendBinary`, `handleTransferMeta`, `acceptChunk`, `handleBinaryChunk`, `assembleTransfer` and the transfer cases of the message switch, lifted out of `app.js` and run as two sides against each other. Honest files, pictures and voice notes arrive whole and correctly typed; a changed app's oversized, overlong, short, mistyped or too-many transfers are turned away, and an honest sender that is turned away stops sending.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 
 `/api/send-message` is covered inside `server.test.js`. Those tests assert the process is **still serving** after a malformed request, not just the status code — an uncaught throw in that handler ends the process and every open room with it. Any new async route must go through `asyncRoute()` for the same reason: Express 4 does not await handlers, so a rejected promise becomes an unhandled rejection and Node exits.

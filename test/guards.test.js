@@ -457,3 +457,112 @@ test("a missing argument does not throw and is not locked", () => {
   assert.equal(G.codeAttemptState(undefined).locked, false);
   assert.equal(G.codeAttemptState({}).locked, false);
 });
+
+/* ══════════════════════════════════════════
+   Received files — presentAs, incomingTransfer, withinDeclaredSize
+══════════════════════════════════════════ */
+
+const MB = 1024 * 1024;
+const LIMIT = 150 * MB;
+const okMeta = (over = {}) => ({
+  id: "0f8fad5b-d9cb-469f-a165-70867728950e", kind: "file",
+  size: 1000, mimeType: "application/pdf", totalChunks: 1, ...over
+});
+const arriving = ({ meta, ...rest } = {}) => G.incomingTransfer({
+  meta: okMeta(meta), maxBytes: LIMIT, budgetBytes: 2 * LIMIT,
+  activeBytes: 0, activeCount: 0, ...rest
+});
+
+test("a real picture is shown as a picture, typed as what it is", () => {
+  for (const type of ["image/png", "image/jpeg", "image/gif", "image/webp", "image/heic"]) {
+    assert.deepEqual(G.presentAs("image", type), { kind: "image", blobType: type });
+  }
+  /* Case and parameters do not matter; the blob gets the bare type. */
+  assert.deepEqual(G.presentAs("image", "Image/PNG; foo=bar"), { kind: "image", blobType: "image/png" });
+});
+
+test("a 'picture' that could run as a page is never shown, and never keeps its type", () => {
+  /* Opened from the chat, a blob typed text/html is a page from this site.
+     SVG is the same: a picture format that can carry script. */
+  for (const type of ["text/html", "image/svg+xml", "application/xhtml+xml", "text/xml",
+                      "application/javascript", "", undefined, null, 42, {}]) {
+    assert.deepEqual(G.presentAs("image", type), { kind: "file", blobType: "application/octet-stream" },
+      `${JSON.stringify(type)} must become a plain download`);
+  }
+});
+
+test("a voice note must be sound", () => {
+  assert.deepEqual(G.presentAs("voice", "audio/webm;codecs=opus"), { kind: "voice", blobType: "audio/webm" });
+  assert.deepEqual(G.presentAs("voice", "audio/mp4"), { kind: "voice", blobType: "audio/mp4" });
+  for (const type of ["text/html", "video/webm", "audio/", "audio/<x>", ""]) {
+    assert.equal(G.presentAs("voice", type).kind, "file", `${type} is not a voice note`);
+  }
+});
+
+test("a file always downloads as plain bytes, whatever type the sender claimed", () => {
+  /* A file link long-pressed into a new tab opens the blob. Typed as the
+     sender said, an .html file would load as a page from this site. */
+  for (const type of ["text/html", "image/png", "application/pdf", "audio/webm"]) {
+    assert.deepEqual(G.presentAs("file", type), { kind: "file", blobType: "application/octet-stream" });
+  }
+});
+
+test("an ordinary file within the limit is taken", () => {
+  const v = arriving();
+  assert.equal(v.ok, true);
+  assert.equal(v.kind, "file");
+});
+
+test("a file announced over the limit is refused before a byte is stored", () => {
+  assert.deepEqual(arriving({ meta: { size: LIMIT + 1 } }), { ok: false, reason: "too-big" });
+  assert.equal(arriving({ meta: { size: LIMIT } }).ok, true, "exactly the limit is allowed");
+});
+
+test("too many arriving at once is refused", () => {
+  assert.equal(arriving({ activeCount: G.INCOMING_MAX_AT_ONCE - 1 }).ok, true);
+  assert.deepEqual(arriving({ activeCount: G.INCOMING_MAX_AT_ONCE }), { ok: false, reason: "busy" });
+});
+
+test("too many bytes arriving at once is refused, even in files each under the limit", () => {
+  /* Two maximum-size files side by side are fine; a third byte is not. */
+  assert.equal(arriving({ meta: { size: LIMIT }, activeBytes: LIMIT, activeCount: 1 }).ok, true);
+  assert.deepEqual(arriving({ meta: { size: 1 }, activeBytes: 2 * LIMIT, activeCount: 2 }),
+                   { ok: false, reason: "busy" });
+});
+
+test("an announcement this app could not have sent is refused", () => {
+  const bad = [
+    { id: "not-a-uuid" }, { id: 7 }, { id: "__proto__" },
+    { id: "0F8FAD5B-D9CB-469F-A165-70867728950E" },        // makeTransferId is lower-case
+    { kind: "script" }, { kind: undefined },
+    { size: -1 }, { size: 1.5 }, { size: "1000" }, { size: NaN }, { size: Infinity }, { size: undefined },
+    { totalChunks: -1 }, { totalChunks: 0.5 }, { totalChunks: "2" }
+  ];
+  for (const over of bad) {
+    assert.deepEqual(arriving({ meta: over }), { ok: false, reason: "malformed" }, JSON.stringify(over));
+  }
+  for (const meta of [null, undefined, "x", 5]) {
+    assert.deepEqual(G.incomingTransfer({ meta, maxBytes: LIMIT, budgetBytes: 2 * LIMIT }),
+                     { ok: false, reason: "malformed" });
+  }
+  assert.deepEqual(G.incomingTransfer(undefined), { ok: false, reason: "malformed" });
+});
+
+test("an announcement from an older app without totalChunks is still taken", () => {
+  assert.equal(arriving({ meta: { totalChunks: undefined } }).ok, true);
+});
+
+test("a missing limit refuses rather than allowing everything", () => {
+  /* undefined compares false with anything; the checks are written so that
+     comparing against a missing limit refuses. */
+  assert.equal(G.incomingTransfer({ meta: okMeta() }).ok, false);
+});
+
+test("a transfer may not hold more than it announced", () => {
+  assert.equal(G.withinDeclaredSize(0, 0), true);
+  assert.equal(G.withinDeclaredSize(1000, 1000), true);
+  assert.equal(G.withinDeclaredSize(1001, 1000), false);
+  for (const [r, d] of [[NaN, 10], [1, NaN], [-1, 10], [1, undefined], ["5", 10]]) {
+    assert.equal(G.withinDeclaredSize(r, d), false, `${r} / ${d}`);
+  }
+});
