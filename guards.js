@@ -479,6 +479,57 @@
   }
 
   /* ══════════════════════════════════════════
+     A call across a locked screen
+  ══════════════════════════════════════════ */
+
+  /**
+   * Which of our call's microphone and camera need starting again?
+   *
+   * A phone that locks mid-call may stop them for good — the track ends — and
+   * nothing started them again: back on the screen, the call was still up,
+   * but the other side heard and saw nothing until someone hung up and rang
+   * again. Only "ended" counts. "Muted" is the phone pausing a track, and the
+   * phone resumes it itself.
+   *
+   * Starting them again is opening the microphone and camera, so it happens
+   * only in an agreed call (mayCaptureForCall), and only for what the call
+   * already had: a voice call never gains a camera here.
+   *
+   * @param {{inCall: boolean, tracks: {kind: string, readyState: string}[]}} o
+   * @returns {string[]} "audio", "video", both or neither
+   */
+  function tracksToRestart(o) {
+    if (!o || !mayCaptureForCall(o.inCall) || !Array.isArray(o.tracks)) return [];
+    const kinds = [];
+    for (const t of o.tracks) {
+      if (!t || t.readyState !== "ended") continue;
+      if ((t.kind === "audio" || t.kind === "video") && !kinds.includes(t.kind)) kinds.push(t.kind);
+    }
+    return kinds;
+  }
+
+  /**
+   * What the call screen says about the other side, if anything.
+   *
+   *   "away"          their page is hidden — screen locked, or another app —
+   *                   as their app told ours
+   *   "reconnecting"  the call's own link is down for now, and may come back
+   *   null            nothing to say
+   *
+   * Without this a locked screen on the other side was a frozen picture, or
+   * silence, with nothing to say why. Their own word comes first: it says why,
+   * where the link can only say that something is wrong.
+   *
+   * @param {{inCall: boolean, peerAway: boolean, linkState: string}} o
+   */
+  function callPauseNote(o) {
+    if (!o || o.inCall !== true) return null;
+    if (o.peerAway === true) return "away";
+    if (o.linkState === "disconnected") return "reconnecting";
+    return null;
+  }
+
+  /* ══════════════════════════════════════════
      Installing as an app
   ══════════════════════════════════════════ */
 
@@ -592,6 +643,7 @@
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
+    tracksToRestart, callPauseNote,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

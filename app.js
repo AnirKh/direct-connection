@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150526-e633e68f";
+const APP_BUILD = "202610150545-4c45a354";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1405,6 +1405,7 @@ function createCallPeerConnection() {
      empty, and Safari would keep that empty stream — see showRemoteTracks. */
   remoteCallStream = new MediaStream();
   remoteVideo.srcObject = null;
+  peerAway = false;
   callPc = new RTCPeerConnection(ICE_CONFIG);
 
   callPc.onicecandidate = ({ candidate }) => {
@@ -1414,6 +1415,7 @@ function createCallPeerConnection() {
 
   callPc.onconnectionstatechange = () => {
     if (!callPc) return;
+    updateCallPauseNote();
     const state = callPc.connectionState;
     if (state === "connected") {
       callStatusLabel.textContent = t("callConnected");
@@ -2299,6 +2301,14 @@ function handleTextMessage(data, sealed = false) {
     case "call-ice":
       handleCallIce(data.candidate);
       break;
+
+    case "call-away":
+    case "call-back":
+      /* Their page was hidden — a locked screen, or another app — or is back. */
+      if (!inCall) break;
+      peerAway = data.type === "call-away";
+      updateCallPauseNote();
+      break;
   }
 }
 
@@ -2845,12 +2855,17 @@ function consentedVideo(peerWantsVideo) {
   return G.consentedVideo(pendingCallVideo, peerWantsVideo);
 }
 
+/* The call's camera, the same whether it is starting or starting again. */
+const CALL_VIDEO = { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } };
+
 async function attachCallMedia(withVideo) {
   stopLocalCallMedia();
+  callMediaRestarts = 0;
   localStream = await navigator.mediaDevices.getUserMedia({
     audio: true,
-    video: withVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false
+    video: withVideo ? CALL_VIDEO : false
   });
+  localStream.getTracks().forEach(watchCallTrack);
   localVideo.srcObject = localStream;
   localVideo.muted = true;
   updateLocalVideoAspect();
@@ -3307,6 +3322,8 @@ endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
   inCall = false;
+  peerAway = false;
+  updateCallPauseNote();
   pendingCallVideo = false;
   callIceQueue = [];
   remoteVideo._pendingPlay = false;
@@ -3315,6 +3332,93 @@ function endCall(notify = true) {
   stopCallMedia(true);
   closeCallPeerConnection();
 }
+
+/* ── A call across a locked screen ──────────
+   A phone locked mid-call pauses the page. Two things went wrong after:
+
+   - its microphone and camera could stay off. The phone may stop them for
+     good while locked, and nothing started them again, so back on the screen
+     the call was still up but the other side heard and saw nothing. Coming
+     back now starts again whatever ended (G.tracksToRestart) and swaps it into
+     the call in place — no new call, no renegotiation.
+   - the other side was left with a frozen picture, or silence, and no word
+     why. Each side now tells the other when its page is hidden and when it is
+     back (call-away, call-back, sealed like all call signalling), and the call
+     screen says so (G.callPauseNote). If that message never gets out before
+     the phone sleeps, the call's own link going down says "Reconnecting…".  */
+const callPauseNote = document.getElementById("callPauseNote");
+const callPauseText = document.getElementById("callPauseText");
+let peerAway = false;                  // the other side's page is hidden, by its own word
+let restartingCallMedia = false;
+let callMediaRestarts = 0;
+const CALL_MEDIA_RESTART_MAX = 5;      // a device that keeps failing is not retried for ever
+
+function updateCallPauseNote() {
+  const note = G.callPauseNote({ inCall, peerAway, linkState: callPc?.connectionState });
+  callPauseText.textContent = note === "away" ? t("callPeerAway") : note === "reconnecting" ? t("reconnecting") : "";
+  callPauseNote.classList.toggle("hidden", !note);
+}
+
+/** A call track that ends while the page is showing — the phone took the
+    camera, say — is started again at once; one that ends while hidden waits
+    for the page to come back. stop() on hanging up fires no "ended". */
+function watchCallTrack(track) {
+  track.addEventListener("ended", () => {
+    if (document.visibilityState === "visible") restartEndedCallMedia();
+  });
+}
+
+async function restartEndedCallMedia() {
+  if (restartingCallMedia || !localStream || !callPc) return;
+  const kinds = G.tracksToRestart({
+    inCall, tracks: localStream.getTracks().map(({ kind, readyState }) => ({ kind, readyState }))
+  });
+  if (!kinds.length || callMediaRestarts >= CALL_MEDIA_RESTART_MAX) return;
+  restartingCallMedia = true;
+  callMediaRestarts++;
+  try {
+    const fresh = await navigator.mediaDevices.getUserMedia({
+      audio: kinds.includes("audio"),
+      video: kinds.includes("video") ? CALL_VIDEO : false
+    });
+    /* Hung up while the phone was asking: put it all straight back. */
+    if (!G.mayCaptureForCall(inCall) || !callPc || !localStream) {
+      fresh.getTracks().forEach(track => track.stop());
+      return;
+    }
+    const kept = localStream.getTracks().filter(track => track.readyState !== "ended");
+    for (const track of fresh.getTracks()) {
+      /* Muted stays muted, camera off stays off. */
+      track.enabled = track.kind === "audio" ? !isMuted : !isCamOff;
+      watchCallTrack(track);
+      const old = localStream.getTracks().find(o => o.kind === track.kind && o.readyState === "ended");
+      const sender = old && callPc.getSenders().find(s => s.track === old);
+      if (sender) await sender.replaceTrack(track);
+      else        await attachCallTrack(track, localStream);
+    }
+    /* A fresh stream rather than a track swapped into the old one: Safari may
+       never draw a track added to a stream it is showing. The self-view gets
+       it only when the camera was the one restarted — otherwise its picture
+       has not changed, and handing it over would only make it flicker. */
+    localStream = new MediaStream([...kept, ...fresh.getTracks()]);
+    if (kinds.includes("video")) {
+      localVideo.srcObject = localStream;
+      localVideo.play().catch(() => {});
+    }
+  } catch (err) {
+    console.error("Could not start the call's microphone or camera again:", err);
+    showToast(t("callMediaRestartFailed"), "warn");
+  } finally {
+    restartingCallMedia = false;
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!inCall) return;
+  const away = document.visibilityState === "hidden";
+  if (dcReady()) dcSendCallSignal({ type: away ? "call-away" : "call-back" }).catch(() => {});
+  if (!away) restartEndedCallMedia();
+});
 
 /* ══════════════════════════════════════════════
    ATTACH MENU

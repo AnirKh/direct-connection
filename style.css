@@ -775,6 +775,20 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   -webkit-touch-callout: none;
 }
 #localVideo.dragging { cursor: grabbing; }
+/* Under the status line, so it covers neither the picture's middle nor the
+   voice-call avatar. */
+.call-pause-note {
+  position: absolute; z-index: 10;
+  top: calc(66px + var(--safe-top));
+  left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: calc(100% - 40px);
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 16px; border-radius: 14px;
+  background: rgba(0,0,0,0.7); color: #fff;
+  font-size: 14px; font-weight: 600; line-height: 1.4;
+}
+.call-pause-note i { font-size: 20px; flex-shrink: 0; color: var(--orange); }
+
 .call-status-label {
   position: absolute;
   top: calc(20px + var(--safe-top));

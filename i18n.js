@@ -106,6 +106,8 @@ const I18N = {
     sysClosed:       "Холбоос хаагдлаа",
     sysPeerLeft:     "Харилцагч гарлаа",
     sysLinkLost:     "Харилцагчтай холбоо тасарлаа",
+    callPeerAway:    "Харилцагчийн дэлгэц унтарсан эсвэл өөр апп нээсэн байна",
+    callMediaRestartFailed: "Микрофон эсвэл камерыг дахин асааж чадсангүй",
     sysCallEnded:    "Дуудлага дууслаа",
     sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
     // Creating room
@@ -280,6 +282,8 @@ const I18N = {
     sysClosed:       "Connection closed",
     sysPeerLeft:     "Peer disconnected",
     sysLinkLost:     "Lost the connection to the other side",
+    callPeerAway:    "The other person's screen is off, or they switched apps",
+    callMediaRestartFailed: "Couldn't turn the microphone or camera back on",
     sysCallEnded:    "Call ended",
     sysCallFailed:   (msg) => `Call failed — ${msg}`,
     creating:        "Creating…",
