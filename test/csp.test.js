@@ -101,7 +101,11 @@ function externalAssetTags() {
   return Array.from(indexHtml.matchAll(/<(?:link|script)\b[^>]*\bhttps?:\/\/[^>]*>/g))
     .map(m => m[0])
     /* The CSP meta tag lists origins in its content attribute; it fetches nothing. */
-    .filter(tag => !/http-equiv=/i.test(tag));
+    .filter(tag => !/http-equiv=/i.test(tag))
+    /* Nor does the canonical link: it names the page's own main address for
+       search engines, and the browser never loads it. Exactly rel="canonical" —
+       anything that does load something still has to carry a hash. */
+    .filter(tag => !/^<link rel="canonical" href="https:\/\/[^"]+">$/.test(tag));
 }
 
 test("index.html does load something from a CDN", () => {
