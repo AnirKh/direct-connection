@@ -403,6 +403,38 @@
   }
 
   /* ══════════════════════════════════════════
+     Chat messages
+  ══════════════════════════════════════════ */
+
+  /**
+   * The longest chat message, in characters.
+   *
+   * A message goes as one data-channel message, and an oversized one is not
+   * delivered late or in pieces — send() throws, or the channel closes. That
+   * used to happen silently: a long paste did nothing, and the text sat in the
+   * box with no word as to why. 64 KB is the size every browser's channel
+   * carries in one message; at the worst case of 3 UTF-8 bytes per character,
+   * 10 000 characters sealed and base64-encoded is about 40 KB.
+   */
+  const MAX_MESSAGE_CHARS = 10000;
+
+  /** May this message be sent — or, arriving, be shown? */
+  function messageFits(text) {
+    return typeof text === "string" && text.length <= MAX_MESSAGE_CHARS;
+  }
+
+  /**
+   * What the message box shows for a draft of `length` characters: a counter
+   * once the draft is near the limit, marked over once it is past it.
+   *
+   * @returns {{counter: boolean, over: boolean}}
+   */
+  function draftState(length) {
+    const n = Number.isFinite(length) ? length : 0;
+    return { counter: n >= MAX_MESSAGE_CHARS * 0.9, over: n > MAX_MESSAGE_CHARS };
+  }
+
+  /* ══════════════════════════════════════════
      Room events from the server
   ══════════════════════════════════════════ */
 
@@ -478,6 +510,7 @@
     mayAcceptPeerKey, shieldState,
     CODE_MAX_ATTEMPTS, codeAttemptState,
     SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, incomingTransfer, withinDeclaredSize,
+    MAX_MESSAGE_CHARS, messageFits, draftState,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

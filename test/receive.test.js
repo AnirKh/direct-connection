@@ -65,7 +65,7 @@ const LIMIT = 150 * 1024 * 1024;
 
 /** One side of a chat: the real transfer code, with the screen and network stood in. */
 function side(name) {
-  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [] };
+  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [] };
   let peer = null;
   const later = f => setImmediate(() => peer && f(peer));
   const env = {
@@ -83,7 +83,7 @@ function side(name) {
     resolveImagePlaceholder: (id, url) => log.delivered.push({ id, as: "image", url }),
     resolveVoicePlaceholder: (id, url) => log.delivered.push({ id, as: "voice", url }),
     reportTransferProgress() {}, setTransferProgress() {}, attachSendProgress() {}, clearSendProgress() {},
-    showToast() {}, I18N: { en: { fileTooLargeP2P: () => "" } }, LANG: "en",
+    showToast() {}, announce: text => log.heard.push(text), I18N: { en: { fileTooLargeP2P: () => "" } }, LANG: "en",
     dcReady: () => true, e2eReady: true,
     makeTransferId: DC.makeTransferId,
     trackBlobUrl: url => url,
@@ -354,4 +354,25 @@ test("a received picture that will not draw becomes a download, not a broken ima
   assert.equal(link.download, "cat.png", "saved, not navigated to");
   assert.equal(img.onclick, undefined);
   assert.deepEqual(opened, []);
+});
+
+/* ══════════════════════════════════════════
+   Read aloud
+══════════════════════════════════════════ */
+
+test("an arriving file, picture or voice note is read out to a screen reader", async () => {
+  const { a, b } = pair();
+  await a.sendBinary(new File([bytes(10)], "notes.pdf", { type: "application/pdf" }), "file");
+  await a.sendBinary(new File([bytes(10)], "cat.png", { type: "image/png" }), "image");
+  await a.sendBinary(new File([bytes(10)], "", { type: "audio/webm" }), "voice");
+  await settle();
+  assert.deepEqual(b.log.heard, ["srNewFile: notes.pdf", "srNewImage: cat.png", "srNewVoice"]);
+  assert.deepEqual(a.log.heard, [], "your own sends are not read back to you");
+});
+
+test("a refused file is not announced as arriving", async () => {
+  const b = side("b");
+  b.deliver(meta({ size: LIMIT + 1 }));
+  await settle();
+  assert.deepEqual(b.log.heard, []);
 });

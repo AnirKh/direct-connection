@@ -179,6 +179,13 @@ const I18N = {
     fileTooLargeP2P: (mb) => `Файлын хэмжээ ${mb}МБ-аас их байна. Жижиг файл ашиглана уу.`,
     transferFailed:  "Дамжуулалт тасарлаа — дахин илгээнэ үү",
     transferRefused: "Файлыг хүлээж авсангүй — хэт том, эсвэл нэг дор хэт олон",
+    messageTooLong:  (max) => `Мэдээлэл хэт урт байна — дээд тал нь ${max} тэмдэгт.`,
+    messageTooLongArrived: "Хэт урт мэдээлэл ирсэн тул харуулсангүй.",
+    messageNotSent:  "Мэдээлэл илгээгдсэнгүй — дахин оролдоно уу.",
+    srNewMessage:    "Шинэ мэдээлэл",
+    srNewFile:       "Файл ирж байна",
+    srNewImage:      "Зураг ирж байна",
+    srNewVoice:      "Дуут мэдээлэл ирж байна",
     // Reconnect
     reconnectBtn:    "← Лобби руу буцах",
     // Incoming call modal
@@ -329,6 +336,13 @@ const I18N = {
     fileTooLargeP2P: (mb) => `File too large (max ${mb} MB). Please use a smaller file.`,
     transferFailed:  "Transfer incomplete — ask the sender to try again",
     transferRefused: "File not accepted — too large, or too many at once",
+    messageTooLong:  (max) => `Message too long — ${max} characters at most.`,
+    messageTooLongArrived: "A message too long to show arrived, and was not shown.",
+    messageNotSent:  "Message not sent — please try again.",
+    srNewMessage:    "New message",
+    srNewFile:       "Incoming file",
+    srNewImage:      "Incoming picture",
+    srNewVoice:      "Incoming voice message",
     // Reconnect
     reconnectBtn:    "← Back to Lobby",
     // Incoming call modal

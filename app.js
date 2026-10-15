@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150134-96da8b31";
+const APP_BUILD = "202610150143-08211cc2";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -172,6 +172,8 @@ const leaveBtn         = document.getElementById("leaveBtn");
 const chatMessages     = document.getElementById("chatMessages");
 const typingIndicator  = document.getElementById("typingIndicator");
 const messageInput     = document.getElementById("messageInput");
+const messageCounter   = document.getElementById("messageCounter");
+const srAnnouncer      = document.getElementById("srAnnouncer");
 const sendBtn          = document.getElementById("sendBtn");
 const attachBtn        = document.getElementById("attachBtn");
 const attachMenu       = document.getElementById("attachMenu");
@@ -330,6 +332,19 @@ function showToast(msg, type = "info") {
   toast.textContent = msg;
   container.appendChild(toast);
   setTimeout(() => { toast.remove(); }, 4000);
+}
+
+/* ── Screen-reader announcements ────────────
+   Bubbles are drawn silently: a screen reader found a new message only by
+   going to look for one. What arrives from the other side, and every system
+   note, is also written into a visually hidden live region, which reads it
+   out. Only the last few lines are kept — it is a voice, not a history.    */
+function announce(text) {
+  if (!srAnnouncer || !text) return;
+  const line = document.createElement("p");
+  line.textContent = text;
+  srAnnouncer.appendChild(line);
+  while (srAnnouncer.childElementCount > 3) srAnnouncer.firstElementChild.remove();
 }
 
 /* ── Reconnect / back-to-lobby button ───────
@@ -1869,8 +1884,21 @@ messageInput.addEventListener("input", () => {
   messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + "px";
   /* A taller box takes its extra lines out of the message list above it. */
   if (_stickToBottom) scrollBottom();
+  updateMessageCounter();
   sendTypingSignal();
 });
+
+/** The "9500 / 10000" counter: shown near the limit, red past it. Nothing is
+    cut off — a long paste stays whole in the box, to be trimmed or split. */
+function updateMessageCounter() {
+  const length = messageInput.value.trim().length;
+  const { counter, over } = G.draftState(length);
+  messageCounter.classList.toggle("hidden", !counter);
+  messageCounter.classList.toggle("over", over);
+  messageCounter.textContent = counter ? `${length} / ${G.MAX_MESSAGE_CHARS}` : "";
+  if (over) messageInput.setAttribute("aria-invalid", "true");
+  else messageInput.removeAttribute("aria-invalid");
+}
 
 function sendTypingSignal() {
   if (!dcReady()) return;
@@ -1886,17 +1914,32 @@ async function sendTextMessage() {
     appendSys(t("e2eWaiting"));
     return;
   }
+  /* Said, not silently dropped: the text stays in the box to be trimmed. */
+  if (!G.messageFits(text)) {
+    showToast(I18N[LANG].messageTooLong(G.MAX_MESSAGE_CHARS), "warn");
+    announce(I18N[LANG].messageTooLong(G.MAX_MESSAGE_CHARS));
+    return;
+  }
   const msgId = ++msgIdCounter;
 
-  const { ct, iv } = await e2eEncrypt(text);
-  dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId }));
+  /* Whatever else fails here — the channel closing as Send is pressed — says
+     so too, and the text stays in the box rather than vanishing. */
+  try {
+    const { ct, iv } = await e2eEncrypt(text);
+    dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId }));
+  } catch (err) {
+    console.error("Message not sent:", err);
+    showToast(t("messageNotSent"), "warn");
+    return;
+  }
 
   const row = appendBubble("me", text);
   addAckTick(row, msgId);
   pendingAcks[msgId] = row;
   messageInput.value = "";
   messageInput.style.height = "auto";
-  dataChannel.send(JSON.stringify({ type: "typing-stop" }));
+  updateMessageCounter();
+  dcSend({ type: "typing-stop" });
 }
 
 /**
@@ -1937,6 +1980,13 @@ function handleTextMessage(data, sealed = false) {
       }
       e2eDecrypt(data.ct, data.iv)
         .then(plain => {
+          /* The same limit the sending app keeps — held here too, since the
+             other side can run a changed one. */
+          if (!G.messageFits(plain)) {
+            console.warn(`Dropping a ${plain.length}-character message — over the limit`);
+            appendSys(t("messageTooLongArrived"));
+            return;
+          }
           appendBubble("peer", plain);
           dcSend({ type: "ack", msgId: data.msgId });
         })
@@ -2180,6 +2230,8 @@ function handleTransferMeta(data) {
   if (info.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
   if (info.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
   if (info.kind === "voice") appendVoicePlaceholder("peer", data.id);
+  announce(info.kind === "voice" ? t("srNewVoice")
+         : `${t(info.kind === "image" ? "srNewImage" : "srNewFile")}: ${data.name || ""}`);
   /* Chunks that outran this message: feed them through in arrival order. */
   for (const early of takeOrphanChunks(data.id)) acceptChunk(info, data.id, early);
 }
@@ -3099,6 +3151,7 @@ function appendBubble(who, text) {
   row.appendChild(meta);
   chatMessages.appendChild(row);
   scrollBottom();
+  if (who === "peer") announce(`${t("srNewMessage")}: ${text}`);
   return row;
 }
 
@@ -3285,6 +3338,7 @@ function appendSys(text) {
   el.textContent = text;
   chatMessages.appendChild(el);
   scrollBottom();
+  announce(text);
 }
 
 function addAckTick(row, msgId) {

@@ -25,6 +25,28 @@ const I18N = new Function("localStorage", `${read("i18n.js")}; return I18N;`)({ 
 
 const withoutCssComments = src => src.replace(/\/\*[\s\S]*?\*\//g, "");
 
+test("both languages have the same keys, of the same kind", () => {
+  /* A key missing from one language shows "undefined" in that language only —
+     the one nobody tested in. */
+  const mn = Object.keys(I18N.mn).sort(), en = Object.keys(I18N.en).sort();
+  assert.deepEqual(mn, en);
+  for (const key of mn) {
+    assert.equal(typeof I18N.mn[key], typeof I18N.en[key], `${key} is a ${typeof I18N.mn[key]} in mn, a ${typeof I18N.en[key]} in en`);
+  }
+});
+
+test("every key app.js asks for by name exists in both languages", () => {
+  const app = read("app.js");
+  const keys = new Set([
+    ...[...app.matchAll(/\bt\("([A-Za-z0-9_]+)"\)/g)].map(m => m[1]),
+    ...[...app.matchAll(/I18N\[LANG\]\.([A-Za-z0-9_]+)/g)].map(m => m[1])
+  ]);
+  assert.ok(keys.size > 50, `expected app.js's keys, found ${keys.size}`);
+  for (const key of keys) {
+    for (const lang of ["mn", "en"]) assert.ok(key in I18N[lang], `${lang}.${key} is missing`);
+  }
+});
+
 test("every key the page names exists in both languages", () => {
   const keys = new Set();
   for (const attr of ["data-i18n", "data-i18n-ph", "data-i18n-aria"]) {

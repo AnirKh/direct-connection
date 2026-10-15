@@ -229,6 +229,21 @@ Turning a transfer away frees what it held, says so in the chat, drops whatever 
 
 **The type the file is given is never the sender's.** A blob's type is what the browser treats it as when it is opened. A picture keeps its type only if it is a raster image (PNG, JPEG, GIF, WebP, AVIF, BMP, HEIC); a voice note only if it is `audio/…`. Everything else — an SVG, which can carry script, included — arrives as a plain download typed `application/octet-stream`, which no browser renders. The sender asks the same question, so an SVG picked as a picture is sent as a file and both sides show the same thing. A picture can be opened full size only once it has actually drawn; one that will not draw (a HEIC photo outside Safari) becomes a download link instead of a broken image.
 
+## Messages have a limit, and say so
+
+A chat message is at most **10 000 characters** (`MAX_MESSAGE_CHARS` in `guards.js`).
+
+Before this, a long paste did nothing: Send was pressed, no bubble appeared, the text sat in the box, and nothing said why. A message goes as one data-channel message, sealed and base64-encoded, and two things broke past a certain size — `e2eEncrypt` spreads the sealed bytes into `String.fromCharCode`, which Safari refuses past 65 536 arguments, and the channel itself carries about 64 KB in one message in every browser. Either threw, and nothing caught it. At the worst case of 3 UTF-8 bytes per character, 10 000 characters is about 30 KB sealed and 40 KB on the wire; `test/message.test.js` checks both numbers.
+
+- **Near the limit** a counter (`9500 / 10000`) appears over the box; **past it** the counter turns red and the box is marked `aria-invalid`. Nothing is cut off — a long paste stays whole, to be trimmed or split.
+- **Pressing Send over the limit** shows a toast naming the limit. The text stays in the box.
+- **Any other failure while sending** — the channel closing as Send is pressed — shows "Message not sent" and keeps the text, instead of an unhandled rejection.
+- **The receiver holds the same limit**, since the other side can run a changed app: a longer message is not shown, not acknowledged, and a note says one arrived.
+
+## Read aloud
+
+Bubbles are drawn silently, so a screen reader found a new message only by going to look for one. `#srAnnouncer` is a visually hidden `aria-live="polite"` region, and `announce()` writes into it: each message from the other side ("New message: …"), each file, picture or voice note arriving, every system note, and the too-long warning. Your own messages are not read back. Only the last three lines are kept — it is a voice, not a history, and `aria-relevant="additions"` keeps the pruning silent.
+
 ## Only the handshake may arrive unencrypted
 
 Two things travel on the data channel: frames in the clear, and an `e2e-dc` envelope that the agreed key seals. **Anything the app sends sealed is believed only sealed.** `handleTextMessage` takes a `sealed` flag that is true in exactly one place — where `e2eDecrypt` hands over what the envelope held — and asks `mayHandleFrame` before acting on anything.
@@ -340,7 +355,8 @@ Node's built-in runner, no dependencies.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
-- `test/i18n.test.js` — every `data-i18n`, `data-i18n-ph` and `data-i18n-aria` key in `index.html` exists in both languages, since a missing one falls back silently. Also that the page opens straight to the lobby, with "about this page" as a dropdown beside the title rather than the dialog every visit used to start with, and that on a phone that button sits below the fixed language switcher rather than under it.
+- `test/i18n.test.js` — both languages have the same keys, every key `app.js` asks for by name exists in both, and every `data-i18n`, `data-i18n-ph` and `data-i18n-aria` key in `index.html` does too, since a missing one falls back silently. Also that the page opens straight to the lobby, with "about this page" as a dropdown beside the title rather than the dialog every visit used to start with, and that on a phone that button sits below the fixed language switcher rather than under it.
+- `test/message.test.js` — long messages and read-aloud: `sendTextMessage`, `updateMessageCounter`, `announce`, `appendBubble`, `appendSys` and the `text` case lifted out of `app.js` and run. The limit's arithmetic against the wire and Safari's argument cap; at the limit sent and shown, one past it refused on both sides with a reason; a failed send keeps its text; the counter's states; what is read out, what is not, and that the page carries the region.
 - `test/receive.test.js` — receiving files: the real `sendBinary`, `handleTransferMeta`, `acceptChunk`, `handleBinaryChunk`, `assembleTransfer` and the transfer cases of the message switch, lifted out of `app.js` and run as two sides against each other. Honest files, pictures and voice notes arrive whole and correctly typed; a changed app's oversized, overlong, short, mistyped or too-many transfers are turned away, and an honest sender that is turned away stops sending.
 - `test/layout.test.js` — the phone-keyboard fix: that every full-height rule reads `--app-height`, and `fitToVisibleArea()` lifted out of `app.js` and run against a stand-in window for each case it has to judge.
 

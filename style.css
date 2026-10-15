@@ -580,7 +580,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border-top: 1px solid var(--border);
   position: relative; flex-shrink: 0;
 }
-.textarea-wrap { flex: 1; min-width: 0; }
+.textarea-wrap { flex: 1; min-width: 0; position: relative; }
+
+/* "9500 / 10000" above the box's right edge, shown only near the limit. */
+.message-counter {
+  position: absolute; right: 12px; bottom: calc(100% + 4px);
+  font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 10px;
+  color: var(--muted); background: var(--card); border: 1px solid var(--border);
+  pointer-events: none; font-variant-numeric: tabular-nums;
+}
+.message-counter.over { color: var(--danger-text); border-color: var(--danger-text); }
+.textarea-wrap textarea[aria-invalid="true"] { border-color: var(--danger-text); }
+
+/* Present to screen readers, absent from the screen. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 .textarea-wrap textarea {
   resize: none; max-height: 100px; overflow-y: auto;
   padding: 10px 12px; font-size: 16px; line-height: 1.4;
