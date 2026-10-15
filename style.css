@@ -352,6 +352,39 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--card); padding: 20px;
   border-radius: 14px; margin-bottom: 16px;
 }
+
+/* Rooms | Create room | Email — one section showing at a time. */
+.lobby-tabs {
+  display: flex; gap: 4px; padding: 4px; margin-bottom: 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+}
+/* Icon above the word, as on a phone's bottom bar: side by side, the three
+   words did not fit a phone's width and were cut off ("Өрөөн…"). */
+.lobby-tab {
+  position: relative;
+  flex: 1 1 0; min-width: 0; margin: 0; padding: 7px 4px 6px; min-height: 52px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font-size: 12px; font-weight: 600; line-height: 1.25; border-radius: 9px;
+  background: transparent; color: var(--muted);
+}
+.lobby-tab i { font-size: 19px; }
+.lobby-tab span[data-i18n] { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lobby-tab:hover:not([aria-selected="true"]) { background: rgba(255,255,255,0.05); color: var(--text); }
+.lobby-tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.lobby-tab:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+/* How many rooms are open, so it shows from the other two sections too. */
+.tab-count {
+  position: absolute; top: 4px; left: calc(50% + 9px);
+  min-width: 17px; padding: 0 5px; border-radius: 9px;
+  font-size: 10.5px; line-height: 17px; text-align: center;
+  background: var(--input-bg); color: var(--text);
+}
+.lobby-tab[aria-selected="true"] .tab-count { background: var(--on-accent); color: var(--accent-text); }
+
+/* Shown above whichever section is open; takes no room when there is nothing
+   to say. */
+.lobby-status { margin: 0 4px 12px; font-size: 13px; line-height: 1.6; text-align: center; }
+.lobby-status:empty { display: none; }
 .card-label {
   font-size: 11px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 1px; color: var(--muted); margin-bottom: 14px;

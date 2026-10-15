@@ -24,7 +24,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610150143-08211cc2"></script>
+  <script src="framebust.js?v=202610150445-cd40ff6a"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -41,7 +41,7 @@
         integrity="sha384-XAeMOW3g/ahgKWjRcH7Xp+LVEQ/hkKrV0zkAUTnFwlaWK1aXfd9vVufdwqr/836i"
         crossorigin="anonymous"
         referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="style.css?v=202610150143-08211cc2">
+  <link rel="stylesheet" href="style.css?v=202610150445-cd40ff6a">
 </head>
 <body>
 
@@ -70,12 +70,49 @@
         </details>
       </div>
 
-      <div class="card">
-        <p class="card-label" data-i18n="createLabel">Шинээр өрөө үүсгэх</p>
+      <!-- Three sections, one at a time. Rooms is first and is where every
+           visit opens: most people arriving are joining someone. See
+           showLobbyTab() in app.js. -->
+      <div class="lobby-tabs" role="tablist" data-i18n-aria="lobbyTabsLabel" aria-label="Хэсгүүд">
+        <button id="tabRooms" class="lobby-tab" type="button" role="tab" data-tab="rooms"
+                aria-selected="true" aria-controls="panelRooms">
+          <i class="ti ti-door-enter" aria-hidden="true"></i>
+          <span data-i18n="tabRooms">Өрөөнүүд</span>
+          <span id="roomsCount" class="tab-count hidden"></span>
+        </button>
+        <button id="tabCreate" class="lobby-tab" type="button" role="tab" data-tab="create"
+                aria-selected="false" aria-controls="panelCreate" tabindex="-1">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+          <span data-i18n="tabCreate">Өрөө үүсгэх</span>
+        </button>
+        <button id="tabMail" class="lobby-tab" type="button" role="tab" data-tab="mail"
+                aria-selected="false" aria-controls="panelMail" tabindex="-1">
+          <i class="ti ti-mail" aria-hidden="true"></i>
+          <span data-i18n="tabMail">И-мэйл</span>
+        </button>
+      </div>
+
+      <!-- Said whichever section is open: the server waking up, joining from
+           an invite link, a join that failed. -->
+      <div id="lobbyStatus" class="lobby-status" role="status"></div>
+
+      <div id="panelRooms" class="card lobby-panel" role="tabpanel" aria-labelledby="tabRooms">
+        <p class="card-label">
+          <span data-i18n="roomsLabel">Идэвхтэй байгаа өрөөнүүд</span>
+          <button id="refreshBtn" class="refresh-btn">
+            <i class="ti ti-refresh" aria-hidden="true"></i>
+            <span data-i18n="refreshBtnLabel">Ахин хайх</span>
+          </button>
+        </p>
+        <div id="sessionsList"><div class="empty-state" data-i18n="noRooms">Идэвхтэй өрөө байхгүй</div></div>
+      </div>
+
+      <div id="panelCreate" class="card lobby-panel hidden" role="tabpanel" aria-labelledby="tabCreate">
         <input id="sessionId" type="text" data-i18n-ph="sessionPlaceholder" placeholder="Өрөөний нэр оруулах">
-        <!-- Two kinds of room. The PIN room is the filled button because it is
-             the one that asks who is coming in; an open room lets in whoever
-             taps it first. Both hold two people and no more. -->
+        <!-- Three kinds of room. The PIN room is the filled button because it
+             is the one that asks who is coming in; an open room lets in whoever
+             taps it first; a code room asks for a word the host chose. Each
+             holds two people and no more. -->
         <div class="create-actions">
           <button id="createBtn">
             <i class="ti ti-lock" aria-hidden="true"></i>
@@ -93,20 +130,8 @@
         <div id="createInfo" class="create-info"></div>
       </div>
 
-      <div class="card">
-        <p class="card-label">
-          <span data-i18n="roomsLabel">Идэвхтэй байгаа өрөөнүүд</span>
-          <button id="refreshBtn" class="refresh-btn">
-            <i class="ti ti-refresh" aria-hidden="true"></i>
-            <span data-i18n="refreshBtnLabel">Ахин хайх</span>
-          </button>
-        </p>
-        <div id="sessionsList"><div class="empty-state" data-i18n="noRooms">Идэвхтэй өрөө байхгүй</div></div>
-      </div>
-
       <!-- Leave a Message -->
-      <div class="card">
-        <p class="card-label" data-i18n="leaveLabel">Захиа шууд и-мэйлрүү явуулах</p>
+      <div id="panelMail" class="card lobby-panel hidden" role="tabpanel" aria-labelledby="tabMail">
         <p class="leave-msg-hint" data-i18n="leaveHint">Шууд харилцах боломжгүй үед миний и-мэйлрүү мэдээллээ илгээж болно.</p>
         <input id="senderName" type="text" data-i18n-ph="senderPlaceholder" placeholder="Таны нэр (эсвэл холбоо барих мэдээлэл)">
         <textarea id="leaveMessage" data-i18n-ph="msgPlaceholder" placeholder="Энд явуулах мэдээллээ бичнэ үү" rows="4"
@@ -310,14 +335,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610150143-08211cc2"></script>
-  <script src="connstats.js?v=202610150143-08211cc2"></script>
-  <script src="guards.js?v=202610150143-08211cc2"></script>
-  <script src="i18n.js?v=202610150143-08211cc2"></script>
+  <script src="protocol.js?v=202610150445-cd40ff6a"></script>
+  <script src="connstats.js?v=202610150445-cd40ff6a"></script>
+  <script src="guards.js?v=202610150445-cd40ff6a"></script>
+  <script src="i18n.js?v=202610150445-cd40ff6a"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610150143-08211cc2"></script>
-  <script src="pake.js?v=202610150143-08211cc2"></script>
-  <script src="app.js?v=202610150143-08211cc2"></script>
+  <script src="vendor/noble.js?v=202610150445-cd40ff6a"></script>
+  <script src="pake.js?v=202610150445-cd40ff6a"></script>
+  <script src="app.js?v=202610150445-cd40ff6a"></script>
 </body>
 </html>

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150143-08211cc2";
+const APP_BUILD = "202610150445-cd40ff6a";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -154,7 +154,9 @@ const codeHint         = document.getElementById("codeHint");
 const codeInput        = document.getElementById("codeInput");
 const codeConfirmBtn   = document.getElementById("codeConfirmBtn");
 const codeCancelBtn    = document.getElementById("codeCancelBtn");
-const createInfo       = document.getElementById("createInfo");
+const createInfo       = document.getElementById("createInfo");    // the Create tab's own news: creating, the PIN, the room expiring
+const lobbyStatus      = document.getElementById("lobbyStatus");   // news for every tab: the server waking, joining, a join failing
+const roomsCount       = document.getElementById("roomsCount");
 const sessionsList     = document.getElementById("sessionsList");
 const refreshBtn       = document.getElementById("refreshBtn");
 const pinOverlay       = document.getElementById("pinOverlay");
@@ -796,7 +798,7 @@ function wakeServer() {
     msg.className = "server-wake-status";
     msg.style.color = "var(--orange)";
     msg.textContent = `⏳ ${t("serverWaking")}`;
-    createInfo.replaceChildren(msg);
+    lobbyStatus.replaceChildren(msg);
   }, 2000);
 
   // Abort if server doesn't respond within 60s (Render cold start max)
@@ -945,7 +947,7 @@ function checkAutoJoin() {
   const msg = document.createElement("span");
   msg.style.color = "var(--accent-text)";
   msg.textContent = I18N[LANG].joiningSession(_autoSessionId);
-  createInfo.replaceChildren(msg);
+  lobbyStatus.replaceChildren(msg);
   wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
 
   /* The server always answers a join — unless the socket dies first. Without a
@@ -969,7 +971,7 @@ function autoJoinTimedOut() {
   const msg = document.createElement("span");
   msg.style.color = "var(--danger-text)";
   msg.textContent = t("joinTimedOut");
-  createInfo.replaceChildren(msg);
+  lobbyStatus.replaceChildren(msg);
 }
 
 /* ══════════════════════════════════════════════
@@ -981,14 +983,14 @@ function connectWebSocket() {
   ws.onopen    = () => {
     _serverWoke = true;
     // Clear the "waking up" notice — WS open is the true ready signal
-    if (createInfo.querySelector(".server-wake-status")) {
+    if (lobbyStatus.querySelector(".server-wake-status")) {
       const msg = document.createElement("span");
       msg.className = "server-ready-status";
       msg.style.color = "var(--green)";
       msg.textContent = `✓ ${t("serverReady")}`;
-      createInfo.replaceChildren(msg);
+      lobbyStatus.replaceChildren(msg);
       setTimeout(() => {
-        if (createInfo.querySelector(".server-ready-status")) createInfo.textContent = "";
+        if (lobbyStatus.querySelector(".server-ready-status")) lobbyStatus.replaceChildren();
       }, 2000);
     }
     /* First thing said on every connection, ahead of the list request: it is
@@ -1066,8 +1068,52 @@ function wsSend(obj) {
 function requestSessionList() { wsSend({ type: "list-sessions" }); }
 refreshBtn.onclick = requestSessionList;
 
+/* ── Tabs: Rooms | Create room | Email ──────
+   One section at a time, so the lobby is one screen instead of three cards
+   stacked. Rooms is where every visit opens — most people arriving are
+   joining someone — and where the lobby returns after a chat.          */
+const lobbyTabs = [...document.querySelectorAll(".lobby-tab")];
+let activeLobbyTab = "rooms";
+
+function showLobbyTab(name) {
+  if (!lobbyTabs.some(tab => tab.dataset.tab === name)) return;
+  const arriving = name !== activeLobbyTab;
+  activeLobbyTab = name;
+  for (const tab of lobbyTabs) {
+    const on = tab.dataset.tab === name;
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;    // one tab stop for the row; arrows move along it
+    document.getElementById(tab.getAttribute("aria-controls")).classList.toggle("hidden", !on);
+  }
+  /* The list may be minutes old; looking at it is the moment to refresh it. */
+  if (name === "rooms" && arriving) requestSessionList();
+}
+
+/** Which tab an arrow, Home or End key moves to from tab `index` of `count`
+    (wrapping round), or -1 for any other key. */
+function lobbyTabKeyTarget(key, index, count) {
+  if (key === "ArrowRight") return (index + 1) % count;
+  if (key === "ArrowLeft")  return (index - 1 + count) % count;
+  if (key === "Home")       return 0;
+  if (key === "End")        return count - 1;
+  return -1;
+}
+
+lobbyTabs.forEach((tab, index) => {
+  tab.onclick = () => showLobbyTab(tab.dataset.tab);
+  tab.onkeydown = e => {
+    const to = lobbyTabKeyTarget(e.key, index, lobbyTabs.length);
+    if (to < 0) return;
+    e.preventDefault();
+    showLobbyTab(lobbyTabs[to].dataset.tab);
+    lobbyTabs[to].focus();
+  };
+});
+
 function renderSessionList(sessions) {
   _lastSessionList = sessions || [];
+  roomsCount.textContent = String(_lastSessionList.length);
+  roomsCount.classList.toggle("hidden", !_lastSessionList.length);
   if (!_lastSessionList.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
@@ -1497,6 +1543,9 @@ async function handleSignaling(data) {
 
       const shareUrl = `${location.origin}${location.pathname}#${DC.buildInviteHash(data.sessionId, data.token, roomSecret)}`;
 
+      /* The PIN and link go in the Create tab. A host who wandered to another
+         tab while the server was waking up is brought back to them. */
+      showLobbyTab("create");
       createInfo.style.textAlign = "left";
       const ready = document.createElement("div");
       ready.style.cssText = "text-align:center;margin-bottom:14px";
@@ -1669,6 +1718,9 @@ async function handleSignaling(data) {
       msg.textContent = `⌛ ${t("roomExpired")}`;
       createInfo.style.textAlign = "";
       createInfo.replaceChildren(msg);
+      /* Said in the Create tab, where the PIN was. A host looking at another
+         tab would not see it there, so it is also said where they are. */
+      if (activeLobbyTab !== "create") showToast(`⌛ ${t("roomExpired")}`, "warn");
       setCreateButtons(false);
       break;
     }
@@ -1680,7 +1732,7 @@ async function handleSignaling(data) {
         const msg = document.createElement("span");
         msg.style.color = "var(--danger-text)";
         msg.textContent = `❌ ${data.message}`;
-        createInfo.replaceChildren(msg);
+        lobbyStatus.replaceChildren(msg);
         setLobbyButtons(false);
         isConnecting = false;
       } else {
@@ -1729,7 +1781,7 @@ async function handleSignaling(data) {
         small.style.color = "var(--muted)";
         small.textContent = t("sessionExpired");
         wrap.appendChild(small);
-        createInfo.replaceChildren(wrap);
+        lobbyStatus.replaceChildren(wrap);
         setLobbyButtons(false);
         isConnecting = false;
       } else {
@@ -1777,6 +1829,8 @@ leaveBtn.onclick = () => {
   lobbyScreen.classList.remove("hidden");
   document.getElementById("langSwitcher").style.display = "";
   createInfo.textContent = "";
+  lobbyStatus.replaceChildren();
+  showLobbyTab("rooms");
   setCreateButtons(false);
   sessionIdInput.value = "";
   requestSessionList();
