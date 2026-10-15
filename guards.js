@@ -435,6 +435,50 @@
   }
 
   /* ══════════════════════════════════════════
+     When the other side's link to the server drops
+  ══════════════════════════════════════════ */
+
+  /** ICE states in which the direct link is up, or may still come back. */
+  const LINK_ALIVE = Object.freeze(["checking", "connected", "completed", "disconnected"]);
+
+  /**
+   * The server says the other side's connection to it dropped. Does that end
+   * the chat?
+   *
+   * Once the two phones are connected the chat runs directly between them; the
+   * server only introduced them. But a phone whose screen locks has its page
+   * paused, and an iPhone cuts the page's link to the server almost at once.
+   * The server saw that link drop and said "peer left", and the chat ended —
+   * while the link between the phones was still up, or would have been as soon
+   * as the screen came back on.
+   *
+   * So the server's word ends the chat only when the direct link is not up:
+   * the channel never opened, or the link has already failed or closed.
+   * Otherwise the chat carries on and the direct link decides — it closes when
+   * the other side really leaves, and see linkLostForGood for when it fails.
+   *
+   * @param {{channelOpen: boolean, iceState: string}} o
+   */
+  function serverLeaveEndsChat(o) {
+    if (!o || o.channelOpen !== true) return true;
+    return !LINK_ALIVE.includes(o.iceState);
+  }
+
+  /**
+   * The direct link has failed. Is it gone for good?
+   *
+   * A failed link is repaired by a fresh exchange through the server (an ICE
+   * restart). Once the server has dropped the room there is nobody to carry
+   * one, so a failure then is final — and the chat must say so, rather than
+   * sit on "retrying" for ever.
+   *
+   * @param {{iceState: string, serverRoomGone: boolean}} o
+   */
+  function linkLostForGood(o) {
+    return Boolean(o) && o.iceState === "failed" && o.serverRoomGone === true;
+  }
+
+  /* ══════════════════════════════════════════
      Installing as an app
   ══════════════════════════════════════════ */
 
@@ -547,6 +591,7 @@
     SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, incomingTransfer, withinDeclaredSize,
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
+    LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

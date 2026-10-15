@@ -105,6 +105,7 @@ const I18N = {
     sysConnected:    "Холбогдлоо",
     sysClosed:       "Холбоос хаагдлаа",
     sysPeerLeft:     "Харилцагч гарлаа",
+    sysLinkLost:     "Харилцагчтай холбоо тасарлаа",
     sysCallEnded:    "Дуудлага дууслаа",
     sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
     // Creating room
@@ -278,6 +279,7 @@ const I18N = {
     sysConnected:    "Connected",
     sysClosed:       "Connection closed",
     sysPeerLeft:     "Peer disconnected",
+    sysLinkLost:     "Lost the connection to the other side",
     sysCallEnded:    "Call ended",
     sysCallFailed:   (msg) => `Call failed — ${msg}`,
     creating:        "Creating…",

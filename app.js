@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150507-bfe31670";
+const APP_BUILD = "202610150526-e633e68f";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -277,6 +277,11 @@ const MY_DEVICE = DCS.describeDevice({ userAgent: navigator.userAgent, maxTouchP
 
 const recvBuffers = {};
 
+/* The server has dropped this chat's room — the other side's link to it went,
+   or ours did. The chat carries on directly between the phones, but nothing
+   can be repaired through the server any more. See G.serverLeaveEndsChat. */
+let serverRoomGone = false;
+
 /* ── Turned-away transfers ──────────────────
    A refused or abandoned transfer's chunks keep coming until the sender hears.
    They are dropped on arrival, not parked as orphans, and its transfer-done or
@@ -352,6 +357,12 @@ function announce(text) {
 /* ── Reconnect / back-to-lobby button ───────
    Shown in chat when the peer disconnects.    */
 function showReconnectButton() {
+  /* Shown whenever a chat has ended, however it ended: nothing left to keep
+     the screen on for. */
+  keepScreenOn(false);
+  /* The channel closing and the server's notice can both arrive for one
+     ending; one button is enough. */
+  if (chatMessages.querySelector(".reconnect-sys-wrap")) return;
   const wrap = document.createElement("div");
   wrap.className = "reconnect-sys-wrap";
   const btn = document.createElement("button");
@@ -1010,6 +1021,9 @@ function connectWebSocket() {
   ws.onclose   = () => {
     // Clear keep-alive so it doesn't stack when we reconnect
     if (_keepAliveInterval) { clearInterval(_keepAliveInterval); _keepAliveInterval = null; }
+    /* The server drops a socket's room when the socket goes. A chat in progress
+       carries on directly, but can no longer be repaired through the server. */
+    if (pc) serverRoomGone = true;
     /* If the socket died between sending the join and hearing back, the answer
        is never coming. Let the reconnect send it again rather than leaving the
        lobby disabled behind "Joining…" forever. */
@@ -1360,6 +1374,7 @@ function closePeerConnection() {
 
 function createPeerConnection() {
   closePeerConnection();
+  serverRoomGone = false;
   pc = new RTCPeerConnection(ICE_CONFIG);
 
   pc.onicecandidate = ({ candidate }) => {
@@ -1374,6 +1389,7 @@ function createPeerConnection() {
     if (s === "checking")                        setQuality(`⬤ ${t("connecting")}`, "");
     if (s === "connected" || s === "completed")  { setQuality(`⬤ ${t("connected")}`, "connected"); startStatsPolling(); }
     if (s === "disconnected")                    { setQuality(`⬤ ${t("reconnecting")}`, "poor"); pc.restartIce(); }
+    if (s === "failed" && G.linkLostForGood({ iceState: s, serverRoomGone })) { endChatLinkLost(); return; }
     if (s === "failed")                          { setQuality(`⬤ ${t("connFailed")}`, "failed"); handleFullRenegotiation(); }
     if (s === "closed")                          setQuality(`⬤ ${t("connClosed")}`, "failed");
   };
@@ -1463,6 +1479,16 @@ function isChatLinkUp() {
   return ice === "connected" || ice === "completed";
 }
 
+/** The direct link failed with no server left to repair it through. Said
+    plainly, instead of "retrying" for ever. */
+function endChatLinkLost() {
+  setQuality(`⬤ ${t("connClosed")}`, "failed");
+  appendSys(t("sysLinkLost"));
+  endCall(false);
+  closePeerConnection();
+  showReconnectButton();
+}
+
 async function handleFullRenegotiation() {
   if (!pc || !currentSession || !isHost) return;
   try {
@@ -1495,7 +1521,9 @@ function setupDataChannel() {
     sendBtn.disabled = true;
     voiceCallBtn.disabled = true;
     videoCallBtn.disabled = true;
-    appendSys(t("sysClosed"));
+    /* The server already said they had gone and the chat went on; now the
+       channel has closed too, which is them leaving. */
+    appendSys(t(serverRoomGone ? "sysPeerLeft" : "sysClosed"));
     // Clean up unacknowledged messages and incomplete transfers to free memory.
     /* Mark them failed in the UI first: clearing the state alone left every
        in-flight bubble showing "Receiving…" with nothing ever to finish it. */
@@ -1596,6 +1624,8 @@ async function handleSignaling(data) {
       /* The PIN and link go in the Create tab. A host who wandered to another
          tab while the server was waking up is brought back to them. */
       showLobbyTab("create");
+      /* A screen that locks while the host waits takes the room with it. */
+      keepScreenOn(true);
       createInfo.style.textAlign = "left";
       const ready = document.createElement("div");
       ready.style.cssText = "text-align:center;margin-bottom:14px";
@@ -1747,6 +1777,13 @@ async function handleSignaling(data) {
          and a room this browser had moved on from could still end the chat in
          the room it was actually in. */
       if (!roomEventIsOurs(data)) break;
+      /* What a locked screen looks like from here: the other side's page is
+         paused and its link to the server cut. If the link between the two
+         phones is still up, the chat goes on — see G.serverLeaveEndsChat. */
+      if (!G.serverLeaveEndsChat({ channelOpen: dataChannel?.readyState === "open", iceState: pc?.iceConnectionState })) {
+        serverRoomGone = true;
+        break;
+      }
       appendSys(t("sysPeerLeft"));
       endCall(false);
       closePeerConnection();
@@ -1759,6 +1796,7 @@ async function handleSignaling(data) {
          chat screen and left the lobby showing a PIN and a link for a room that
          no longer existed — the host waited on it with nothing to say so. */
       if (!roomEventIsOurs(data)) break;
+      keepScreenOn(false);
       currentSession = null;
       roomSecret = null;
       isHost = false;
@@ -1847,7 +1885,53 @@ async function handleSignaling(data) {
    SCREEN TRANSITIONS
 ══════════════════════════════════════════════ */
 
+/* ── Keep the screen on ─────────────────────
+   While a room is open — waiting for a guest, or chatting — the screen does
+   not dim and lock by itself. A locked phone pauses the page: an iPhone cuts
+   its link to the server at once, and the direct link soon after, so the
+   most common way a chat was lost was the phone being put down for a minute.
+   The power button still locks it; this only stops the timeout.
+
+   The browser lets go of the lock whenever the page is hidden, so it is taken
+   again when the page comes back. Safari may want a tap first, so a tap takes
+   it too if it is missing. Where there is no Screen Wake Lock, or the browser
+   says no (battery saver), the screen simply behaves as usual.            */
+let screenLock = null;          // the WakeLockSentinel, while held
+let screenLockWanted = false;
+let screenLockPending = false;
+
+async function keepScreenOn(on) {
+  screenLockWanted = on;
+  if (!on) {
+    const held = screenLock;
+    screenLock = null;
+    if (held) held.release().catch(() => {});
+    return;
+  }
+  if (screenLock || screenLockPending || !("wakeLock" in navigator)) return;
+  if (document.visibilityState !== "visible") return;     // asked for again on return
+  screenLockPending = true;
+  try {
+    const lock = await navigator.wakeLock.request("screen");
+    if (!screenLockWanted) { lock.release().catch(() => {}); return; }   // left while it was granted
+    screenLock = lock;
+    lock.addEventListener("release", () => { if (screenLock === lock) screenLock = null; });
+  } catch (_) {
+    /* Refused — battery saver, or no tap yet in Safari. Not an error. */
+  } finally {
+    screenLockPending = false;
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && screenLockWanted) keepScreenOn(true);
+});
+document.addEventListener("pointerdown", () => {
+  if (screenLockWanted && !screenLock) keepScreenOn(true);
+});
+
 function switchToChat(sessionId) {
+  keepScreenOn(true);
   lobbyScreen.classList.add("hidden");
   chatScreen.classList.remove("hidden");
   document.getElementById("langSwitcher").style.display = "none";
@@ -1860,6 +1944,7 @@ function switchToChat(sessionId) {
 }
 
 leaveBtn.onclick = () => {
+  keepScreenOn(false);
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();

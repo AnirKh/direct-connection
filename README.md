@@ -166,6 +166,24 @@ Under the title the lobby has three tabs — **Rooms | Create room | Email** —
 
 **`#lobbyStatus` is for news that belongs to no tab.** The create card's status line used to carry everything: the server waking up, "Joining…" from an invite link, a link that was refused. With Rooms open by default, all of that would have been said inside a hidden tab. It now goes on a status line above the panels, shown on every tab and taking no room when empty. `#createInfo` keeps only what is about creating: "Creating…", the PIN and link, the room expiring.
 
+## A locked screen does not end the chat
+
+**The bug:** put the phone down for a minute and the chat was gone. A phone whose screen locks pauses the page, and an iPhone cuts the page's link to the server almost at once. The server saw that link drop and sent the other side `peer-disconnected`, and the other side's app ended the chat — though the chat runs directly between the two phones, and that link was still up, or would have been when the screen came back on.
+
+**The server's word alone no longer ends a working chat** (`serverLeaveEndsChat` in `guards.js`). If the data channel is open and ICE is `checking`, `connected`, `completed` or `disconnected`, the notice is noted (`serverRoomGone`) and the chat goes on; the direct link decides from then on:
+
+| What happens next | What the chat does |
+| --- | --- |
+| the other side wakes up | carries on; whatever was sent meanwhile arrives |
+| the other side taps Leave | its channel closes, and that is said as "Peer disconnected" |
+| the direct link fails | over: with the room gone from the server, nothing can carry an ICE restart (`linkLostForGood`), so it says "Lost the connection to the other side" instead of "retrying" for ever |
+
+Our own link to the server dropping marks the room gone too, since the server drops a socket's room with the socket. One Back button, however many ways a chat ends at once.
+
+**While a room is open the screen does not lock by itself** (`keepScreenOn`, the Screen Wake Lock API): from creating a room or joining one until the chat ends or you leave. The browser lets go whenever the page is hidden, so it is taken again when the page comes back, and again on a tap if Safari refused it without one. Where the API is missing or says no (battery saver), the screen behaves as usual. The power button still locks the phone.
+
+**Still not covered:** a phone locked for long enough that the direct link fails. Coming back from that needs the server to keep the room for a while and the waking phone to rejoin it.
+
 ## Installable as an app
 
 The site can be installed: an icon on the home screen or desktop that opens in its own window, with no browser bar. `manifest.webmanifest` names it and lists the icons; `index.html` links it, plus the `apple-touch-icon` and `apple-*` lines iPhones read instead.
@@ -380,6 +398,7 @@ Node's built-in runner, no dependencies.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
 - `test/i18n.test.js` — both languages have the same keys, every key `app.js` asks for by name exists in both, and every `data-i18n`, `data-i18n-ph` and `data-i18n-aria` key in `index.html` does too, since a missing one falls back silently. Also that the page opens straight to the lobby, with "about this page" as a dropdown beside the title rather than the dialog every visit used to start with, and that on a phone that button sits below the fixed language switcher rather than under it.
+- `test/awake.test.js` — a locked screen: `serverLeaveEndsChat` and `linkLostForGood` for every link state, and the `peer-disconnected` case, the ICE state handler, `endChatLinkLost`, `showReconnectButton` and the keep-the-screen-on block lifted out of `app.js` and run — a notice that leaves a working chat alone, a failure that ends one only when the server cannot repair it, a wake lock taken, retaken on return and on a tap, and let go on leaving.
 - `test/install.test.js` — installing as an app: `installOffer` for each browser and the installed app, the button's block lifted out of `app.js` and run against a stand-in window (offer held, spent once, gone when installed; the iPhone steps open and close), and the manifest and icons read from disk — sizes, relative addresses, no see-through corners where the icon is cropped, and every one served by `server.js`.
 - `test/lobby.test.js` — the lobby's tabs: the markup (three tabs, each naming its panel, Rooms open first, each section's controls inside its own panel, the status line outside them all), that nothing unrelated to creating is written into the Create tab, and `showLobbyTab()`, `lobbyTabKeyTarget()` and `renderSessionList()`'s room count lifted out of `app.js` and run.
 - `test/message.test.js` — long messages and read-aloud: `sendTextMessage`, `updateMessageCounter`, `announce`, `appendBubble`, `appendSys` and the `text` case lifted out of `app.js` and run. The limit's arithmetic against the wire and Safari's argument cap; at the limit sent and shown, one past it refused on both sides with a reason; a failed send keeps its text; the counter's states; what is read out, what is not, and that the page carries the region.
