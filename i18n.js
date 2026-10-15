@@ -107,6 +107,9 @@ const I18N = {
     sysPeerLeft:     "Харилцагч гарлаа",
     sysLinkLost:     "Харилцагчтай холбоо тасарлаа",
     callPeerAway:    "Харилцагчийн дэлгэц унтарсан эсвэл өөр апп нээсэн байна",
+    roomLost:        "Өрөө хаагдлаа — сервертэй холбоо тасарсан.",
+    recreateRoom:    "Дахин үүсгэх",
+    roomYours:       "Таны өрөө",
     callMediaRestartFailed: "Микрофон эсвэл камерыг дахин асааж чадсангүй",
     sysCallEnded:    "Дуудлага дууслаа",
     sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
@@ -146,7 +149,6 @@ const I18N = {
     image:           "Зураг",
     // Auto-join errors
     couldNotJoin:    (msg) => `❌ Нэгдэж чадсангүй: ${msg}`,
-    sessionExpired:  "Өрөө хугацаа дуусчсан байж магадгүй.",
     joinTimedOut:    "Өрөөнд нэвтрэх хариу ирсэнгүй. Урилгын холбоосоор ахин оролдоно уу.",
     // PIN rate limit
     pinRateLimited:  (s) => `Олон удаа оролдлоо. ${s} секундын дараа дахин оролдоно уу.`,
@@ -283,6 +285,9 @@ const I18N = {
     sysPeerLeft:     "Peer disconnected",
     sysLinkLost:     "Lost the connection to the other side",
     callPeerAway:    "The other person's screen is off, or they switched apps",
+    roomLost:        "Your room closed — the connection to the server dropped.",
+    recreateRoom:    "Create again",
+    roomYours:       "Your room",
     callMediaRestartFailed: "Couldn't turn the microphone or camera back on",
     sysCallEnded:    "Call ended",
     sysCallFailed:   (msg) => `Call failed — ${msg}`,
@@ -316,7 +321,6 @@ const I18N = {
     download:        "Download",
     image:           "Image",
     couldNotJoin:    (msg) => `❌ Could not join: ${msg}`,
-    sessionExpired:  "The session may have expired.",
     joinTimedOut:    "No answer when joining. Open the invite link again to retry.",
     // PIN rate limit
     pinRateLimited:  (s) => `Too many attempts. Try again in ${s}s.`,

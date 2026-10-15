@@ -455,6 +455,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .room-kind { margin-left: 6px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border); white-space: nowrap; }
 .room-kind.open { color: var(--orange); border-color: rgba(217,164,65,0.4); }
 .room-kind.code { color: var(--accent-text); border-color: rgba(127,168,212,0.4); }
+/* In place of Join, on the room this browser is hosting. */
+.own-room-tag {
+  flex-shrink: 0; padding: 6px 12px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 600;
+  color: var(--accent-text); border: 1px solid rgba(127,168,212,0.4);
+}
+/* "Create again", under the note that a waiting room was lost. */
+.recreate-btn { width: auto; margin: 10px auto 0; display: block; padding: 9px 18px; min-height: 38px; font-size: 14px; }
 .join-btn {
   width: auto; margin: 0; padding: 8px 16px; font-size: 13px;
   min-height: 36px; border-radius: 8px; flex-shrink: 0;

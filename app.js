@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150630-3af75c6b";
+const APP_BUILD = "202610150641-d6c00501";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1010,6 +1010,7 @@ function connectWebSocket() {
     wsSend({ type: "hello", build: APP_BUILD });
     requestSessionList();
     checkAutoJoin();
+    sendPendingCreate();
     if (!_keepAliveInterval) {
       _keepAliveInterval = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1024,6 +1025,8 @@ function connectWebSocket() {
     /* The server drops a socket's room when the socket goes. A chat in progress
        carries on directly, but can no longer be repaired through the server. */
     if (pc) serverRoomGone = true;
+    /* A room still waiting for its guest is simply gone: say so. */
+    if (G.waitingRoomLost({ isHost, hasSession: Boolean(currentSession), chatStarted: Boolean(pc) })) loseWaitingRoom();
     /* If the socket died between sending the join and hearing back, the answer
        is never coming. Let the reconnect send it again rather than leaving the
        lobby disabled behind "Joining…" forever. */
@@ -1081,6 +1084,18 @@ function wsSend(obj) {
 
 function requestSessionList() { wsSend({ type: "list-sessions" }); }
 refreshBtn.onclick = requestSessionList;
+
+/* A create the server has not answered yet. wsSend drops a message while the
+   link is down, so a Create pressed then — while Render woke up, or just after
+   a drop — sent nothing, and the page sat on "Creating…" with every create
+   button disabled for good. It is kept until answered, and sent (again) each
+   time the link comes up; a room the server made and then dropped with the
+   old socket is simply made afresh. */
+let pendingCreate = null;
+
+function sendPendingCreate() {
+  if (pendingCreate && ws && ws.readyState === WebSocket.OPEN) wsSend(pendingCreate);
+}
 
 /* ── Install as an app ──────────────────────
    The button at the bottom left. Chrome, Edge and Samsung Internet offer to
@@ -1206,6 +1221,17 @@ function renderSessionList(sessions) {
     kindTag.className = roomIs === "pin" ? "room-kind" : `room-kind ${roomIs}`;
     kindTag.textContent = t(label);
     meta.append(document.createTextNode(I18N[LANG].sessionMeta(timeAgo(createdAt))), kindTag);
+    info.append(name, meta);
+    /* The room this browser is hosting: said as such, with nothing to press —
+       a Join button here could only fail. */
+    if (G.isOwnRoom({ sessionId, isHost, currentSessionId: currentSession?.sessionId })) {
+      const yours = document.createElement("span");
+      yours.className = "own-room-tag";
+      yours.textContent = t("roomYours");
+      item.append(info, yours);
+      sessionsList.appendChild(item);
+      return;
+    }
     const joinBtn = document.createElement("button");
     joinBtn.className = "join-btn";
     joinBtn.dataset.id = sessionId;
@@ -1217,7 +1243,6 @@ function renderSessionList(sessions) {
       roomIs === "open" ? joinOpenRoom(sessionId) :
       roomIs === "code" ? openCodeJoin(sessionId) :
                           openPinModal(sessionId);
-    info.append(name, meta);
     item.append(info, joinBtn);
     sessionsList.appendChild(item);
   });
@@ -1246,8 +1271,43 @@ function createRoom(kind) {
   setCreateButtons(true);
   createInfo.textContent = t("creating");
   roomKind = kind;   // so the host takes the code path when the channel opens
-  wsSend({ type: "create-session", sessionId, open: kind === "open", code: kind === "code" });
+  pendingCreate = { type: "create-session", sessionId, open: kind === "open", code: kind === "code" };
+  sendPendingCreate();
 }
+
+/* ── A waiting room lost with the server link ─
+   The server drops a socket's room when the socket goes, and cannot tell the
+   host — the host's socket is the one that went. The PIN and link stayed on
+   screen for a room that no longer existed, and whoever used them was told
+   "not found". Now the host is told, and can make it again in one tap: same
+   name, same kind, and for a code room the same word, which the guest already
+   has. A PIN room gets a new PIN; there is no keeping the old one.        */
+function loseWaitingRoom() {
+  const lost = { sessionId: currentSession.sessionId, kind: roomKind };
+  keepScreenOn(false);
+  currentSession = null;
+  roomSecret = null;
+  isHost = false;
+  isConnecting = false;
+  const msg = document.createElement("div");
+  msg.style.color = "var(--orange)";
+  msg.textContent = `⚠️ ${t("roomLost")}`;
+  const again = document.createElement("button");
+  again.className = "recreate-btn";
+  again.textContent = t("recreateRoom");
+  again.onclick = () => recreateRoom(lost);
+  createInfo.style.textAlign = "center";
+  createInfo.replaceChildren(msg, again);
+  setCreateButtons(false);
+  if (activeLobbyTab !== "create") showToast(`⚠️ ${t("roomLost")}`, "warn");
+  renderSessionList(_lastSessionList);
+}
+
+function recreateRoom(lost) {
+  sessionIdInput.value = lost.sessionId;
+  createRoom(lost.kind);      // a code room still holds its word in pakeCode
+}
+
 createBtn.onclick     = () => createRoom("pin");
 createOpenBtn.onclick = () => createRoom("open");
 createCodeBtn.onclick = () => createRoom("code");
@@ -1615,6 +1675,7 @@ async function handleSignaling(data) {
       break;
 
     case "session-created": {
+      pendingCreate = null;
       isHost = true;
       roomKind = data.kind === "code" ? "code" : (data.open === true ? "open" : "pin");
       currentSession = { sessionId: data.sessionId, token: data.token };
@@ -1628,6 +1689,8 @@ async function handleSignaling(data) {
       showLobbyTab("create");
       /* A screen that locks while the host waits takes the room with it. */
       keepScreenOn(true);
+      /* The list may already show this room, with a Join button. */
+      renderSessionList(_lastSessionList);
       createInfo.style.textAlign = "left";
       const ready = document.createElement("div");
       ready.style.cssText = "text-align:center;margin-bottom:14px";
@@ -1826,6 +1889,7 @@ async function handleSignaling(data) {
         setLobbyButtons(false);
         isConnecting = false;
       } else {
+        pendingCreate = null;
         showToast(data.message, "error");
         createInfo.textContent = "";
         setCreateButtons(false);
@@ -1865,12 +1929,10 @@ async function handleSignaling(data) {
       } else if (target === "lobby") {
         const wrap = document.createElement("span");
         wrap.style.color = "var(--danger-text)";
-        wrap.append(document.createTextNode(I18N[LANG].couldNotJoin(msg)));
-        wrap.appendChild(document.createElement("br"));
-        const small = document.createElement("small");
-        small.style.color = "var(--muted)";
-        small.textContent = t("sessionExpired");
-        wrap.appendChild(small);
+        /* Said once. A second line, "the room may have expired", followed
+           every refusal — after "not found — it may have expired", and
+           after "full", where it was wrong. */
+        wrap.textContent = I18N[LANG].couldNotJoin(msg);
         lobbyStatus.replaceChildren(wrap);
         setLobbyButtons(false);
         isConnecting = false;

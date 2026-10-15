@@ -661,9 +661,18 @@ test("the shared word is never sent to the server", () => {
   for (const m of src.matchAll(/wsSend\(\s*\{[^}]*\}/g)) {
     assert.ok(!/pakeCode/.test(m[0]), `a wsSend payload references the word:\n${m[0]}`);
   }
-  /* And the create message carries only the flag. */
-  const create = src.match(/wsSend\(\{ type: "create-session"[^}]*\}\)/);
+  /* And the create message carries only the flag. It is built as
+     pendingCreate — kept until the server answers, so a Create pressed while
+     the link is down is sent once it is up — and sent from there, so every
+     value pendingCreate can hold is checked too. */
+  const create = src.match(/pendingCreate = \{ type: "create-session"[^}]*\}/);
   assert.ok(create && /code: kind === "code"/.test(create[0]), "create-session must send a code flag, not the word");
+  assert.ok(!/pakeCode/.test(create[0]), "create-session must not carry the word");
+  for (const m of src.matchAll(/pendingCreate\s*=\s*([^;]+);/g)) {
+    assert.ok(m[1] === "null" || m[1] === create[0].slice("pendingCreate = ".length),
+      `pendingCreate is given something other than the create message:\n${m[0]}`);
+  }
+  assert.match(src, /wsSend\(pendingCreate\)/, "the create message is sent as built");
 });
 
 test("a code room runs SPAKE2, every other room runs ECDH", () => {

@@ -479,6 +479,37 @@
   }
 
   /* ══════════════════════════════════════════
+     The host's own room
+  ══════════════════════════════════════════ */
+
+  /**
+   * The link to the server has dropped. Was a room lost with it — one this
+   * browser made and is still waiting in for its guest?
+   *
+   * The server drops a socket's room when the socket goes, and it cannot tell
+   * the host: the host's socket is the one that went. The host kept showing
+   * the PIN and the link for a room that no longer existed, and whoever used
+   * them was told "not found". Once the chat has started the room is no
+   * longer needed — the chat runs directly — so only a waiting room counts.
+   *
+   * @param {{isHost: boolean, hasSession: boolean, chatStarted: boolean}} o
+   */
+  function waitingRoomLost(o) {
+    return Boolean(o) && o.isHost === true && o.hasSession === true && o.chatStarted !== true;
+  }
+
+  /**
+   * Is this room in the list the one this browser is hosting? It used to be
+   * shown like any other, with a Join button that could only fail.
+   *
+   * @param {{sessionId: string, isHost: boolean, currentSessionId: string}} o
+   */
+  function isOwnRoom(o) {
+    return Boolean(o) && o.isHost === true && typeof o.sessionId === "string" &&
+           o.sessionId.length > 0 && o.sessionId === o.currentSessionId;
+  }
+
+  /* ══════════════════════════════════════════
      A call across a locked screen
   ══════════════════════════════════════════ */
 
@@ -644,6 +675,7 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, callPauseNote,
+    waitingRoomLost, isOwnRoom,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

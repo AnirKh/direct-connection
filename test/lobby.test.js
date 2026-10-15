@@ -231,10 +231,10 @@ test("the Rooms tab shows how many rooms are open, and nothing when there are no
   const roomsCount = el(), sessionsList = el();
   const render = new Function(
     "document", "roomsCount", "sessionsList", "t", "I18N", "LANG", "timeAgo",
-    "joinOpenRoom", "openCodeJoin", "openPinModal",
+    "joinOpenRoom", "openCodeJoin", "openPinModal", "G", "isHost", "currentSession",
     `let _lastSessionList = [];\n${fn("renderSessionList")}\nreturn renderSessionList;`
   )({ createElement: el, createTextNode: s => ({ textContent: s }) }, roomsCount, sessionsList,
-    k => I18N.en[k], I18N, "en", () => "1m", () => {}, () => {}, () => {});
+    k => I18N.en[k], I18N, "en", () => "1m", () => {}, () => {}, () => {}, require("../guards.js"), false, null);
 
   render([{ sessionId: "a", createdAt: 0 }, { sessionId: "b", createdAt: 0, open: true }]);
   assert.equal(roomsCount.textContent, "2");
@@ -244,4 +244,38 @@ test("the Rooms tab shows how many rooms are open, and nothing when there are no
   assert.equal(roomsCount.classList.contains("hidden"), true);
   render(undefined);
   assert.equal(roomsCount.classList.contains("hidden"), true);
+});
+
+/* ══════════════════════════════════════════
+   Your own room in the list
+══════════════════════════════════════════ */
+
+function listFor({ isHost, currentSession }) {
+  const el = (tag = "div") => ({ tag, textContent: "", dataset: {}, children: [], className: "",
+    classList: { toggle() {}, contains: () => false },
+    append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); },
+    replaceChildren(...c) { this.children = c; } });
+  const sessionsList = el();
+  new Function(
+    "document", "roomsCount", "sessionsList", "t", "I18N", "LANG", "timeAgo",
+    "joinOpenRoom", "openCodeJoin", "openPinModal", "G", "isHost", "currentSession",
+    `let _lastSessionList = [];\n${fn("renderSessionList")}\nreturn renderSessionList;`
+  )({ createElement: el, createTextNode: s => ({ textContent: s }) }, el(), sessionsList,
+    k => I18N.en[k], I18N, "en", () => "1m", () => {}, () => {}, () => {}, require("../guards.js"), isHost, currentSession)
+  ([{ sessionId: "mine", createdAt: 0 }, { sessionId: "theirs", createdAt: 0 }]);
+  return Object.fromEntries(sessionsList.children.map(item => {
+    const name = item.children[0].children[0].textContent.replace(/^\S+ /, "");
+    const end = item.children[1];
+    return [name, end.tag === "button" ? "join" : end.textContent];
+  }));
+}
+
+test("the room you are hosting says so, with no Join button; every other room can be joined", () => {
+  assert.deepEqual(listFor({ isHost: true, currentSession: { sessionId: "mine" } }),
+                   { mine: I18N.en.roomYours, theirs: "join" });
+});
+
+test("a guest, or someone with no room, sees Join on every room", () => {
+  assert.deepEqual(listFor({ isHost: false, currentSession: { sessionId: "mine" } }), { mine: "join", theirs: "join" });
+  assert.deepEqual(listFor({ isHost: false, currentSession: null }), { mine: "join", theirs: "join" });
 });
