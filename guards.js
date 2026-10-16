@@ -637,6 +637,85 @@
   }
 
   /* ══════════════════════════════════════════
+     Opened inside another app's browser
+  ══════════════════════════════════════════ */
+
+  /* What each app writes into its built-in browser's user agent. Messenger
+     before Facebook: Messenger's says FBAN too. */
+  const IN_APP_TOKENS = Object.freeze([
+    [/FBAN\/Messenger|MessengerForiOS|MessengerLite|Orca-Android/, "Messenger"],
+    [/FBAN|FBAV|FB_IAB|FBIOS|FB4A/, "Facebook"],
+    [/Instagram/, "Instagram"],
+    [/Barcelona/, "Threads"],
+    [/musical_ly|BytedanceWebview|TikTok/, "TikTok"],
+    [/\bLine\/\d/, "LINE"],
+    [/Snapchat/, "Snapchat"],
+    [/MicroMessenger/, "WeChat"],
+    [/KAKAOTALK/i, "KakaoTalk"],
+    [/LinkedInApp/, "LinkedIn"],
+    [/Twitter/, "X"]
+  ]);
+
+  /**
+   * Is this page open inside another app's built-in browser — Facebook's,
+   * Instagram's, Messenger's — rather than Safari or Chrome?
+   *
+   * Such a browser is run by the app, which can add its own code to the pages
+   * it shows; it often may not use the camera or microphone; and it closes,
+   * taking the chat with it, when the app is left. A link sent through one of
+   * these apps opens in it by default.
+   *
+   * Known apps by name; otherwise an Android WebView (its user agent says
+   * "wv"), or an iPhone browser that does not call itself Safari — which an
+   * iPhone home-screen app does not either, so running installed is never
+   * taken for this.
+   *
+   * @param {{userAgent: string, maxTouchPoints: number, standalone: boolean}} o
+   * @returns {{app: string|null, os: "ios"|"android"|"other"}|null}
+   */
+  function inAppBrowser(o) {
+    const ua = String((o && o.userAgent) || "");
+    if (!ua || o.standalone === true) return null;
+    const ios = isAppleTouchDevice(ua, o.maxTouchPoints);
+    const os = ios ? "ios" : /Android/.test(ua) ? "android" : "other";
+    for (const [token, app] of IN_APP_TOKENS) if (token.test(ua)) return { app, os };
+    if (os === "android" && /; wv\)/.test(ua)) return { app: null, os };
+    if (ios && !/Safari\//.test(ua)) return { app: null, os };
+    return null;
+  }
+
+  /**
+   * Which ways out to offer. On an iPhone, a button that hands the whole
+   * address — the invite included — to Safari (safariUrl). On Android, a
+   * button for the default browser only when there is no invite in the
+   * address: Android's way of doing it cannot carry the address's #fragment,
+   * which is where an invite keeps its secret. Everywhere: the app's own
+   * "Open in browser", and copying the link.
+   *
+   * @param {{inApp: object|null, hasInvite: boolean}} o
+   */
+  function inAppAdvice(o) {
+    const os = o && o.inApp && o.inApp.os;
+    return { safari: os === "ios", openDefault: os === "android" && o.hasInvite !== true };
+  }
+
+  /** The address that opens this page in Safari from inside an app on an
+      iPhone, the whole of it — fragment and all. Null for anything not web. */
+  function safariUrl(href) {
+    return typeof href === "string" && /^https?:\/\//.test(href) ? `x-safari-${href}` : null;
+  }
+
+  /** The address that opens this page in Android's default browser from inside
+      an app. Never for an address with a fragment: it could not carry it, and
+      an invite's secret is in it. */
+  function androidIntentUrl(href) {
+    let u;
+    try { u = new URL(href); } catch (_) { return null; }
+    if (u.protocol !== "https:" || u.hash) return null;
+    return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;end`;
+  }
+
+  /* ══════════════════════════════════════════
      Installing as an app
   ══════════════════════════════════════════ */
 
@@ -659,13 +738,15 @@
    *               cannot install a site at all (Firefox): no button
    *
    * Running installed wins over everything: a button offering to install the
-   * app you are already in would be nonsense.
+   * app you are already in would be nonsense. So does being inside another
+   * app's browser (Facebook's, Instagram's): nothing can be installed from
+   * there, and the iPhone steps — Share, Add to Home Screen — are not on offer.
    *
-   * @param {{standalone: boolean, canPrompt: boolean, userAgent: string, maxTouchPoints: number}} o
+   * @param {{standalone: boolean, canPrompt: boolean, userAgent: string, maxTouchPoints: number, inApp: boolean}} o
    * @returns {"prompt"|"ios-help"|"none"}
    */
   function installOffer(o) {
-    if (!o || o.standalone === true) return "none";
+    if (!o || o.standalone === true || o.inApp === true) return "none";
     if (o.canPrompt === true) return "prompt";
     if (isAppleTouchDevice(o.userAgent, o.maxTouchPoints)) return "ios-help";
     return "none";
@@ -753,6 +834,7 @@
     tracksToRestart, callPauseNote,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
+    inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,

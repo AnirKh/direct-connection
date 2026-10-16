@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610160611-9c0938e7";
+const APP_BUILD = "202610160648-10af62d8";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -88,7 +88,23 @@ const _autoSessionId = _invite.sessionId;
 const _autoToken     = _invite.token;
 const _autoSecret    = _invite.secret;
 const _isAutoJoin    = _invite.isInvite;
-if (_isAutoJoin) history.replaceState({}, "", location.pathname);
+
+/* Opened inside another app's own browser — Facebook's, Instagram's — where a
+   link sent through that app lands by default. Until the person says where to
+   go on, the invite stays in the address, so the app's "Open in browser"
+   carries it across, and nothing joins: the seat is theirs, and it belongs to
+   the browser they are about to open. See "Opened inside another app's
+   browser" below. */
+const _inApp = G.inAppBrowser({
+  userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints, standalone: runningInstalled()
+});
+let inAppHold = Boolean(_inApp) && !inAppChosenHere();
+
+function inAppChosenHere() {
+  try { return sessionStorage.getItem("dc-inapp-continue") === "1"; } catch (_) { return false; }
+}
+
+if (_isAutoJoin && !inAppHold) history.replaceState({}, "", location.pathname);
 
 
 /** Get a plain string from the current language */
@@ -103,6 +119,7 @@ function applyI18n() {
     const val = I18N[LANG][key];
     if (typeof val === "string") el.textContent = val;
     if (key === "leaveHint" && typeof val === "function") el.textContent = val(leaveAttachMaxMbRounded());
+    else if (typeof val === "function" && "i18nArg" in el.dataset) el.textContent = val(el.dataset.i18nArg);
   });
   document.querySelectorAll("[data-i18n-ph]").forEach(el => {
     const key = el.dataset.i18nPh;
@@ -993,7 +1010,7 @@ let _autoJoinTimer = null;
 const AUTO_JOIN_TIMEOUT_MS = 20_000;
 
 function checkAutoJoin() {
-  if (!_isAutoJoin || _autoJoinSent) return;
+  if (!_isAutoJoin || _autoJoinSent || inAppHold) return;
   _autoJoinSent = true;
   isConnecting = true;
   roomKind = "pin"; pakeCode = null;   // an invite link is the ECDH path, not a code room
@@ -1167,7 +1184,7 @@ function runningInstalled() {
 function updateInstallButton() {
   const offer = G.installOffer({
     standalone: runningInstalled(), canPrompt: Boolean(installPrompt),
-    userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints
+    userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints, inApp: Boolean(_inApp)
   });
   installBtn.dataset.offer = offer;
   installBtn.classList.toggle("hidden", offer === "none");
@@ -1197,6 +1214,75 @@ installBtn.onclick = installApp;
 document.getElementById("installCloseBtn").onclick = () => installOverlay.classList.add("hidden");
 installOverlay.onclick = e => { if (e.target === installOverlay) installOverlay.classList.add("hidden"); };
 updateInstallButton();
+
+/* ── Opened inside another app's browser ───
+   A link sent through Facebook, Instagram, Messenger and the like opens in
+   that app's own browser. It is run by the app, which can add its own code to
+   the pages it shows; it often may not use the camera or microphone, so calls
+   fail; and it closes, chat and all, when the app is left. So the page says
+   so first, and offers the ways out:
+
+     iPhone   "Open in Safari" — hands the whole address, invite and all, to
+              Safari (G.safariUrl). Some apps block it; then the note says to
+              use their ⋯ menu.
+     Android  "Open in browser", for the default browser — only with no invite
+              in the address, since Android's way cannot carry its fragment
+              (G.androidIntentUrl).
+     both     the app's own "Open in browser", which takes the address as it is;
+              "Copy link", to paste into Safari or Chrome; "Continue here".
+
+   While the notice is up the invite stays in the address and nothing joins
+   (inAppHold, above). "Continue here" lets go: the address is tidied and the
+   invite joins, as it would have in any browser.                         */
+const inAppOverlay = document.getElementById("inAppOverlay");
+const inAppText    = document.getElementById("inAppText");
+const inAppNote    = document.getElementById("inAppNote");
+
+function showInAppNotice() {
+  const advice = G.inAppAdvice({ inApp: _inApp, hasInvite: _isAutoJoin });
+  inAppText.dataset.i18n = _inApp.app ? "inAppText" : "inAppTextUnknown";
+  inAppText.dataset.i18nArg = _inApp.app || "";
+  inAppText.textContent = _inApp.app ? I18N[LANG].inAppText(_inApp.app) : t("inAppTextUnknown");
+  document.getElementById("inAppSafariBtn").classList.toggle("hidden", !advice.safari);
+  document.getElementById("inAppDefaultBtn").classList.toggle("hidden", !advice.openDefault);
+  inAppOverlay.classList.remove("hidden");
+}
+
+function leaveForBrowser(url) {
+  if (!url) return;
+  location.href = url;
+  /* An app that blocks the hand-off simply does nothing. */
+  setTimeout(() => { inAppNote.textContent = t("inAppIfNothing"); }, 1500);
+}
+
+function continueInApp() {
+  try { sessionStorage.setItem("dc-inapp-continue", "1"); } catch (_) {}
+  inAppHold = false;
+  inAppOverlay.classList.add("hidden");
+  if (_isAutoJoin) {
+    history.replaceState({}, "", location.pathname);
+    /* The socket opening joins, if it has not opened yet. */
+    if (ws && ws.readyState === WebSocket.OPEN) checkAutoJoin();
+  }
+}
+
+document.getElementById("inAppSafariBtn").onclick  = () => leaveForBrowser(G.safariUrl(location.href));
+document.getElementById("inAppDefaultBtn").onclick = () => leaveForBrowser(G.androidIntentUrl(location.href));
+document.getElementById("inAppCopyBtn").onclick = () => {
+  const link = location.href;          // the invite included: it is still in the address
+  const done = () => showToast(t("inAppCopied"), "info");
+  navigator.clipboard.writeText(link).then(done).catch(() => {
+    const field = document.createElement("input");
+    field.value = link;
+    document.body.appendChild(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
+    done();
+  });
+};
+document.getElementById("inAppContinueBtn").onclick = continueInApp;
+if (inAppHold) showInAppNotice();
 
 /* ── Tabs: Rooms | Create room | Email ──────
    One section at a time, so the lobby is one screen instead of three cards

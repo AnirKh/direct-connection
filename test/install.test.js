@@ -79,7 +79,7 @@ test("running as the installed app means no button, whatever else is true", () =
 
 const BLOCK = (() => {
   const from = app.indexOf("/* ── Install as an app ──");
-  const to   = app.indexOf("/* ── Tabs: Rooms | Create room | Email ──", from);
+  const to   = app.indexOf("/* ── Opened inside another app's browser ───", from);
   assert.ok(from > 0 && to > from, "the install block was not found in app.js");
   return app.slice(from, to);
 })();
@@ -91,7 +91,7 @@ function element() {
                         toggle: (c, on) => (on ? set.add(c) : set.delete(c)), contains: c => set.has(c) } };
 }
 
-function page({ userAgent, maxTouchPoints = 0, standalone = false, iosStandalone = false }) {
+function page({ userAgent, maxTouchPoints = 0, standalone = false, iosStandalone = false, inApp = null }) {
   const listeners = {};
   const toasts = [];
   const els = { installBtn: element(), installOverlay: element(), installCloseBtn: element() };
@@ -101,8 +101,8 @@ function page({ userAgent, maxTouchPoints = 0, standalone = false, iosStandalone
     addEventListener: (type, fn) => { listeners[type] = fn; }
   };
   const navigator = { userAgent, maxTouchPoints, standalone: iosStandalone || undefined };
-  new Function("window", "navigator", "document", "G", "showToast", "t", BLOCK)(
-    window, navigator, { getElementById: id => els[id] }, G, (m, k) => toasts.push(m), k => k);
+  new Function("window", "navigator", "document", "G", "showToast", "t", "_inApp", BLOCK)(
+    window, navigator, { getElementById: id => els[id] }, G, (m, k) => toasts.push(m), k => k, inApp);
 
   /** The browser's install offer, as Chrome sends it. */
   const offer = () => {
@@ -231,4 +231,11 @@ test("the button and the steps are on the page, the button in the lobby", () => 
   assert.match(lobby, /<button id="installBtn" class="install-btn hidden"/, "hidden until there is something to offer");
   assert.match(html, /<div id="installOverlay" class="overlay hidden">/);
   assert.match(read("style.css"), /\.install-btn\s*\{[^}]*position:\s*fixed;[^}]*left:[^}]*bottom:/);
+});
+
+test("inside another app's browser there is no Install button — nothing can be installed from there", () => {
+  assert.equal(G.installOffer({ inApp: true, canPrompt: true, userAgent: UA.android }), "none");
+  assert.equal(G.installOffer({ inApp: true, userAgent: UA.iphone, maxTouchPoints: 5 }), "none",
+    "not the iPhone steps either: Instagram's browser has no Add to Home Screen");
+  assert.equal(page({ userAgent: UA.iphone, maxTouchPoints: 5, inApp: { app: "Instagram", os: "ios" } }).shown(), false);
 });

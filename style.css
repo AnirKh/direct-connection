@@ -133,6 +133,14 @@ body {
 .modal-actions { display: flex; gap: 10px; }
 .modal-actions button { margin-top: 0; }
 .modal .leave-chat-hint { color: var(--muted); font-size: 13.5px; line-height: 1.55; margin-bottom: 20px; }
+/* "Open this in your browser", for a page opened inside another app. */
+.modal.in-app .modal-icon { color: var(--accent-text); }
+.modal.in-app p { margin-bottom: 14px; }
+.in-app-open { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 12px; }
+.in-app-open i { font-size: 19px; }
+.modal .in-app-steps { font-size: 13px; color: var(--muted); line-height: 1.55; }
+.modal .in-app-note { font-size: 13px; color: var(--orange); min-height: 0; }
+.modal .in-app-note:empty { display: none; }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover:not(:disabled) { background: var(--danger-dark); }
 .modal h2   { margin-bottom: 10px; font-size: 19px; }

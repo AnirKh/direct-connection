@@ -15,9 +15,9 @@
        Install button at the bottom left is in the lobby (installOffer in
        guards.js). iPhones read the apple-* lines, since Safari takes the icon
        and title from these rather than from the manifest. -->
-  <link rel="manifest" href="manifest.webmanifest?v=202610160611-9c0938e7">
-  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610160611-9c0938e7">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610160611-9c0938e7">
+  <link rel="manifest" href="manifest.webmanifest?v=202610160648-10af62d8">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610160648-10af62d8">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610160648-10af62d8">
   <meta name="theme-color" content="#15151a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -62,7 +62,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610160611-9c0938e7"></script>
+  <script src="framebust.js?v=202610160648-10af62d8"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -79,7 +79,7 @@
         integrity="sha384-XAeMOW3g/ahgKWjRcH7Xp+LVEQ/hkKrV0zkAUTnFwlaWK1aXfd9vVufdwqr/836i"
         crossorigin="anonymous"
         referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="style.css?v=202610160611-9c0938e7">
+  <link rel="stylesheet" href="style.css?v=202610160648-10af62d8">
 </head>
 <body>
 
@@ -208,6 +208,28 @@
       <div class="modal-actions">
         <button id="leaveChatStayBtn" type="button" data-i18n="leaveChatStay">Үлдэх</button>
         <button id="leaveChatLeaveBtn" type="button" class="btn-danger" data-i18n="leaveChatLeave">Гарах</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Opened inside Facebook's, Instagram's or another app's own browser. See
+       "Opened inside another app's browser" in app.js. -->
+  <div id="inAppOverlay" class="overlay hidden">
+    <div class="modal in-app" role="dialog" aria-modal="true" aria-labelledby="inAppTitle">
+      <div class="modal-icon"><i class="ti ti-world-share" aria-hidden="true"></i></div>
+      <h2 id="inAppTitle" data-i18n="inAppTitle">Хөтөч дээр нээнэ үү</h2>
+      <p id="inAppText"></p>
+      <button id="inAppSafariBtn" class="in-app-open hidden" type="button">
+        <i class="ti ti-compass" aria-hidden="true"></i><span data-i18n="inAppOpenSafari">Safari дээр нээх</span>
+      </button>
+      <button id="inAppDefaultBtn" class="in-app-open hidden" type="button">
+        <i class="ti ti-external-link" aria-hidden="true"></i><span data-i18n="inAppOpenDefault">Хөтөч дээр нээх</span>
+      </button>
+      <p class="in-app-steps" data-i18n="inAppSteps">Эсвэл: дээд буланд ⋯ (эсвэл ⋮) дараад «Open in browser» буюу «Хөтөч дээр нээх»-ийг сонгоно.</p>
+      <p id="inAppNote" class="in-app-note" role="status"></p>
+      <div class="modal-actions">
+        <button id="inAppCopyBtn" class="btn-quiet" type="button" data-i18n="inAppCopy">Холбоосыг хуулах</button>
+        <button id="inAppContinueBtn" class="btn-quiet" type="button" data-i18n="inAppContinue">Энд үргэлжлүүлэх</button>
       </div>
     </div>
   </div>
@@ -415,14 +437,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610160611-9c0938e7"></script>
-  <script src="connstats.js?v=202610160611-9c0938e7"></script>
-  <script src="guards.js?v=202610160611-9c0938e7"></script>
-  <script src="i18n.js?v=202610160611-9c0938e7"></script>
+  <script src="protocol.js?v=202610160648-10af62d8"></script>
+  <script src="connstats.js?v=202610160648-10af62d8"></script>
+  <script src="guards.js?v=202610160648-10af62d8"></script>
+  <script src="i18n.js?v=202610160648-10af62d8"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610160611-9c0938e7"></script>
-  <script src="pake.js?v=202610160611-9c0938e7"></script>
-  <script src="app.js?v=202610160611-9c0938e7"></script>
+  <script src="vendor/noble.js?v=202610160648-10af62d8"></script>
+  <script src="pake.js?v=202610160648-10af62d8"></script>
+  <script src="app.js?v=202610160648-10af62d8"></script>
 </body>
 </html>
