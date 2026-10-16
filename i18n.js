@@ -18,7 +18,15 @@
    I18N
 ══════════════════════════════════════════════ */
 
-let LANG = localStorage.getItem("lang") || "mn";
+/* The language picked last time, if this browser lets the page remember one.
+   It may not: with cookies blocked, merely reading localStorage throws, and in
+   some apps' built-in browsers it is not there at all. This line used to throw
+   then, I18N was never made, and the whole page was dead — it looked as usual
+   and no button did anything. Anything but "en" means the default. */
+let LANG = (() => {
+  try { return localStorage.getItem("lang") === "en" ? "en" : "mn"; }
+  catch (_) { return "mn"; }
+})();
 
 const I18N = {
   mn: {
@@ -132,6 +140,8 @@ const I18N = {
     emailBusy:       "Сервер завгүй байна — түр хүлээгээд дахин илгээнэ үү.",
     callMediaRestartFailed: "Микрофон эсвэл камерыг дахин асааж чадсангүй",
     sysCallEnded:    "Дуудлага дууслаа",
+    sysNoAnswer:     "Хариу өгсөнгүй",
+    sysMissedCall:   "Аваагүй дуудлага",
     sysCallFailed:   (msg) => `Дуудлага бүтсэнгүй — ${msg}`,
     // Creating room
     creating:        "Үүсгэж байна…",
@@ -330,6 +340,8 @@ const I18N = {
     emailBusy:       "The server is busy — wait a moment and send again.",
     callMediaRestartFailed: "Couldn't turn the microphone or camera back on",
     sysCallEnded:    "Call ended",
+    sysNoAnswer:     "No answer",
+    sysMissedCall:   "Missed call",
     sysCallFailed:   (msg) => `Call failed — ${msg}`,
     creating:        "Creating…",
     enterSessionName: "Enter a session name",

@@ -115,6 +115,48 @@ test("once locked, the note says so", () => {
   assert.equal(h.failures(), 0, "the lock itself is not another failure");
 });
 
+/* pakeBegin and pakeFailClosed together, on a stand-in clock: the host's count
+   of wrong words through a whole lock. */
+function lockingHost() {
+  const log = { notes: [], started: 0 };
+  const clock = { now: 1_000_000 };
+  const api = new Function("G", "t", "Date", "PAKE", "appendSys", "wsSend", "showToast", "setTimeout", "console", "log", `
+    let isHost = true, currentSession = { sessionId: "word-room" }, keyAgreement = "ECDH", pakeCode = "apple";
+    let e2eReady = false, e2eVerified = false, e2eSecureMode = false, wordMatched = false, pakeStarted = null, pakeSession = null;
+    let codeFailures = 0, codeLockedUntil = 0;
+    const sendBtn = {}, voiceCallBtn = {}, videoCallBtn = {}, leaveBtn = {}, dataChannel = { send() {} };
+    function pakeReset() { pakeStarted = null; pakeSession = null; }
+    function updateKeyVerifyUi() {}
+    function returnToWaitingRoom(note) { log.notes.push(note); }
+    ${fn("pakeBegin")}
+    ${fn("pakeFailClosed")}
+    return { pakeBegin, pakeFailClosed, failures: () => codeFailures };`
+  )(G, k => k, { now: () => clock.now }, { start: () => { log.started++; return { message: "m", state: {} }; } },
+    () => {}, () => {}, () => {}, () => {}, { error() {} }, log);
+  return { ...api, log, clock };
+}
+
+test("ten wrong words lock the room for five minutes — then it opens again; it used to stay shut for good", async () => {
+  const h = lockingHost();
+  for (let i = 0; i < G.CODE_MAX_ATTEMPTS; i++) { await h.pakeBegin(); h.pakeFailClosed(false); }
+  assert.deepEqual(h.log.notes, [...Array(G.CODE_MAX_ATTEMPTS - 1).fill("codeWrongHost"), "codeLocked"]);
+  assert.equal(h.log.started, G.CODE_MAX_ATTEMPTS);
+
+  h.clock.now += G.CODE_LOCK_MS - 1;
+  await h.pakeBegin();
+  assert.equal(h.log.started, G.CODE_MAX_ATTEMPTS, "locked: not even started");
+  assert.equal(h.log.notes.at(-1), "codeLocked", "and the host is told it is locked, not that the word was wrong");
+
+  h.clock.now += 2;
+  await h.pakeBegin();
+  assert.equal(h.log.started, G.CODE_MAX_ATTEMPTS + 1, "the lock is over: the next guest gets to try");
+  assert.equal(h.failures(), 0, "with a fresh count");
+  h.pakeFailClosed(false);
+  assert.equal(h.log.notes.at(-1), "codeWrongHost", "one more wrong word is just a wrong word");
+  for (let i = 1; i < G.CODE_MAX_ATTEMPTS; i++) { await h.pakeBegin(); h.pakeFailClosed(false); }
+  assert.equal(h.log.notes.at(-1), "codeLocked", "ten more, and it locks again — the limit still holds");
+});
+
 test("a wrong word on the guest's side: told, and back to the lobby to try again", () => {
   const g = codeHost({ isHost: false });
   g.pakeFailClosed(false);

@@ -436,8 +436,45 @@ test("a device description is only believed from inside the envelope", () => {
 const now = 1_000_000;
 
 test("a fresh code room accepts attempts", () => {
-  assert.deepEqual(G.codeAttemptState({ failures: 0, lockedUntil: 0, now }), { locked: false, until: 0 });
+  assert.deepEqual(G.codeAttemptState({ failures: 0, lockedUntil: 0, now }), { locked: false, until: 0, failures: 0 });
   assert.equal(G.codeAttemptState({ failures: G.CODE_MAX_ATTEMPTS - 1, lockedUntil: 0, now }).locked, false);
+  assert.equal(G.codeAttemptState({ failures: 3, lockedUntil: 0, now }).failures, 3, "the count is carried on");
+});
+
+test("a lock that has run its course starts the count again — it used to lock again at once, for good", () => {
+  const locked = G.codeAttemptState({ failures: G.CODE_MAX_ATTEMPTS, lockedUntil: 0, now });
+  assert.equal(locked.until, now + G.CODE_LOCK_MS);
+  assert.equal(G.CODE_LOCK_MS, 5 * 60 * 1000);
+  assert.deepEqual(G.codeAttemptState({ failures: G.CODE_MAX_ATTEMPTS, lockedUntil: locked.until, now: locked.until - 1 }),
+    { locked: true, until: locked.until, failures: G.CODE_MAX_ATTEMPTS }, "still locked a moment before");
+  for (const later of [locked.until, locked.until + 1, now + 86_400_000]) {
+    assert.deepEqual(G.codeAttemptState({ failures: G.CODE_MAX_ATTEMPTS, lockedUntil: locked.until, now: later }),
+      { locked: false, until: 0, failures: 0 }, `open again at +${later - now}ms, with a fresh count`);
+  }
+});
+
+test("a host keeping the count the way app.js does: ten wrong, five minutes shut, then ten more tries", () => {
+  /* pakeBegin takes the state before each attempt; pakeFailClosed counts a
+     miss and locks once the limit is reached. */
+  let failures = 0, lockedUntil = 0, clock = now;
+  const attempt = wrong => {
+    const before = G.codeAttemptState({ failures, lockedUntil, now: clock });
+    failures = before.failures; lockedUntil = before.until;
+    if (before.locked) return "refused";
+    if (!wrong) { failures = 0; return "in"; }
+    failures++;
+    const after = G.codeAttemptState({ failures, lockedUntil, now: clock });
+    if (after.locked) lockedUntil = after.until;
+    return "wrong";
+  };
+  for (let i = 0; i < G.CODE_MAX_ATTEMPTS; i++) assert.equal(attempt(true), "wrong");
+  assert.equal(attempt(false), "refused", "the right word too, while locked");
+  clock += G.CODE_LOCK_MS - 1000;
+  assert.equal(attempt(false), "refused");
+  clock += 2000;
+  assert.equal(attempt(false), "in", "the right word gets in once the lock is over");
+  for (let i = 0; i < G.CODE_MAX_ATTEMPTS; i++) assert.equal(attempt(true), "wrong", "a fresh ten");
+  assert.equal(attempt(true), "refused", "and the lock comes back as it should");
 });
 
 test("the room locks once the wrong-guess limit is reached", () => {

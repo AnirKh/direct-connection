@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610160648-10af62d8";
+const APP_BUILD = "202610160721-c5d570d4";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -152,7 +152,8 @@ function applyI18n() {
 document.querySelectorAll(".lang-btn").forEach(btn => {
   btn.onclick = () => {
     LANG = btn.dataset.lang;
-    localStorage.setItem("lang", LANG);
+    /* Storage blocked: the choice still holds, until the page is closed. */
+    try { localStorage.setItem("lang", LANG); } catch (_) {}
     applyI18n();
   };
 });
@@ -586,6 +587,9 @@ async function pakeBegin() {
      guesses. If locked from earlier wrong attempts, do not even start. */
   if (isHost) {
     const lock = G.codeAttemptState({ failures: codeFailures, lockedUntil: codeLockedUntil, now: Date.now() });
+    /* A lock that has run out starts the count afresh — see codeAttemptState. */
+    codeFailures = lock.failures;
+    codeLockedUntil = lock.until;
     if (lock.locked) { pakeFailClosed(true); return; }
   }
   if (!PAKE || !pakeCode || !currentSession) { pakeFailClosed(false); return; }
@@ -2731,10 +2735,14 @@ function handleTextMessage(data, sealed = false) {
       handleCallRequest(data);
       break;
 
-    case "call-reject":
+    case "call-reject": {
+      /* Hung up while it was still ringing here — the caller gave up, or
+         stopped waiting (see startRinging): a missed call, not an ended one. */
+      const missed = !callRequestModal.classList.contains("hidden");
       endCall(false);
-      appendSys(t("sysCallEnded"));
+      appendSys(t(missed ? "sysMissedCall" : "sysCallEnded"));
       break;
+    }
 
     case "call-accept":
       initiateCallOffer(data.withVideo);
@@ -3241,6 +3249,29 @@ async function toggleVoiceRecord() {
 voiceCallBtn.onclick = () => requestCall(false);
 videoCallBtn.onclick = () => requestCall(true);
 
+/* ── A call nobody answers ──────────────────
+   The other person away from the screen, or in another app, and nothing
+   ended a call they never saw: the caller sat on "Calling…" for as long as
+   anyone watched. After G.CALL_RING_MS it stops and says "No answer". The
+   other side is told as for any hang-up, and notes a missed call (the
+   call-reject case).                                                      */
+let callRingTimer = null;
+
+function startRinging() {
+  stopRinging();
+  callRingTimer = setTimeout(() => {
+    callRingTimer = null;
+    if (!G.callUnanswered({ inCall, answered: Boolean(callPc) })) return;
+    endCall(true);
+    appendSys(t("sysNoAnswer"));
+  }, G.CALL_RING_MS);
+}
+
+function stopRinging() {
+  clearTimeout(callRingTimer);
+  callRingTimer = null;
+}
+
 function requestCall(withVideo) {
   if (inCall) return;
   if (!dcReady() || !pc) { appendSys(t("callNeedLink")); return; }
@@ -3250,6 +3281,7 @@ function requestCall(withVideo) {
   pendingCallVideo = withVideo;
   dcSendCallSignal({ type: "call-request", withVideo });
   showCallOverlay(withVideo ? t("videoCallingOut") : t("voiceCallingOut"), withVideo);
+  startRinging();
 }
 
 function handleCallRequest(data) {
@@ -3655,6 +3687,7 @@ async function initiateCallOffer(peerWantsVideo) {
     dcSendCallSignal({ type: "call-reject" });
     return;
   }
+  stopRinging();                       // answered
   const withVideo = consentedVideo(peerWantsVideo);
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
@@ -3771,6 +3804,7 @@ toggleCamBtn.onclick = () => {
 endCallBtn.onclick = () => endCall(true);
 
 function endCall(notify = true) {
+  stopRinging();
   inCall = false;
   peerAway = false;
   updateCallPauseNote();

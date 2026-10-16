@@ -78,6 +78,23 @@
     return Boolean(pendingCallVideo) && Boolean(peerWantsVideo);
   }
 
+  /** How long a call we place rings before it is given up as not answered. */
+  const CALL_RING_MS = 45_000;
+
+  /**
+   * The call we placed has rung for CALL_RING_MS. Is it still only ringing —
+   * not answered, and not over?
+   *
+   * Nothing used to end a call nobody picked up. The other person away from
+   * the screen, or in another app, and the caller sat on "Calling…" for as
+   * long as anyone watched, the call never placed and never ended.
+   *
+   * @param {{inCall: boolean, answered: boolean}} o
+   */
+  function callUnanswered(o) {
+    return Boolean(o) && o.inCall === true && o.answered !== true;
+  }
+
   /* ══════════════════════════════════════════
      Key exchange
   ══════════════════════════════════════════ */
@@ -296,9 +313,12 @@
       this caps how fast those guesses can be made at all. */
   const CODE_MAX_ATTEMPTS = 10;
 
+  /** How long the room stays locked once the limit is reached. */
+  const CODE_LOCK_MS = 5 * 60 * 1000;
+
   /**
-   * A guest just failed the SPAKE2 check on a code room. May the host accept
-   * another attempt, or is it locked?
+   * A guest just failed the SPAKE2 check on a code room, or a new one is
+   * about to try. May the host accept the attempt, or is it locked?
    *
    * The word is proven between the two phones, so the server cannot rate-limit
    * it — the host does, here. A short word has few possibilities, so without
@@ -306,15 +326,24 @@
    * as the link allows. After CODE_MAX_ATTEMPTS the host turns new guests away
    * until `until`.
    *
+   * `failures` in the answer is the count to carry on with. A lock that has
+   * run its course starts it again from nothing. It used to be kept, so the
+   * room locked again the moment its lock ended, for good: ten wrong words,
+   * and the right one was turned away for ever — which let any stranger shut
+   * any listed code room.
+   *
    * @param {{failures: number, now: number, lockedUntil: number}} o
-   * @returns {{locked: boolean, until: number}}
+   * @returns {{locked: boolean, until: number, failures: number}}
    */
   function codeAttemptState(o) {
     const now = (o && o.now) || 0;
-    if (o && o.lockedUntil && o.lockedUntil > now) return { locked: true, until: o.lockedUntil };
     const failures = (o && o.failures) || 0;
-    if (failures >= CODE_MAX_ATTEMPTS) return { locked: true, until: now + 5 * 60 * 1000 };
-    return { locked: false, until: 0 };
+    if (o && o.lockedUntil) {
+      if (o.lockedUntil > now) return { locked: true, until: o.lockedUntil, failures };
+      return { locked: false, until: 0, failures: 0 };      // served: a fresh count
+    }
+    if (failures >= CODE_MAX_ATTEMPTS) return { locked: true, until: now + CODE_LOCK_MS, failures };
+    return { locked: false, until: 0, failures };
   }
 
   /* ══════════════════════════════════════════
@@ -824,9 +853,9 @@
 
   return {
     isNewerBuild, updateAction,
-    mayCaptureForCall, consentedVideo,
+    mayCaptureForCall, consentedVideo, CALL_RING_MS, callUnanswered,
     mayAcceptPeerKey, shieldState,
-    CODE_MAX_ATTEMPTS, codeAttemptState,
+    CODE_MAX_ATTEMPTS, CODE_LOCK_MS, codeAttemptState,
     SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, incomingTransfer, withinDeclaredSize,
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,

@@ -9,6 +9,10 @@
   a dialog in front of every visit, with an "approve" button that approved
   nothing — it only closed the dialog — so returning visitors dismissed it every
   time. It is now a dropdown beside the lobby title, opened on request.
+
+  And: the page starts when the browser keeps nothing. With cookies blocked,
+  or in an app's web view without storage, reading the saved language threw,
+  I18N was never made, and the page looked normal with nothing working.
 */
 
 "use strict";
@@ -17,6 +21,7 @@ const test   = require("node:test");
 const assert = require("node:assert/strict");
 const fs     = require("node:fs");
 const path   = require("node:path");
+const vm     = require("node:vm");
 
 const read = name => fs.readFileSync(path.join(__dirname, "..", name), "utf8");
 const html = read("index.html");
@@ -60,6 +65,51 @@ test("every key the page names exists in both languages", () => {
       assert.equal(typeof I18N[lang][key], kind, `${lang}.${key} is missing`);
     }
   }
+});
+
+/* ══════════════════════════════════════════
+   A browser that keeps nothing
+══════════════════════════════════════════ */
+
+/** i18n.js run as the page runs it, with `localStorage` as the given getter. */
+function loadI18n(getStorage) {
+  const sandbox = {};
+  Object.defineProperty(sandbox, "localStorage", { get: getStorage });
+  vm.createContext(sandbox);
+  const { LANG, made } = vm.runInContext(`${read("i18n.js")}\n;({ LANG, made: typeof I18N === "object" && "en" in I18N })`, sandbox);
+  return { LANG, made };      // out of the sandbox, so deepEqual compares like with like
+}
+
+test("storage blocked or missing: the page still starts, in Mongolian — it used to be dead", () => {
+  /* Cookies blocked: reading the property throws, as Chrome, Edge, Firefox and
+     Safari all do. An app's web view that never switched storage on: null. */
+  const denied = () => { throw Object.assign(new Error("Access is denied for this document."), { name: "SecurityError" }); };
+  assert.deepEqual(loadI18n(denied), { LANG: "mn", made: true });
+  assert.deepEqual(loadI18n(() => null), { LANG: "mn", made: true });
+  assert.deepEqual(loadI18n(() => ({ getItem() { throw new Error("quota"); } })), { LANG: "mn", made: true });
+});
+
+test("the language picked last time still comes back, and nothing else is believed", () => {
+  const stored = value => () => ({ getItem: key => (key === "lang" ? value : null) });
+  assert.equal(loadI18n(stored("en")).LANG, "en");
+  assert.equal(loadI18n(stored("mn")).LANG, "mn");
+  assert.equal(loadI18n(stored(null)).LANG, "mn", "nothing picked yet");
+  assert.equal(loadI18n(stored("xx")).LANG, "mn", "a language this page does not have would leave I18N[LANG] undefined");
+});
+
+test("switching language works with storage blocked; it is only not remembered", () => {
+  const app = read("app.js").replace(/\r\n/g, "\n");
+  const a = app.indexOf("/* ── Language switcher"), b = app.indexOf("/* ── DOM refs");
+  assert.ok(a > 0 && b > a, "language switcher block not found");
+  const enBtn = { dataset: { lang: "en" } };
+  const seen = new Function("document", "localStorage", "applyI18n", `
+    let LANG = "mn";
+    ${app.slice(a, b)}
+    document.buttons[0].onclick();
+    return LANG;`
+  )({ querySelectorAll: () => [enBtn], buttons: [enBtn] },
+    { setItem() { throw Object.assign(new Error("denied"), { name: "SecurityError" }); } }, () => {});
+  assert.equal(seen, "en");
 });
 
 test("the page opens straight to the lobby", () => {
