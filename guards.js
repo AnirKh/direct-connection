@@ -666,6 +666,34 @@
   }
 
   /* ══════════════════════════════════════════
+     Telling you something arrived
+  ══════════════════════════════════════════ */
+
+  /**
+   * Is nobody looking at this page — another tab, another app, or another
+   * window in front of it? Then a message arriving needs a sound and a count
+   * in the title to be noticed at all.
+   *
+   * @param {{visibility: string, focused: boolean}} o
+   */
+  function unattended(o) {
+    return Boolean(o) && (o.visibility === "hidden" || o.focused === false);
+  }
+
+  /**
+   * The tab's title: "(2) Шууд холбоос" for two unread, with a phone in front
+   * while a call rings. Past 99 it says "99+", as a badge would.
+   *
+   * @param {{base: string, unread: number, ringing: boolean}} o
+   */
+  function tabTitle(o) {
+    const base = String((o && o.base) || "");
+    const n = o && Number.isSafeInteger(o.unread) && o.unread > 0 ? o.unread : 0;
+    const count = n ? `(${n > 99 ? "99+" : n}) ` : "";
+    return `${o && o.ringing === true ? "📞 " : ""}${count}${base}`;
+  }
+
+  /* ══════════════════════════════════════════
      Opened inside another app's browser
   ══════════════════════════════════════════ */
 
@@ -860,7 +888,7 @@
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
-    tracksToRestart, callPauseNote,
+    tracksToRestart, callPauseNote, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,

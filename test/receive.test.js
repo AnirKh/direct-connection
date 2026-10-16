@@ -65,7 +65,7 @@ const LIMIT = 150 * 1024 * 1024;
 
 /** One side of a chat: the real transfer code, with the screen and network stood in. */
 function side(name) {
-  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [] };
+  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [], noticed: 0 };
   let peer = null;
   const later = f => setImmediate(() => peer && f(peer));
   const env = {
@@ -84,6 +84,7 @@ function side(name) {
     resolveVoicePlaceholder: (id, url) => log.delivered.push({ id, as: "voice", url }),
     reportTransferProgress() {}, setTransferProgress() {}, attachSendProgress() {}, clearSendProgress() {},
     showToast() {}, announce: text => log.heard.push(text), I18N: { en: { fileTooLargeP2P: () => "" } }, LANG: "en",
+    noticeArrival: () => { log.noticed++; },
     dcReady: () => true, e2eReady: true,
     makeTransferId: DC.makeTransferId,
     trackBlobUrl: url => url,
@@ -368,6 +369,8 @@ test("an arriving file, picture or voice note is read out to a screen reader", a
   await settle();
   assert.deepEqual(b.log.heard, ["srNewFile: notes.pdf", "srNewImage: cat.png", "srNewVoice"]);
   assert.deepEqual(a.log.heard, [], "your own sends are not read back to you");
+  assert.equal(b.log.noticed, 3, "each is noticed — a chime if nobody is looking");
+  assert.equal(a.log.noticed, 0);
 });
 
 test("a refused file is not announced as arriving", async () => {
@@ -375,4 +378,5 @@ test("a refused file is not announced as arriving", async () => {
   b.deliver(meta({ size: LIMIT + 1 }));
   await settle();
   assert.deepEqual(b.log.heard, []);
+  assert.equal(b.log.noticed, 0, "nor chimed for");
 });

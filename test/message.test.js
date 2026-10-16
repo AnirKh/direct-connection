@@ -65,7 +65,7 @@ function element(tag = "div") {
 
 /** One side's chat, with the real functions and stand-in surroundings. */
 function chat({ sendThrows = false, lang = "en" } = {}) {
-  const log = { sent: [], bubbles: [], sys: [], toasts: [], acks: [] };
+  const log = { sent: [], bubbles: [], sys: [], toasts: [], acks: [], noticed: 0 };
   const messageInput   = element("textarea");
   const messageCounter = element();
   const srAnnouncer    = element();
@@ -82,7 +82,8 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
     dataChannel: { send: json => { if (sendThrows) throw new Error("channel closed"); log.sent.push(JSON.parse(json)); } },
     dcSend: obj => { if (obj.type === "ack") log.acks.push(obj.msgId); },
     showToast: msg => log.toasts.push(msg),
-    addAckTick() {}, pendingAcks: {}, now: () => "12:00", scrollBottom() {}
+    addAckTick() {}, pendingAcks: {}, now: () => "12:00", scrollBottom() {},
+    noticeArrival: () => { log.noticed++; }
   };
   const names = Object.keys(env);
   const api = new Function(...names, `
@@ -227,6 +228,15 @@ test("a message from the other side is read out; your own is not", async () => {
   c.type("my reply");
   await c.sendTextMessage();
   assert.deepEqual(c.heard(), [`${I18N.en.srNewMessage}: hello there`]);
+  assert.equal(c.log.noticed, 1, "theirs is noticed — a chime if nobody is looking; yours is not");
+});
+
+test("a message too long to show is not noticed either; a system note is not", async () => {
+  const c = chat();
+  c.deliver({ type: "text", ct: "a".repeat(MAX + 1), iv: "iv", msgId: 9 });
+  await settle();
+  c.appendSys("Connected");
+  assert.equal(c.log.noticed, 0);
 });
 
 test("system notes are read out", () => {

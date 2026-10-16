@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610160721-c5d570d4";
+const APP_BUILD = "202610160743-02ceb748";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -370,6 +370,155 @@ function announce(text) {
   line.textContent = text;
   srAnnouncer.appendChild(line);
   while (srAnnouncer.childElementCount > 3) srAnnouncer.firstElementChild.remove();
+}
+
+/* ── Telling you something arrived ──────────
+   A message, a file or a call that came while nobody was looking at this
+   page — another tab or another app in front — arrived in silence: no sound,
+   nothing in the tab's title, and an incoming call rang nobody.
+
+     a message or file   while the page is not looked at: a short chime, a
+                         buzz where the phone can, and "(2) Шууд холбоос" in
+                         the title — and on the installed app's icon — until
+                         it is looked at again (noticeArrival)
+     an incoming call    rings and buzzes for as long as it is asked, looked
+                         at or not: a phone left on the table with its screen
+                         kept on is the usual case (startIncomingRing)
+
+   A browser lets a page make no sound until it has been touched, so the sound
+   is readied at the first tap. A phone that has put the page to sleep — an
+   iPhone with its screen off, or with Safari in the background — runs none of
+   this until it wakes: only a notification sent through a server could reach
+   it there, and this app has none.                                         */
+const BASE_TITLE = document.title;
+const CHIME_GAP_MS = 1500;          // a burst of messages chimes once
+const RING_EVERY_S = 3;             // a ring, quiet, the next ring
+/* The caller gives up after CALL_RING_MS. A little longer here, so a hang-up
+   that never arrived still ends the ringing (incomingRingTimedOut). */
+const INCOMING_RING_MS = G.CALL_RING_MS + 5000;
+const RING_BUZZ = Array.from({ length: 2 * Math.ceil(INCOMING_RING_MS / (RING_EVERY_S * 1000)) },
+                             (_, i) => (i % 2 ? RING_EVERY_S * 1000 - 600 : 600));
+
+let soundCtx    = null;     // made at the first tap: no page may make a sound before one
+let unread      = 0;        // arrived while nobody was looking
+let lastChimeAt = 0;
+let ringing     = false;    // an incoming call is being asked
+let ringOut     = null;     // the ring's own output — cut to silence it
+let ringTimer   = null;
+
+function readySound() {
+  if (soundCtx) {
+    if (soundCtx.state === "suspended") soundCtx.resume().catch(() => {});
+    return;
+  }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try { soundCtx = new Ctx(); } catch (_) { soundCtx = null; }
+}
+document.addEventListener("pointerdown", readySound, true);
+document.addEventListener("keydown", readySound, true);
+
+/** Plays once sound can be heard — never before the first tap. */
+function withSound(play) {
+  if (!soundCtx) return;
+  if (soundCtx.state === "running") { play(); return; }
+  soundCtx.resume().then(() => { if (soundCtx.state === "running") play(); }).catch(() => {});
+}
+
+/** One soft tone, `at` seconds from now on the sound's own clock, which keeps
+    time in a background tab where timers are slowed. */
+function tone(out, freq, at, len, peak) {
+  const start = soundCtx.currentTime + at;
+  const osc = soundCtx.createOscillator();
+  const env = soundCtx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = freq;
+  env.gain.setValueAtTime(0.0001, start);
+  env.gain.exponentialRampToValueAtTime(peak, start + 0.02);
+  env.gain.exponentialRampToValueAtTime(0.0001, start + len);
+  osc.connect(env);
+  env.connect(out);
+  osc.start(start);
+  osc.stop(start + len + 0.05);
+}
+
+/** A buzz, on the phones that have one (Android). A hidden page gets none. */
+function buzz(pattern) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (_) {}
+}
+
+function lookedAt() {
+  return !G.unattended({ visibility: document.visibilityState, focused: document.hasFocus() });
+}
+
+function drawTitle() {
+  document.title = G.tabTitle({ base: BASE_TITLE, unread, ringing });
+  try {
+    if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
+  } catch (_) {}
+}
+
+/** A message, a file or a missed call has arrived from the other side. */
+function noticeArrival() {
+  if (lookedAt()) return;
+  unread++;
+  drawTitle();
+  const now = Date.now();
+  if (now - lastChimeAt < CHIME_GAP_MS) return;
+  lastChimeAt = now;
+  withSound(() => {
+    tone(soundCtx.destination, 880, 0, 0.18, 0.12);
+    tone(soundCtx.destination, 1320, 0.12, 0.3, 0.1);
+  });
+  buzz(120);
+}
+
+/** Looked at again: what came is seen. */
+function markSeen() {
+  if (!unread || !lookedAt()) return;
+  unread = 0;
+  drawTitle();
+}
+document.addEventListener("visibilitychange", markSeen);
+window.addEventListener("focus", markSeen);
+
+/** An incoming call is being asked. */
+function startIncomingRing() {
+  stopIncomingRing();
+  ringing = true;
+  drawTitle();
+  withSound(() => {
+    if (!ringing || ringOut) return;           // answered while the sound was waking
+    ringOut = soundCtx.createGain();
+    ringOut.connect(soundCtx.destination);
+    for (let s = 0; s * 1000 < INCOMING_RING_MS; s += RING_EVERY_S) {
+      tone(ringOut, 660, s, 0.4, 0.15);
+      tone(ringOut, 880, s + 0.45, 0.4, 0.15);
+    }
+  });
+  buzz(RING_BUZZ);
+  ringTimer = setTimeout(incomingRingTimedOut, INCOMING_RING_MS);
+}
+
+/** Answered, turned down, or over: the ringing stops, all of it. */
+function stopIncomingRing() {
+  clearTimeout(ringTimer);
+  ringTimer = null;
+  if (ringOut) { try { ringOut.disconnect(); } catch (_) {} ringOut = null; }
+  if (!ringing) return;
+  ringing = false;
+  buzz(0);
+  drawTitle();
+}
+
+/** Still asked after the caller has surely given up: their hang-up was lost
+    on the way. It is the missed call it would have been. */
+function incomingRingTimedOut() {
+  ringTimer = null;
+  if (callRequestModal.classList.contains("hidden")) { stopIncomingRing(); return; }
+  endCall(false);
+  appendSys(t("sysMissedCall"));
+  noticeArrival();
 }
 
 /* ── Reconnect / back-to-lobby button ───────
@@ -2741,6 +2890,7 @@ function handleTextMessage(data, sealed = false) {
       const missed = !callRequestModal.classList.contains("hidden");
       endCall(false);
       appendSys(t(missed ? "sysMissedCall" : "sysCallEnded"));
+      if (missed) noticeArrival();
       break;
     }
 
@@ -2889,6 +3039,7 @@ function handleTransferMeta(data) {
   if (info.kind === "voice") appendVoicePlaceholder("peer", data.id);
   announce(info.kind === "voice" ? t("srNewVoice")
          : `${t(info.kind === "image" ? "srNewImage" : "srNewFile")}: ${data.name || ""}`);
+  noticeArrival();
   /* Chunks that outran this message: feed them through in arrival order. */
   for (const early of takeOrphanChunks(data.id)) acceptChunk(info, data.id, early);
 }
@@ -3296,8 +3447,9 @@ function handleCallRequest(data) {
   callAcceptBtn.textContent  = t("callAccept");
   callDeclineBtn.textContent = t("callDecline");
   callRequestModal.classList.remove("hidden");
+  startIncomingRing();
 
-  const cleanup = () => callRequestModal.classList.add("hidden");
+  const cleanup = () => { stopIncomingRing(); callRequestModal.classList.add("hidden"); };
 
   callDeclineBtn.onclick = () => {
     cleanup();
@@ -3811,6 +3963,7 @@ function endCall(notify = true) {
   pendingCallVideo = false;
   callIceQueue = [];
   remoteVideo._pendingPlay = false;
+  stopIncomingRing();
   callRequestModal.classList.add("hidden");
   if (notify && dcReady()) dcSendCallSignal({ type: "call-reject" });
   stopCallMedia(true);
@@ -3928,7 +4081,7 @@ function appendBubble(who, text) {
   row.appendChild(meta);
   chatMessages.appendChild(row);
   scrollBottom();
-  if (who === "peer") announce(`${t("srNewMessage")}: ${text}`);
+  if (who === "peer") { announce(`${t("srNewMessage")}: ${text}`); noticeArrival(); }
   return row;
 }
 

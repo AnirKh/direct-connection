@@ -61,13 +61,14 @@ const RING   = between("/* ── A call nobody answers ──", "function reque
 const REJECT = between('    case "call-reject": {', '    case "call-accept":');
 
 function phone({ linkUp = true } = {}) {
-  const log = { sent: [], sys: [], overlay: [], closed: 0 };
+  const log = { sent: [], sys: [], overlay: [], closed: 0, ringStopped: 0, noticed: 0 };
   const timers = new Map();
   let nextTimer = 0;
   const callRequestModal = { classList: classes(["hidden"]) };
   const api = new Function(
     "G", "t", "setTimeout", "clearTimeout", "dcReady", "isChatLinkUp", "dcSendCallSignal", "appendSys",
-    "showCallOverlay", "updateCallPauseNote", "stopCallMedia", "closeCallPeerConnection", "remoteVideo", "callRequestModal", `
+    "showCallOverlay", "updateCallPauseNote", "stopCallMedia", "closeCallPeerConnection", "remoteVideo", "callRequestModal",
+    "stopIncomingRing", "noticeArrival", `
     let inCall = false, pendingCallVideo = false, peerAway = false, callIceQueue = [], pc = {}, e2eReady = true, callPc = null;
     ${RING}
     ${fn("requestCall")}
@@ -82,7 +83,8 @@ function phone({ linkUp = true } = {}) {
     (f, ms) => { const id = ++nextTimer; timers.set(id, { f, ms }); return id; },
     id => { timers.delete(id); },
     () => true, () => linkUp, m => { log.sent.push(m.type); return Promise.resolve(); }, k => log.sys.push(k),
-    s => log.overlay.push(s), () => {}, () => { log.closed++; }, () => {}, {}, callRequestModal);
+    s => log.overlay.push(s), () => {}, () => { log.closed++; }, () => {}, {}, callRequestModal,
+    () => { log.ringStopped++; }, () => { log.noticed++; });
   const wait = ms => {
     for (const [id, timer] of [...timers]) {
       if (timer.ms <= ms) { timers.delete(id); timer.f(); }
@@ -138,10 +140,13 @@ test("the other side: hung up while ringing there is a missed call; after answer
   ringing.deliver({ type: "call-reject" });
   assert.deepEqual(ringing.log.sys, ["sysMissedCall"]);
   assert.equal(ringing.callRequestModal.classList.contains("hidden"), true, "the incoming-call question goes");
+  assert.ok(ringing.log.ringStopped > 0, "and it stops ringing");
+  assert.equal(ringing.log.noticed, 1, "a missed call is noticed, like a message");
   const talking = phone();
   talking.accepted();
   talking.deliver({ type: "call-reject" });
   assert.deepEqual(talking.log.sys, ["sysCallEnded"]);
+  assert.equal(talking.log.noticed, 0, "an ended call is not news");
 });
 
 test("the words are in both languages", () => {
