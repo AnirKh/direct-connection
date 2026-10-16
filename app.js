@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610150710-ba966a57";
+const APP_BUILD = "202610160552-b7973dba";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -664,9 +664,10 @@ function returnToWaitingRoom(noteKey) {
   if (dataChannel) dataChannel.onclose = null;
   endCall(false);
   closePeerConnection();
-  if (alreadyWaiting && !noteKey) return;
+  if (alreadyWaiting && !noteKey) { disarmBackGuard(); return; }
   chatScreen.classList.add("hidden");
   lobbyScreen.classList.remove("hidden");
+  disarmBackGuard();               // with the chat off screen — see leaveBtn
   document.getElementById("langSwitcher").style.display = "";
   showLobbyTab("create");
   if (roomReadyInfo) showRoomReady(roomReadyInfo);
@@ -2063,6 +2064,76 @@ document.addEventListener("pointerdown", () => {
   if (screenLockWanted && !screenLock) keepScreenOn(true);
 });
 
+/* ── The phone's Back button during a chat ──
+   To a phone, Back means "leave this page", so it closed the page and the chat
+   with it — for both people, mid-sentence. While a chat is on screen the page
+   now holds one history entry of its own, so Back lands on this page instead
+   of leaving it, and asks "Leave the chat?" (G.backPress). Leaving still works
+   — the question's Leave, or the arrow at the top — and Home or the app
+   switcher keep the chat going while another app is used.
+
+   Chrome skips a history entry a page added before the user had touched it,
+   so Back would sail past it: a page opened from an invite link and connected
+   untouched. There the entry is added at the first tap instead.
+
+   Closing the tab or the window mid-chat asks first too (beforeunload) —
+   listened for only while a chat is on, since merely listening for it can
+   keep a browser from caching the page.                                  */
+const leaveChatOverlay = document.getElementById("leaveChatOverlay");
+let backGuardArmed = false;
+
+function chatLiveNow() {
+  return G.chatIsLive({
+    chatOpen: !chatScreen.classList.contains("hidden"),
+    chatEnded: Boolean(chatMessages.querySelector(".reconnect-sys-wrap"))
+  });
+}
+
+function warnBeforeUnload(e) {
+  if (!chatLiveNow()) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+
+function armBackGuard() {
+  if (backGuardArmed) return;
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;   // at the first tap instead
+  history.pushState({ dcChat: true }, "");
+  backGuardArmed = true;
+}
+
+/** The chat is over or left: give the entry back, so Back in the lobby goes
+    where it always did. Only ever our own entry — going back past it would
+    leave the page. */
+function disarmBackGuard() {
+  leaveChatOverlay.classList.add("hidden");
+  window.removeEventListener("beforeunload", warnBeforeUnload);
+  if (!backGuardArmed) return;
+  backGuardArmed = false;
+  if (history.state && history.state.dcChat) history.back();
+}
+
+window.addEventListener("popstate", () => {
+  const action = G.backPress({
+    chatOpen: !chatScreen.classList.contains("hidden"),
+    chatEnded: Boolean(chatMessages.querySelector(".reconnect-sys-wrap")),
+    asking: !leaveChatOverlay.classList.contains("hidden")
+  });
+  if (action === "ignore") return;
+  backGuardArmed = false;                  // Back has just used our entry
+  if (action === "lobby") { leaveBtn.click(); return; }
+  armBackGuard();                          // still in the chat: hold the next Back too
+  leaveChatOverlay.classList.toggle("hidden", action === "stay");
+});
+
+document.addEventListener("pointerdown", () => {
+  if (!backGuardArmed && chatLiveNow()) armBackGuard();
+});
+
+document.getElementById("leaveChatStayBtn").onclick = () => leaveChatOverlay.classList.add("hidden");
+document.getElementById("leaveChatLeaveBtn").onclick = () => leaveBtn.click();
+leaveChatOverlay.onclick = e => { if (e.target === leaveChatOverlay) leaveChatOverlay.classList.add("hidden"); };
+
 /* ── A connection that never comes up ───────
    Some networks block direct connections, and with no relay server two such
    devices cannot reach each other at all. Both sides used to sit on
@@ -2094,6 +2165,8 @@ function clearConnectWatch() {
 function switchToChat(sessionId) {
   keepScreenOn(true);
   watchConnecting();
+  armBackGuard();
+  window.addEventListener("beforeunload", warnBeforeUnload);
   lobbyScreen.classList.add("hidden");
   chatScreen.classList.remove("hidden");
   document.getElementById("langSwitcher").style.display = "none";
@@ -2125,6 +2198,9 @@ leaveBtn.onclick = () => {
   isConnecting = false;
   chatScreen.classList.add("hidden");
   lobbyScreen.classList.remove("hidden");
+  /* After the chat is off screen, so the Back this queues finds no chat and
+     does nothing — whenever the browser gets round to it. */
+  disarmBackGuard();
   document.getElementById("langSwitcher").style.display = "";
   createInfo.textContent = "";
   lobbyStatus.replaceChildren();

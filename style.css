@@ -130,6 +130,11 @@ body {
   box-shadow: 0 0 60px rgba(0,0,0,0.55);
 }
 .modal-icon { font-size: 34px; margin-bottom: 12px; }
+.modal-actions { display: flex; gap: 10px; }
+.modal-actions button { margin-top: 0; }
+.modal .leave-chat-hint { color: var(--muted); font-size: 13.5px; line-height: 1.55; margin-bottom: 20px; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover:not(:disabled) { background: var(--danger-dark); }
 .modal h2   { margin-bottom: 10px; font-size: 19px; }
 .modal p    { color: var(--text); line-height: 1.6; margin-bottom: 22px; font-size: 14px; }
 

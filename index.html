@@ -15,9 +15,9 @@
        Install button at the bottom left is in the lobby (installOffer in
        guards.js). iPhones read the apple-* lines, since Safari takes the icon
        and title from these rather than from the manifest. -->
-  <link rel="manifest" href="manifest.webmanifest?v=202610150710-ba966a57">
-  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610150710-ba966a57">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610150710-ba966a57">
+  <link rel="manifest" href="manifest.webmanifest?v=202610160552-b7973dba">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610160552-b7973dba">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610160552-b7973dba">
   <meta name="theme-color" content="#15151a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -62,7 +62,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610150710-ba966a57"></script>
+  <script src="framebust.js?v=202610160552-b7973dba"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -79,7 +79,7 @@
         integrity="sha384-XAeMOW3g/ahgKWjRcH7Xp+LVEQ/hkKrV0zkAUTnFwlaWK1aXfd9vVufdwqr/836i"
         crossorigin="anonymous"
         referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="style.css?v=202610150710-ba966a57">
+  <link rel="stylesheet" href="style.css?v=202610160552-b7973dba">
 </head>
 <body>
 
@@ -196,6 +196,20 @@
       <i class="ti ti-download" aria-hidden="true"></i>
       <span data-i18n="installApp">Апп суулгах</span>
     </button>
+  </div>
+
+  <!-- Asked when the phone's Back button is pressed during a chat. Back means
+       "leave this page" to a phone, and used to end the chat outright. See
+       the Back-button block in app.js. -->
+  <div id="leaveChatOverlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="leaveChatTitle">
+      <h2 id="leaveChatTitle" data-i18n="leaveChatTitle">Чатаас гарах уу?</h2>
+      <p class="leave-chat-hint" data-i18n="leaveChatHint">Чат хоёр талд зэрэг дуусна. Чатаа үргэлжлүүлэн өөр апп ашиглах бол Home товч эсвэл апп солих цэсийг ашиглаарай.</p>
+      <div class="modal-actions">
+        <button id="leaveChatStayBtn" type="button" data-i18n="leaveChatStay">Үлдэх</button>
+        <button id="leaveChatLeaveBtn" type="button" class="btn-danger" data-i18n="leaveChatLeave">Гарах</button>
+      </div>
+    </div>
   </div>
 
   <!-- How to install on an iPhone or iPad, where no page can do it itself.
@@ -401,14 +415,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610150710-ba966a57"></script>
-  <script src="connstats.js?v=202610150710-ba966a57"></script>
-  <script src="guards.js?v=202610150710-ba966a57"></script>
-  <script src="i18n.js?v=202610150710-ba966a57"></script>
+  <script src="protocol.js?v=202610160552-b7973dba"></script>
+  <script src="connstats.js?v=202610160552-b7973dba"></script>
+  <script src="guards.js?v=202610160552-b7973dba"></script>
+  <script src="i18n.js?v=202610160552-b7973dba"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610150710-ba966a57"></script>
-  <script src="pake.js?v=202610150710-ba966a57"></script>
-  <script src="app.js?v=202610150710-ba966a57"></script>
+  <script src="vendor/noble.js?v=202610160552-b7973dba"></script>
+  <script src="pake.js?v=202610160552-b7973dba"></script>
+  <script src="app.js?v=202610160552-b7973dba"></script>
 </body>
 </html>

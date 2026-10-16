@@ -202,7 +202,7 @@ test("however a chat ends, there is one Back button", () => {
    Keeping the screen on, run
 ══════════════════════════════════════════ */
 
-const SCREEN = between("/* ── Keep the screen on ──", "function switchToChat(");
+const SCREEN = between("/* ── Keep the screen on ──", "/* ── The phone's Back button");
 
 function phone({ api = true, visible = true, refuse = false } = {}) {
   const listeners = {};

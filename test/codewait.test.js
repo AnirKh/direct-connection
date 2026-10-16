@@ -60,14 +60,14 @@ test("a connection is stuck only while the chat shows and the channel never open
 ══════════════════════════════════════════ */
 
 function codeHost({ isHost = true, locked = false, alreadyWaiting = false } = {}) {
-  const log = { sent: [], toasts: [], sys: [], closed: 0, ended: 0, drawn: [], tab: [], screenOn: [], leaves: 0, timers: [] };
+  const log = { sent: [], toasts: [], sys: [], closed: 0, ended: 0, drawn: [], tab: [], screenOn: [], leaves: 0, timers: [], disarmed: 0 };
   const chatScreen = { classList: classes(alreadyWaiting ? ["hidden"] : []) };
   const lobbyScreen = { classList: classes(alreadyWaiting ? [] : ["hidden"]) };
   const createInfo = { notes: [], prepend(n) { this.notes.push(n.textContent); } };
   const dataChannel = { onclose: () => log.sys.push("closed-handler-ran") };
   const api = new Function(
     "G", "t", "wsSend", "showToast", "appendSys", "endCall", "closePeerConnection", "showLobbyTab",
-    "showRoomReady", "keepScreenOn", "updateKeyVerifyUi", "pakeReset", "clearConnectWatch", "document",
+    "showRoomReady", "keepScreenOn", "updateKeyVerifyUi", "pakeReset", "clearConnectWatch", "disarmBackGuard", "document",
     "chatScreen", "lobbyScreen", "createInfo", "sendBtn", "voiceCallBtn", "videoCallBtn", "leaveBtn", "setTimeout", "start",
     `let isHost = start.isHost, currentSession = { sessionId: "word-room" }, keyAgreement = "ECDH";
      let e2eReady = false, e2eVerified = false, e2eSecureMode = false, wordMatched = true;
@@ -77,7 +77,7 @@ function codeHost({ isHost = true, locked = false, alreadyWaiting = false } = {}
      ${fn("returnToWaitingRoom")}
      return { pakeFailClosed, returnToWaitingRoom, failures: () => codeFailures, matched: () => wordMatched, channel: () => dataChannel };`
   )(G, k => k, m => log.sent.push(m), m => log.toasts.push(m), m => log.sys.push(m), () => log.ended++,
-    () => log.closed++, n => log.tab.push(n), d => log.drawn.push(d), on => log.screenOn.push(on), () => {}, () => {}, () => {},
+    () => log.closed++, n => log.tab.push(n), d => log.drawn.push(d), on => log.screenOn.push(on), () => {}, () => {}, () => {}, () => log.disarmed++,
     { getElementById: () => ({ style: {} }), createElement: () => ({ style: {}, textContent: "" }) },
     chatScreen, lobbyScreen, createInfo, {}, {}, {}, { click: () => log.leaves++ }, (f, ms) => log.timers.push(ms),
     { isHost, locked, dataChannel });
@@ -97,6 +97,7 @@ test("a wrong word: the host turns the guest away and goes back to waiting, with
   assert.equal(h.failures(), 1);
   assert.deepEqual(h.log.screenOn, [true], "still hosting: the screen stays on");
   assert.deepEqual(h.log.toasts, [], "the note says it; no toast on top");
+  assert.equal(h.log.disarmed, 1, "the Back button's hold on the chat is let go");
 });
 
 test("our own closing does not run the channel's close handler", () => {

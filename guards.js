@@ -479,6 +479,37 @@
   }
 
   /* ══════════════════════════════════════════
+     The phone's Back button during a chat
+  ══════════════════════════════════════════ */
+
+  /** A chat is on screen and has not ended — the Back-to-lobby button is what
+      an ended chat shows. */
+  function chatIsLive(o) {
+    return Boolean(o) && o.chatOpen === true && o.chatEnded !== true;
+  }
+
+  /**
+   * The phone's Back button (or the swipe that means the same) was pressed.
+   * What does it do?
+   *
+   *   "ignore"  no chat on screen: it was ordinary navigation
+   *   "lobby"   the chat has ended already: just go back to the lobby
+   *   "stay"    the "Leave the chat?" question is up: Back answers it — stay
+   *   "ask"     a chat that is on: ask before ending it
+   *
+   * To a phone, Back means "leave this page", so it used to close the page and
+   * the chat with it — for both people, in the middle of a sentence.
+   *
+   * @param {{chatOpen: boolean, chatEnded: boolean, asking: boolean}} o
+   */
+  function backPress(o) {
+    if (!o || o.chatOpen !== true) return "ignore";
+    if (o.chatEnded === true) return "lobby";
+    if (o.asking === true) return "stay";
+    return "ask";
+  }
+
+  /* ══════════════════════════════════════════
      A connection that never comes up
   ══════════════════════════════════════════ */
 
@@ -694,7 +725,7 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, callPauseNote,
-    waitingRoomLost, isOwnRoom, connectStalled,
+    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,
