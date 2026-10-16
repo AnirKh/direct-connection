@@ -64,7 +64,7 @@ async function client() {
 
 test.before(async () => {
   server = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
-    env: { ...process.env, PORT: String(PORT), HEARTBEAT_MS: "1000" },
+    env: { ...process.env, PORT: String(PORT), HEARTBEAT_MS: "1000", HOST_AWAY_MS: "1500" },
     stdio: "ignore"
   });
   // wait for the port to accept connections
@@ -903,4 +903,146 @@ test("a third upload while two are being read is turned away, before its body is
   await sleep(400);
   const after = await post('{"message":"hi"}', { "Content-Type": "application/json", "X-DC-Client": "1", "X-Forwarded-For": "198.51.100.74" });
   assert.notEqual(after.status, 503, "the slots were let go when those uploads ended");
+});
+
+/* ══════════════════════════════════════════
+   A host whose link drops — the room waits
+
+   To send the link, the host switches to a messaging app, and the phone cuts
+   the page's link to the server. The room used to be deleted on the spot, so
+   the link was dead by the time the friend tapped it. A waiting room is now
+   kept for HOST_AWAY_MS (1.5 s here, ten minutes for real), and the host takes
+   it back with its host key.
+══════════════════════════════════════════ */
+
+async function roomThenDrop(name, extra = {}) {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: name, ...extra });
+  const created = await waitFor(host, "session-created");
+  assert.ok(created, "setup: room not created");
+  host.terminate();                        // the link drops: no leave, no goodbye
+  await sleep(200);
+  return created;
+}
+
+test("a new room comes with a host key, which is nothing like its token and is in no list", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "key-room" });
+  const created = await waitFor(host, "session-created");
+  assert.ok(typeof created.hostKey === "string" && created.hostKey.length >= 20);
+  assert.notEqual(created.hostKey, created.token, "the link carries the token; the host key must be another secret");
+  const probe = await client();
+  probe.send_({ type: "list-sessions" });
+  const list = await waitFor(probe, "session-list");
+  assert.ok(!JSON.stringify(list).includes(created.hostKey));
+});
+
+test("the host's link dropping keeps the room; its host key takes it back, with the same PIN and token", async () => {
+  const created = await roomThenDrop("away-reclaim");
+  assert.ok((await listedNames()).includes("away-reclaim"), "still listed while its host is away");
+
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-reclaim", hostKey: created.hostKey });
+  const reclaimed = await waitFor(back, "session-reclaimed");
+  assert.ok(reclaimed, "taken back");
+  assert.equal(reclaimed.pin, created.pin);
+  assert.equal(reclaimed.token, created.token, "the link already sent still works");
+  assert.equal(reclaimed.guestWaiting, false);
+});
+
+test("a wrong host key takes nothing", async () => {
+  const created = await roomThenDrop("away-wrong-key");
+  const thief = await client();
+  for (const hostKey of ["nope", created.token, undefined, null, 7]) {
+    thief.inbox.length = 0;
+    thief.send_({ type: "reclaim-session", sessionId: "away-wrong-key", hostKey });
+    assert.ok(await waitFor(thief, "reclaim-failed", 1500), `${JSON.stringify(hostKey)} must not take the room`);
+  }
+  assert.ok(!thief.inbox.some(m => m.type === "session-reclaimed"));
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-wrong-key", hostKey: created.hostKey });
+  assert.ok(await waitFor(back, "session-reclaimed"), "the real host still can");
+});
+
+test("a guest who arrives while the host is away gets in and is told to wait; the host's return connects them", async () => {
+  const created = await roomThenDrop("away-guest", { open: true });
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "away-guest" });
+  const joined = await waitFor(guest, "session-joined");
+  assert.ok(joined, "admitted");
+  assert.equal(joined.hostAway, true, "and told the host is away");
+
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-guest", hostKey: created.hostKey });
+  const reclaimed = await waitFor(back, "session-reclaimed");
+  assert.equal(reclaimed.guestWaiting, true);
+  assert.ok(await waitFor(back, "guest-joined"), "the host hears of the guest on returning");
+  assert.ok(await waitFor(guest, "host-back"), "the guest hears the host is back");
+});
+
+test("a guest with a PIN who arrives while the host is away is told too", async () => {
+  const created = await roomThenDrop("away-pin-guest");
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "away-pin-guest", pin: created.pin });
+  const joined = await waitFor(guest, "session-joined");
+  assert.equal(joined && joined.hostAway, true);
+});
+
+test("a guest leaving a room whose host is away frees the seat and keeps the room", async () => {
+  const created = await roomThenDrop("away-guest-leaves", { open: true });
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "away-guest-leaves" });
+  assert.ok(await waitFor(guest, "session-joined"));
+  guest.send_({ type: "leave-session" });
+  await sleep(200);
+  assert.ok((await listedNames()).includes("away-guest-leaves"));
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-guest-leaves", hostKey: created.hostKey });
+  const reclaimed = await waitFor(back, "session-reclaimed");
+  assert.equal(reclaimed && reclaimed.guestWaiting, false);
+});
+
+test("leaving on purpose still closes the room at once", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "away-leaves" });
+  const created = await waitFor(host, "session-created");
+  host.send_({ type: "leave-session" });
+  await sleep(200);
+  assert.ok(!(await listedNames()).includes("away-leaves"));
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-leaves", hostKey: created.hostKey });
+  assert.ok(await waitFor(back, "reclaim-failed"));
+});
+
+test("a host who does not come back in time loses the room: not listed, not joinable, not taken back", async () => {
+  const created = await roomThenDrop("away-too-long");
+  await sleep(1800);                       // past HOST_AWAY_MS
+  assert.ok(!(await listedNames()).includes("away-too-long"));
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "away-too-long" });
+  const refused = await waitFor(guest, "pin-error");
+  assert.equal(refused && refused.code, "not-found");
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-too-long", hostKey: created.hostKey });
+  assert.ok(await waitFor(back, "reclaim-failed"));
+});
+
+test("a host whose link drops mid-chat still ends the room, as before", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "away-mid-chat" });
+  const created = await waitFor(host, "session-created");
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "away-mid-chat", pin: created.pin });
+  assert.ok(await waitFor(guest, "session-joined"));
+  host.terminate();
+  assert.ok(await waitFor(guest, "peer-disconnected"), "the guest is told; the chat itself decides whether it goes on");
+});
+
+test("a host who comes back too late cannot take the room back, even if nobody else touched it", async () => {
+  const created = await roomThenDrop("away-late-reclaim");
+  await sleep(1800);                       // past HOST_AWAY_MS, nothing else asks about the room
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "away-late-reclaim", hostKey: created.hostKey });
+  assert.ok(await waitFor(back, "reclaim-failed"), "a room kept too long is gone, whoever asks first");
+  assert.ok(!back.inbox.some(m => m.type === "session-reclaimed"));
 });

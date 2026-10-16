@@ -10,6 +10,8 @@
   - (no call relay: call signalling travels end-to-end encrypted, peer to peer)
   - Peer disconnect notification
   - A code room outlives its guest: the seat is freed and the host told
+  - A waiting room outlives its host's dropped link for HOST_AWAY_MS; the host
+    takes it back with its host key (reclaim-session)
   - At most UPLOADS_AT_ONCE leave-a-message uploads read at a time
   - Session cleanup on disconnect
   - WebSocket heartbeat (30s ping/pong) drops clients that vanished silently
@@ -32,6 +34,8 @@
     ALLOWED_ORIGINS       Comma-separated browser origins (must include your static site origin)
     PUBLIC_SESSION_LIST   Set to "0" to never expose other users' room names in the lobby
     HEARTBEAT_MS          Ping sweep interval, 1000–300000 (default 30000)
+    HOST_AWAY_MS          How long a waiting room is kept for a host whose link
+                          dropped, 1000–3600000 (default 600000)
 */
 
 "use strict";
@@ -476,6 +480,34 @@ setInterval(() => {
 ══════════════════════════════════════════════ */
 
 const sessions = new Map();
+
+/* ── A host whose link drops ─────────────────
+   To send the link, the host switches to a messaging app; the phone pauses
+   the page, and an iPhone cuts its link to the server almost at once. The room
+   used to be deleted on the spot, so the link the friend received was dead by
+   the time they tapped it. A room still waiting for its guest is now kept for
+   HOST_AWAY_MS with no host, and the host takes it back on returning by
+   presenting its host key — a secret only the host's page was given, never put
+   in a link (reclaim-session). Leaving on purpose still closes it at once. */
+const HOST_AWAY_MS = (() => {
+  const parsed = parseInt(process.env.HOST_AWAY_MS || "", 10);
+  if (Number.isFinite(parsed) && parsed >= 1000 && parsed <= 3_600_000) return parsed;
+  return 10 * 60 * 1000;
+})();
+
+/** The host's link dropped and it has not come back in time. */
+function hostAwayExpired(session, now = Date.now()) {
+  return !session.host && now - session.hostAwaySince > HOST_AWAY_MS;
+}
+
+/** Deletes a room, telling its guest if there is one. */
+function dropSession(sessionId, session) {
+  if (session.guest && session.guest.readyState === WebSocket.OPEN) {
+    session.guest.send(JSON.stringify({ type: "peer-disconnected", sessionId }));
+  }
+  sessions.delete(sessionId);
+  console.log(`Session ${sessionLogId(sessionId)} removed`);
+}
 /** Unknown message types logged per socket before going quiet. */
 const UNKNOWN_TYPE_LOG_MAX = 5;
 const SESSION_ID_MAX = 80;
@@ -501,7 +533,7 @@ function ipLogId(ip) {
 function publicSessions() {
   if (!PUBLIC_SESSION_LIST) return [];
   return Array.from(sessions)
-    .filter(([, s]) => !s.guest)
+    .filter(([, s]) => !s.guest && !hostAwayExpired(s))
     /* `open` lets the lobby show which rooms can be entered without a PIN, and
        skip the PIN dialog for them. It gives nothing away: the server answers
        the same question for anyone who tries the door. */
@@ -571,8 +603,24 @@ function broadcastSessionList() {
 
 /** Removes every room this socket is part of and tells whoever is left in it.
     Also what enforces one room per socket: creating or joining calls it first. */
-function cleanupClient(ws) {
+function cleanupClient(ws, { dropped = false } = {}) {
   for (const [sessionId, session] of sessions) {
+    /* The host's link dropped — not a leave — while the room still waits for
+       its guest: keep it, for the host to take back (see HOST_AWAY_MS). */
+    if (dropped && session.host === ws && !session.guest) {
+      session.host = null;
+      session.hostAwaySince = Date.now();
+      console.log(`Session ${sessionLogId(sessionId)} host away`);
+      continue;
+    }
+    /* A guest leaving a room whose host is away: nobody to tell, and the room
+       is still the host's — free the seat. */
+    if (session.guest === ws && !session.host) {
+      session.guest = null;
+      session.waitingSince = Date.now();
+      broadcastSessionList();
+      continue;
+    }
     /* A code room outlives its guest. Admission to one is first-come — the
        word is proven afterwards, between the two browsers — so anyone can take
        the seat, and leaving used to delete the room: one wrong guess, or one
@@ -632,8 +680,8 @@ wss.on("connection", (ws, req) => {
      moment a page left open finds out it is old. */
   if (CLIENT_BUILD) ws.send(JSON.stringify({ type: "hello", build: CLIENT_BUILD }));
 
-  ws.on("close", () => { console.log(`Client disconnected ${ipLogId(clientIp)}`); cleanupClient(ws); });
-  ws.on("error", (e) => { console.error("WS error:", e); cleanupClient(ws); });
+  ws.on("close", () => { console.log(`Client disconnected ${ipLogId(clientIp)}`); cleanupClient(ws, { dropped: true }); });
+  ws.on("error", (e) => { console.error("WS error:", e); cleanupClient(ws, { dropped: true }); });
 
   /* Nothing catches what a "message" listener throws: it becomes an uncaught
      exception and Node ends the process, taking every room and every call with
@@ -706,14 +754,15 @@ wss.on("connection", (ws, req) => {
         const open = kind === "open" || kind === "code";   // admission: first come
         const pin  = kind === "pin" ? generatePin() : null;
         const token = generateToken();
+        const hostKey = generateToken();     // the host's alone: never in a link
         sessions.set(data.sessionId, {
           host: ws, guest: null, offer: null,
-          kind, open, pin, token, createdAt: Date.now(),
+          kind, open, pin, token, hostKey, createdAt: Date.now(), hostAwaySince: 0,
           joinLockedUntil: 0,
           failedJoinWindowStart: 0,
           failedJoinCount: 0
         });
-        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token, open, kind }));
+        ws.send(JSON.stringify({ type: "session-created", sessionId: data.sessionId, pin, token, hostKey, open, kind }));
         broadcastSessionList();
         console.log(`Session ${sessionLogId(data.sessionId)} created`);
         break;
@@ -724,6 +773,10 @@ wss.on("connection", (ws, req) => {
         const ip = ws.clientIp;
 
         /* 1. Session lookup — unknown rooms do not affect per-IP join counters */
+        {
+          const away = sessions.get(data.sessionId);
+          if (away && hostAwayExpired(away)) dropSession(data.sessionId, away);
+        }
         const session = sessions.get(data.sessionId);
         if (!session) {
           console.log(`Session lookup failed from ${ipLogId(ip)}`);
@@ -839,8 +892,11 @@ wss.on("connection", (ws, req) => {
         session.failedJoinCount = 0;
         session.failedJoinWindowStart = 0;
         session.guest = ws;
-        ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId }));
-        if (session.host?.readyState === WebSocket.OPEN) {
+        /* A host who is away hears of the guest when it takes the room back;
+           the guest is told to wait meanwhile. */
+        const hostHere = session.host?.readyState === WebSocket.OPEN;
+        ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId, hostAway: !hostHere }));
+        if (hostHere) {
           session.host.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId }));
         }
         broadcastSessionList();
@@ -870,6 +926,35 @@ wss.on("connection", (ws, req) => {
          server cannot read or inject them. Do not add one back. */
 
       case "leave-session": cleanupClient(ws); break;
+
+      /* The host, back after its link dropped, taking its room again. The host
+         key proves it: a secret this server gave only the host's page, never in
+         a link, so a guest who has the link cannot take the room. A key that
+         does not match, or a room no longer kept, is refused alike. */
+      case "reclaim-session": {
+        const found = sessions.get(data.sessionId);
+        if (found && hostAwayExpired(found)) dropSession(data.sessionId, found);
+        const session = sessions.get(data.sessionId);
+        if (!session || !secretMatches(session.hostKey, data.hostKey)) {
+          ws.send(JSON.stringify({ type: "reclaim-failed", sessionId: data.sessionId }));
+          break;
+        }
+        if (session.host !== ws) cleanupClient(ws);    // one room per socket
+        session.host = ws;
+        session.hostAwaySince = 0;
+        session.waitingSince = Date.now();            // a fresh ten minutes to find a guest
+        ws.send(JSON.stringify({
+          type: "session-reclaimed", sessionId: data.sessionId,
+          pin: session.pin, token: session.token, kind: session.kind, open: session.open,
+          guestWaiting: Boolean(session.guest)
+        }));
+        if (session.guest?.readyState === WebSocket.OPEN) {
+          session.guest.send(JSON.stringify({ type: "host-back", sessionId: data.sessionId }));
+          ws.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId }));
+        }
+        broadcastSessionList();
+        break;
+      }
 
       /* The host of a code room turning away a guest whose word did not match,
          so the seat is free for the next attempt — or the right one. Only the
@@ -939,14 +1024,17 @@ setInterval(() => {
   const now = Date.now();
   let pruned = 0;
   for (const [id, s] of sessions) {
-    /* Host socket already gone — the room can never be used again, and its name
-       would stay reserved. Normally cleanupClient() has handled this on "close";
-       this is a backstop for a close event that never fired. */
-    if (!s.host || s.host.readyState !== WebSocket.OPEN) {
-      if (s.guest?.readyState === WebSocket.OPEN) {
-        s.guest.send(JSON.stringify({ type: "peer-disconnected", sessionId: id }));
-      }
-      sessions.delete(id);
+    /* A host whose link dropped, kept waiting for: gone once its time is up. */
+    if (!s.host) {
+      if (hostAwayExpired(s, now)) { dropSession(id, s); pruned++; }
+      continue;
+    }
+    /* Host socket already gone but "close" never fired — a backstop. Treated
+       as the drop it is: a waiting room is kept for the host, one with a
+       guest in it is over. */
+    if (s.host.readyState !== WebSocket.OPEN) {
+      if (!s.guest) { s.host = null; s.hostAwaySince = now; continue; }
+      dropSession(id, s);
       pruned++;
       continue;
     }

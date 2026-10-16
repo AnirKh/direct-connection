@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610160552-b7973dba";
+const APP_BUILD = "202610160611-9c0938e7";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -432,6 +432,9 @@ let keyAgreement   = "ECDH";  // how the live key was agreed — for the shield 
    cannot rate-limit it. See guards.js codeAttemptState. */
 let wordMatched    = false;   // this channel's SPAKE2 succeeded: a real chat, not an attempt
 let roomReadyInfo  = null;    // what session-created said, to draw the ready panel again
+let hostKey        = null;    // the server's proof that this page is the room's host — never in a link
+let reclaimPending = false;   // our link dropped while hosting a waiting room: take it back on reconnecting
+let reclaimRedraw  = false;   // and the panel is not on screen — this page was opened fresh
 let codeFailures   = 0;
 let codeLockedUntil = 0;
 
@@ -678,6 +681,7 @@ function returnToWaitingRoom(noteKey) {
     createInfo.prepend(note);
   }
   keepScreenOn(true);              // still hosting: a lock now would take the room
+  saveHostRoom();
 }
 
 /** Refuse to open the channel. Better a dead chat than a silently readable one. */
@@ -1051,6 +1055,8 @@ function connectWebSocket() {
     requestSessionList();
     checkAutoJoin();
     sendPendingCreate();
+    restoreHostRoom();
+    sendReclaim();
     if (!_keepAliveInterval) {
       _keepAliveInterval = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1066,7 +1072,12 @@ function connectWebSocket() {
        carries on directly, but can no longer be repaired through the server. */
     if (pc) serverRoomGone = true;
     /* A room still waiting for its guest is simply gone: say so. */
-    if (G.waitingRoomLost({ isHost, hasSession: Boolean(currentSession), chatStarted: Boolean(pc) })) loseWaitingRoom();
+    if (G.waitingRoomLost({ isHost, hasSession: Boolean(currentSession), chatStarted: Boolean(pc) })) {
+      /* The server keeps it for us. An older server, which gave no host key,
+         does not: say so, as before. */
+      if (hostKey) awaitReclaim();
+      else loseWaitingRoom();
+    }
     /* If the socket died between sending the join and hearing back, the answer
        is never coming. Let the reconnect send it again rather than leaving the
        lobby disabled behind "Joining…" forever. */
@@ -1324,6 +1335,9 @@ function createRoom(kind) {
    has. A PIN room gets a new PIN; there is no keeping the old one.        */
 function loseWaitingRoom() {
   const lost = { sessionId: currentSession.sessionId, kind: roomKind };
+  forgetHostRoom();
+  hostKey = null;
+  reclaimPending = false;
   keepScreenOn(false);
   currentSession = null;
   roomSecret = null;
@@ -1341,6 +1355,75 @@ function loseWaitingRoom() {
   setCreateButtons(false);
   if (activeLobbyTab !== "create") showToast(`⚠️ ${t("roomLost")}`, "warn");
   renderSessionList(_lastSessionList);
+}
+
+/* ── Taking a waiting room back ─────────────
+   To send the link, the host switches to a messaging app; the phone pauses
+   the page, and an iPhone cuts its link to the server at once. The server
+   used to delete the room with the link, so the link the friend received was
+   dead by the time they tapped it. Now the server keeps a waiting room for a
+   while, and this page takes it back on reconnecting by presenting its host
+   key (reclaim-session) — the same room, the same PIN, the same link.
+
+   The phone may also close the page in the background. The room is therefore
+   kept in sessionStorage too, for this tab only, and a page opened fresh takes
+   it back from there (G.restorableHostRoom). It holds the room's secret and,
+   for a code room, its word, so it lives no longer than the room: forgotten
+   when the chat starts, the room ends, or the host leaves.             */
+const HOST_ROOM_KEY = "dc-host-room";
+let hostRoomRestoreTried = false;
+
+function saveHostRoom() {
+  if (!isHost || !currentSession || !hostKey || !roomReadyInfo) return;
+  try {
+    sessionStorage.setItem(HOST_ROOM_KEY, JSON.stringify({
+      v: 1, sessionId: currentSession.sessionId, hostKey, token: currentSession.token,
+      pin: roomKind === "pin" ? roomReadyInfo.pin : null, kind: roomKind,
+      roomSecret: roomSecret || null, word: roomKind === "code" ? pakeCode : null,
+      savedAt: Date.now()
+    }));
+  } catch (_) { /* storage off: a reconnect can still take the room back, a reload cannot */ }
+}
+
+function forgetHostRoom() {
+  try { sessionStorage.removeItem(HOST_ROOM_KEY); } catch (_) {}
+}
+
+/** Our link dropped while hosting a waiting room: the PIN and link stay on
+    screen — they still work — and the room is taken back on reconnecting. */
+function awaitReclaim() {
+  reclaimPending = true;
+  const note = document.createElement("span");
+  note.style.color = "var(--orange)";
+  note.textContent = `⏳ ${t("reconnectingRoom")}`;
+  lobbyStatus.replaceChildren(note);
+}
+
+function sendReclaim() {
+  if (!reclaimPending || !hostKey || !currentSession) return;
+  wsSend({ type: "reclaim-session", sessionId: currentSession.sessionId, hostKey });
+}
+
+/** Opened fresh — a reload, or a page the phone had closed — while this tab
+    was hosting a waiting room: take it up again. Once, at the first connection. */
+function restoreHostRoom() {
+  if (hostRoomRestoreTried) return;
+  hostRoomRestoreTried = true;
+  if (_isAutoJoin || currentSession) return;
+  let stored = null;
+  try { stored = JSON.parse(sessionStorage.getItem(HOST_ROOM_KEY) || "null"); } catch (_) {}
+  const room = G.restorableHostRoom(stored, Date.now());
+  if (!room) { forgetHostRoom(); return; }
+  isHost = true;
+  currentSession = { sessionId: room.sessionId, token: room.token };
+  roomKind = room.kind;
+  hostKey = room.hostKey;
+  roomSecret = room.roomSecret;
+  pakeCode = room.word;
+  roomReadyInfo = { sessionId: room.sessionId, pin: room.pin, token: room.token, kind: room.kind, open: room.kind === "open" };
+  reclaimRedraw = true;
+  showLobbyTab("create");
+  awaitReclaim();
 }
 
 function recreateRoom(lost) {
@@ -1786,6 +1869,8 @@ async function handleSignaling(data) {
     case "session-created": {
       pendingCreate = null;
       isHost = true;
+      hostKey = typeof data.hostKey === "string" ? data.hostKey : null;
+      reclaimPending = false;
       roomKind = data.kind === "code" ? "code" : (data.open === true ? "open" : "pin");
       currentSession = { sessionId: data.sessionId, token: data.token };
       /* Minted here, in the browser — the server never learns it. */
@@ -1800,6 +1885,7 @@ async function handleSignaling(data) {
       renderSessionList(_lastSessionList);
       roomReadyInfo = data;
       showRoomReady(data);
+      saveHostRoom();
 
       setCreateButtons(false);
       isConnecting = false;
@@ -1819,10 +1905,46 @@ async function handleSignaling(data) {
       pinOverlay.classList.add("hidden");
       switchToChat(data.sessionId);
       createPeerConnection();
+      /* The host stepped away — off sending this very link, most likely. Wait
+         for them rather than count down to "could not connect". */
+      if (data.hostAway === true) {
+        clearConnectWatch();
+        appendSys(t("waitingForHost"));
+      }
+      break;
+
+    case "host-back":
+      if (!roomEventIsOurs(data) || isHost) break;
+      appendSys(t("hostBack"));
+      watchConnecting();
+      break;
+
+    case "session-reclaimed":
+      /* Our room, taken back: the same PIN, the same link. */
+      if (!roomEventIsOurs(data) || !isHost) break;
+      reclaimPending = false;
+      lobbyStatus.replaceChildren();
+      currentSession.token = data.token;
+      roomReadyInfo = { ...roomReadyInfo, sessionId: data.sessionId, pin: data.pin, token: data.token, kind: data.kind, open: data.open };
+      if (reclaimRedraw) { reclaimRedraw = false; showRoomReady(roomReadyInfo); }
+      keepScreenOn(true);
+      saveHostRoom();
+      renderSessionList(_lastSessionList);
+      break;
+
+    case "reclaim-failed":
+      /* Gone after all — kept too long, or the server restarted. */
+      if (!roomEventIsOurs(data)) break;
+      reclaimPending = false;
+      reclaimRedraw = false;
+      lobbyStatus.replaceChildren();
+      forgetHostRoom();
+      if (isHost && currentSession) loseWaitingRoom();
       break;
 
     case "guest-joined":
       if (!roomEventIsOurs(data)) break;
+      forgetHostRoom();
       switchToChat(currentSession.sessionId);
       createPeerConnection();
       dataChannel = pc.createDataChannel("chat");
@@ -1932,6 +2054,8 @@ async function handleSignaling(data) {
          no longer existed — the host waited on it with nothing to say so. */
       if (!roomEventIsOurs(data)) break;
       keepScreenOn(false);
+      forgetHostRoom();
+      hostKey = null;
       currentSession = null;
       roomSecret = null;
       isHost = false;
@@ -2181,6 +2305,9 @@ function switchToChat(sessionId) {
 leaveBtn.onclick = () => {
   keepScreenOn(false);
   clearConnectWatch();
+  forgetHostRoom();
+  hostKey = null;
+  reclaimPending = false;
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();

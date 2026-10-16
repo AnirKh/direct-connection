@@ -67,7 +67,7 @@ test("a room is yours only if you are hosting that very room", () => {
 ══════════════════════════════════════════ */
 
 function lobby({ linkUp = true, tab = "create", hosting = { sessionId: "bat-room", kind: "pin" }, word = null } = {}) {
-  const log = { sent: [], toasts: [], screenOn: [], lists: 0, chooseWord: 0 };
+  const log = { sent: [], toasts: [], screenOn: [], lists: 0, chooseWord: 0, forgot: 0 };
   const node = tag => ({ tag, textContent: "", className: "", style: {}, children: [], onclick: null,
                          replaceChildren(...c) { this.children = c; } });
   const createInfo = node("div");
@@ -75,12 +75,12 @@ function lobby({ linkUp = true, tab = "create", hosting = { sessionId: "bat-room
   const ws = { readyState: linkUp ? 1 : 0 };
   const api = new Function(
     "G", "t", "WebSocket", "ws", "document", "createInfo", "sessionIdInput", "wsSend", "showToast",
-    "setCreateButtons", "keepScreenOn", "renderSessionList", "openChooseCode", "log", "start",
+    "setCreateButtons", "keepScreenOn", "renderSessionList", "openChooseCode", "forgetHostRoom", "log", "start",
     `let currentSession = start.hosting ? { sessionId: start.hosting.sessionId, token: "t" } : null;
      let roomKind = start.hosting ? start.hosting.kind : "pin";
      let isHost = Boolean(start.hosting), isConnecting = false, roomSecret = "s";
      let pakeCode = start.word, activeLobbyTab = start.tab, _lastSessionList = [];
-     let pendingCreate = null;
+     let pendingCreate = null, hostKey = "host-key", reclaimPending = true;
      ${fn("sendPendingCreate")}
      ${fn("createRoom")}
      ${fn("loseWaitingRoom")}
@@ -90,7 +90,7 @@ function lobby({ linkUp = true, tab = "create", hosting = { sessionId: "bat-room
   )(G, k => I18N.en[k], { OPEN: 1 }, ws, { createElement: node }, createInfo, input,
     m => { if (ws.readyState === 1) log.sent.push(m); },
     m => log.toasts.push(m), () => {}, on => log.screenOn.push(on), () => log.lists++,
-    () => log.chooseWord++, log, { hosting, tab, word });
+    () => log.chooseWord++, () => log.forgot++, log, { hosting, tab, word });
   const button = () => createInfo.children.find(c => c.tag === "button");
   return { ...api, log, ws, createInfo, input, button, linkUp: () => { ws.readyState = 1; api.sendPendingCreate(); } };
 }
@@ -106,6 +106,7 @@ test("a waiting room lost with the link: the host is told, and can make it again
   assert.equal(s.roomSecret, null, "the old link's secret is dropped with it");
   assert.deepEqual(l.log.screenOn, [false], "nothing to keep the screen on for");
   assert.equal(l.log.lists, 1, "the list no longer calls it yours");
+  assert.equal(l.log.forgot, 1, "nor does this tab keep it, to take back after a reload");
 });
 
 test("on another tab the host is told by a toast too", () => {
@@ -170,11 +171,13 @@ test("a create made while the link is down is kept, and sent once it is up", () 
    The wiring
 ══════════════════════════════════════════ */
 
-test("the link dropping loses a waiting room; the link returning sends a waiting create", () => {
+test("the link dropping holds a waiting room for taking back; the link returning sends a waiting create and takes it", () => {
   const onclose = between("  ws.onclose   = () => {", "  ws.onerror");
-  assert.match(onclose, /if \(G\.waitingRoomLost\(\{ isHost, hasSession: Boolean\(currentSession\), chatStarted: Boolean\(pc\) \}\)\) loseWaitingRoom\(\);/);
+  assert.match(onclose, /if \(G\.waitingRoomLost\(\{ isHost, hasSession: Boolean\(currentSession\), chatStarted: Boolean\(pc\) \}\)\) \{/);
+  assert.match(onclose, /if \(hostKey\) awaitReclaim\(\);\s*\n\s*else loseWaitingRoom\(\);/,
+    "kept for taking back — or, from a server that gave no host key, said to be lost as before");
   const onopen = between("  ws.onopen    = () => {", "  ws.onclose");
-  assert.match(onopen, /sendPendingCreate\(\);/);
+  assert.match(onopen, /sendPendingCreate\(\);\s*\n\s*restoreHostRoom\(\);\s*\n\s*sendReclaim\(\);/);
 });
 
 test("an answer — the room made, or refused — ends the wait", () => {

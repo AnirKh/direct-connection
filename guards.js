@@ -533,19 +533,45 @@
   ══════════════════════════════════════════ */
 
   /**
-   * The link to the server has dropped. Was a room lost with it — one this
+   * The link to the server has dropped. Was it holding a room — one this
    * browser made and is still waiting in for its guest?
    *
-   * The server drops a socket's room when the socket goes, and it cannot tell
-   * the host: the host's socket is the one that went. The host kept showing
-   * the PIN and the link for a room that no longer existed, and whoever used
-   * them was told "not found". Once the chat has started the room is no
-   * longer needed — the chat runs directly — so only a waiting room counts.
+   * The server keeps such a room for a while and the host takes it back on
+   * reconnecting (reclaim-session), so the PIN and the link already sent
+   * still work. It used to be deleted with the socket, and the host kept
+   * showing a PIN and a link for a room that no longer existed. Once the chat
+   * has started the room is no longer needed — the chat runs directly — so
+   * only a waiting room counts.
    *
    * @param {{isHost: boolean, hasSession: boolean, chatStarted: boolean}} o
    */
   function waitingRoomLost(o) {
     return Boolean(o) && o.isHost === true && o.hasSession === true && o.chatStarted !== true;
+  }
+
+  /** How long a page keeps the room it hosts, for taking back after a reload.
+      A little past the server's own wait, so the server is the one to say no. */
+  const HOST_ROOM_MAX_AGE_MS = 15 * 60 * 1000;
+
+  /**
+   * A waiting room this tab was hosting, as it was saved to sessionStorage —
+   * usable to take the room back after a reload? The phone may close a page
+   * in the background while its owner is off sending the link; opened again,
+   * the page finds its room here. Only a well-formed, recent record counts;
+   * anything else is thrown away rather than half-believed.
+   *
+   * @returns {object|null} the room, or null
+   */
+  function restorableHostRoom(stored, now) {
+    if (!stored || typeof stored !== "object" || stored.v !== 1) return null;
+    const { sessionId, hostKey, token, pin, kind, roomSecret, word, savedAt } = stored;
+    for (const s of [sessionId, hostKey, token]) if (typeof s !== "string" || !s) return null;
+    if (kind !== "pin" && kind !== "open" && kind !== "code") return null;
+    if (kind === "pin" ? !(typeof pin === "string" && /^\d{6}$/.test(pin)) : pin !== null) return null;
+    if (roomSecret !== null && (typeof roomSecret !== "string" || !roomSecret)) return null;
+    if (kind === "code" ? !(typeof word === "string" && word) : word !== null) return null;
+    if (!Number.isFinite(savedAt) || savedAt > now || now - savedAt > HOST_ROOM_MAX_AGE_MS) return null;
+    return { sessionId, hostKey, token, pin, kind, roomSecret, word, savedAt };
   }
 
   /**
@@ -726,6 +752,7 @@
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, callPauseNote,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
+    HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     shouldRetryAutoJoin, joinRefusalTarget,
