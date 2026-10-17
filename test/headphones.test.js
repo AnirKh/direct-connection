@@ -174,6 +174,17 @@ test("muted stays muted", async () => {
   assert.equal(c.now().localStream.getAudioTracks()[0].enabled, false);
 });
 
+test("a device change while the call is still setting up is not headphones, and opens nothing", async () => {
+  /* Reported: a laptop heard the phone but never saw it. The list used to be
+     compared with the last call's — or with nothing — until the new call had
+     noted its own, so a phone reporting a change as its camera and microphone
+     started had the call's devices opened again mid-setup. */
+  const c = call({ seen: null });
+  await c.followAudioDevice();
+  assert.equal(c.log.asked.length, 0);
+  assert.equal(c.now().audioInputsSeen, null, "and nothing is noted from it either");
+});
+
 test("a change that is only a camera leaves the microphone alone", async () => {
   const c = call({ devices: [PHONE_MIC, CAMERA, { kind: "videoinput", deviceId: "v2", label: "Back Camera" }] });
   await c.followAudioDevice();
@@ -290,6 +301,12 @@ test("a device change mid-call is followed, once it settles; each call notes wha
   const attach = grab(/^async function attachCallMedia\([^)]*\)\s*\{[\s\S]*?^\}/m, "attachCallMedia");
   assert.ok(attach.lastIndexOf("noteAudioInputs()") > attach.lastIndexOf("attachCallTrack("),
     "noted once the call's own microphone is open, so the list includes it");
+  assert.ok(attach.indexOf("audioInputsSeen = null;") > -1 && attach.indexOf("audioInputsSeen = null;") < attach.indexOf("getUserMedia("),
+    "forgotten before the call's devices start, so their starting is not taken for headphones");
+  assert.match(grab(/^function stopCallMedia\([^)]*\)\s*\{[\s\S]*?^\}/m, "stopCallMedia"), /audioInputsSeen = null;/,
+    "and between calls, so no call is measured against the last one's");
+  assert.match(grab(/^function noteAudioInputs\(\)\s*\{[\s\S]*?^\}/m, "noteAudioInputs"), /if \(callPc === pc && inCall\) audioInputsSeen = list;/,
+    "a list that arrives after its call has gone is not kept for the next");
 });
 
 test("the loudspeaker button restarts as a call starts; a call offers it once its devices are in; ending one hides it", () => {

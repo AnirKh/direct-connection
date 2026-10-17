@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171148-73223703";
+const APP_BUILD = "202610171216-7e593204";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3589,6 +3589,8 @@ function callVideo() {
 async function attachCallMedia(withVideo) {
   stopLocalCallMedia();
   callMediaRestarts = 0;
+  audioInputsSeen = null;               // device changes while this sets up are not headphones
+  clearTimeout(audioChangeTimer);
   cameraFacing = "user";                // every call starts on the front camera
   showCameraFacing();
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -4010,6 +4012,7 @@ function stopCallMedia(clearOverlay = true) {
   speakerBtn.classList.add("hidden");
   sharingScreen = false;                    // the screen's track went with the rest
   updateShareBtn();
+  audioInputsSeen = null;                   // the next call notes its own
   cameraFacing = "user";
   showCameraFacing();
   if (clearOverlay) {
@@ -4278,7 +4281,14 @@ shareBtn.onclick = () => (sharingScreen ? stopScreenShare() : startScreenShare()
    renegotiated). The sound follows it. The new one is opened before the old
    is stopped, so if it will not open the call keeps the sound it had. A
    change that is only a camera leaves the microphone alone.                  */
-let audioInputsSeen = "";
+/* The call's microphones as noted once its own devices were in — null until
+   then, and between calls. It used to start as "" and was never cleared, so
+   while a call was still setting up it was compared with the last call's list
+   (or with nothing): a phone reporting a device change as its camera and
+   microphone started looked like headphones, and the call's microphone — or
+   microphone and camera — was opened again in the middle of being set up.
+   Reported as a laptop that could hear the phone but never saw it. */
+let audioInputsSeen = null;
 let audioChangeTimer = null;
 
 async function audioInputsNow() {
@@ -4291,7 +4301,8 @@ async function audioInputsNow() {
 
 /** What the call started with — a change is measured against it. */
 function noteAudioInputs() {
-  audioInputsNow().then(list => { audioInputsSeen = list; });
+  const pc = callPc;
+  audioInputsNow().then(list => { if (callPc === pc && inCall) audioInputsSeen = list; });
 }
 
 function micCount(list) {
@@ -4301,6 +4312,9 @@ function micCount(list) {
 async function followAudioDevice() {
   const old = localStream?.getAudioTracks()[0];
   if (!G.mayMoveMic({ inCall, hasAudio: Boolean(old), busy: restartingCallMedia })) return;
+  /* Not noted yet: the call's own devices are still starting, and a change
+     now is them, not headphones. */
+  if (audioInputsSeen === null) return;
   const list = await audioInputsNow();
   if (list === audioInputsSeen) return;
   /* While a screen is shared there is no camera to open again: the

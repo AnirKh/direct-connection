@@ -311,6 +311,7 @@ Reported: Bluetooth headphones connected during a video call on an iPhone, and t
 So while a call is on, a change in the phone's microphones opens the microphone again (`followAudioDevice()`), which picks whatever the phone now prefers, and swaps it into the call's sender with `replaceTrack` — no new call. The sound follows it. Taking the headphones off works the same way, back to the phone.
 
 - **Only microphones count.** The list of audio inputs is noted when the call's own microphone opens, and a `devicechange` that leaves it as it was — a camera, say — does nothing. Phones fire the event more than once for one connection, so it acts once things settle.
+- **Nothing is followed until that list is noted.** It is `null` while a call's devices are starting and between calls. It used to start as `""` and was never cleared, so a phone reporting a change just as its camera and microphone started was compared with the last call's list, or with nothing, and the call's devices were opened again in the middle of being set up. Reported as a laptop that could hear the phone but never saw it.
 - **The new microphone is opened before the old one is stopped.** If it will not open, the call keeps the sound it had.
 - **It asks `G.mayMoveMic`** — a call that is on, with a microphone in it, nothing else changing its devices — and checks the call again once the microphone has opened. It shares `restartingCallMedia` with the camera flip and the restart after a lock. Muted stays muted.
 
