@@ -635,6 +635,23 @@
   }
 
   /**
+   * May the call's microphone be opened again because the phone's microphones
+   * changed — headphones connected or taken off mid-call?
+   *
+   * On an iPhone a call's sound goes wherever its microphone is. Opened before
+   * the headphones arrived, the microphone was the phone's own, and the other
+   * person kept coming out of the speaker. Opening it again picks what the
+   * phone now prefers, and the sound follows. Only in an agreed call
+   * (mayCaptureForCall), only one that already has a microphone, and not while
+   * another change to the call's devices is under way.
+   *
+   * @param {{inCall: boolean, hasAudio: boolean, busy: boolean}} o
+   */
+  function mayMoveMic(o) {
+    return Boolean(o) && mayCaptureForCall(o.inCall) && o.hasAudio === true && !o.busy;
+  }
+
+  /**
    * Is there another side to flip to — should the flip button show?
    *
    * A phone or a tablet: more than one camera, and the one in use says which
@@ -919,7 +936,7 @@
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
-    tracksToRestart, mayFlipCamera, flipCameraOffered, callPauseNote, unattended, tabTitle,
+    tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, callPauseNote, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171038-31f76d72";
+const APP_BUILD = "202610171105-cce32ba1";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3607,6 +3607,7 @@ async function attachCallMedia(withVideo) {
     await attachCallTrack(track, localStream);
   }
   updateFlipCamBtn();
+  noteAudioInputs();
 }
 
 function updateLocalVideoAspect() {
@@ -4138,6 +4139,70 @@ async function updateFlipCamBtn() {
 }
 
 flipCamBtn.onclick = () => flipCamera();
+
+/* ── Headphones connected mid-call ──────────
+   Reported: Bluetooth headphones connected during a video call on an iPhone,
+   and the other person went on coming out of the phone's speaker. There a
+   call's sound goes wherever its microphone is, and the call's microphone was
+   the phone's own — opened before the headphones arrived.
+
+   So while a call is on, a change in the phone's microphones — headphones on
+   or off — opens the microphone again, which picks whatever the phone now
+   prefers, and swaps it into the call in place (replaceTrack: nothing
+   renegotiated). The sound follows it. The new one is opened before the old
+   is stopped, so if it will not open the call keeps the sound it had. A
+   change that is only a camera leaves the microphone alone.                  */
+let audioInputsSeen = "";
+let audioChangeTimer = null;
+
+async function audioInputsNow() {
+  try {
+    return (await navigator.mediaDevices.enumerateDevices())
+      .filter(d => d.kind === "audioinput")
+      .map(d => `${d.deviceId}|${d.label}`).sort().join(",");
+  } catch (_) { return ""; }
+}
+
+/** What the call started with — a change is measured against it. */
+function noteAudioInputs() {
+  audioInputsNow().then(list => { audioInputsSeen = list; });
+}
+
+async function followAudioDevice() {
+  const old = localStream?.getAudioTracks()[0];
+  if (!G.mayMoveMic({ inCall, hasAudio: Boolean(old), busy: restartingCallMedia })) return;
+  const list = await audioInputsNow();
+  if (list === audioInputsSeen) return;
+  audioInputsSeen = list;
+  restartingCallMedia = true;               // one change to the call's devices at a time
+  const pc = callPc;
+  try {
+    const fresh = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    /* Hung up, or another call begun, while it was opening: put it straight back. */
+    if (!G.mayCaptureForCall(inCall) || callPc !== pc || !localStream) {
+      fresh.getTracks().forEach(track => track.stop());
+      return;
+    }
+    const mic = fresh.getAudioTracks()[0];
+    mic.enabled = !isMuted;                 // muted stays muted
+    watchCallTrack(mic);
+    const sender = pc?.getSenders().find(s => s.track === old);
+    if (sender) await sender.replaceTrack(mic);
+    else        await attachCallTrack(mic, localStream);
+    localStream = new MediaStream([mic, ...localStream.getVideoTracks()]);
+    old.stop();                             // only once the new one is in the call
+  } catch (err) {
+    console.error("Could not move the call's microphone to the new device:", err);
+  } finally {
+    restartingCallMedia = false;
+  }
+}
+
+/* Connecting headphones fires this more than once; act on where it settles. */
+navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+  clearTimeout(audioChangeTimer);
+  audioChangeTimer = setTimeout(followAudioDevice, 600);
+});
 
 endCallBtn.onclick = () => endCall(true);
 

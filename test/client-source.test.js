@@ -136,7 +136,7 @@ test("every function that opens the camera or microphone itself asks first", () 
   const opening = Array.from(topLevelFunctions(withoutComments(appSrc)))
     .filter(([name, body]) => name !== "attachCallMedia" && body.includes("getUserMedia("));
   assert.ok(opening.length >= 3, `expected the recorder, the restart and the flip, found ${opening.map(([n]) => n).join(", ")}`);
-  const asks = /\b(?:G\.)?(?:mayCaptureForCall|mayFlipCamera|tracksToRestart|mayStartRecording)\(/;
+  const asks = /\b(?:G\.)?(?:mayCaptureForCall|mayFlipCamera|mayMoveMic|tracksToRestart|mayStartRecording)\(/;
   for (const [name, body] of opening) {
     const m = body.match(asks);
     assert.ok(m, `${name} opens a device without asking a guard`);

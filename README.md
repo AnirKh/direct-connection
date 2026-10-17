@@ -291,6 +291,18 @@ A video call on a phone or tablet has a button to switch between the front and b
 - **Only the front camera is mirrored.** The back camera shows the world; text in it should read the right way round on this screen too. `showCameraFacing()` sets a class and the stylesheet does the rest — the mirror stays the stylesheet's alone.
 - **A restart after a lock opens the camera last flipped to.** Both it and `attachCallMedia` ask `callVideo()`; a fixed "front camera" there turned a back camera round on every unlock. Each new call starts on the front camera.
 
+## Headphones connected mid-call
+
+Reported: Bluetooth headphones connected during a video call on an iPhone, and the other person went on coming out of the phone's speaker. On an iPhone a call's sound goes wherever its microphone is, and the call's microphone was the phone's own — opened when the call began, before the headphones arrived. Headphones connected before the call were never a problem: the call opened theirs from the start.
+
+So while a call is on, a change in the phone's microphones opens the microphone again (`followAudioDevice()`), which picks whatever the phone now prefers, and swaps it into the call's sender with `replaceTrack` — no new call. The sound follows it. Taking the headphones off works the same way, back to the phone.
+
+- **Only microphones count.** The list of audio inputs is noted when the call's own microphone opens, and a `devicechange` that leaves it as it was — a camera, say — does nothing. Phones fire the event more than once for one connection, so it acts once things settle.
+- **The new microphone is opened before the old one is stopped.** If it will not open, the call keeps the sound it had.
+- **It asks `G.mayMoveMic`** — a call that is on, with a microphone in it, nothing else changing its devices — and checks the call again once the microphone has opened. It shares `restartingCallMedia` with the camera flip and the restart after a lock. Muted stays muted.
+
+Whether the sound then reaches the headphones is the phone's doing; the page has no say over where sound goes on an iPhone. This was checked in a browser with stand-in devices, not on a phone with real headphones.
+
 ## The other person's picture on an iPhone
 
 Reported from an iPhone: sometimes, in a video call, the other person's picture stayed black — while their voice came through, your own picture showed, and they could see you. The call was working; the picture was never drawn.
@@ -506,6 +518,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
+- `test/headphones.test.js` — headphones connected mid-call: `G.mayMoveMic` in every combination, then `followAudioDevice()` lifted out of `app.js` and run against stand-in devices — only a change in microphones counts, the same sender, the old microphone stopped only once the new one is in, muted kept, a hang-up mid-open, a microphone that will not open.
 - `test/flipcamera.test.js` — the camera flip: `G.mayFlipCamera` and `G.flipCameraOffered` in every combination, then `flipCamera()` and `updateFlipCamBtn()` lifted out of `app.js` and run against stand-in cameras — stopped before the other opens, the same sender, a hang-up mid-open, a camera that refuses, only the front mirrored.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
