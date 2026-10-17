@@ -1046,3 +1046,109 @@ test("a host who comes back too late cannot take the room back, even if nobody e
   assert.ok(await waitFor(back, "reclaim-failed"), "a room kept too long is gone, whoever asks first");
   assert.ok(!back.inbox.some(m => m.type === "session-reclaimed"));
 });
+
+/* ══════════════════════════════════════════
+   The same invite link, opened again
+══════════════════════════════════════════ */
+
+/* Reported: a link sent through Messenger opens in Messenger's own browser
+   first, which took the seat. The guest then chose Safari and was told the
+   room was full — and once the copy left in Messenger dropped, the room was
+   deleted with it. The newer copy of the link now takes the seat. */
+
+async function waitForMatch(ws, match, ms = 4000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const hit = ws.inbox.find(match);
+    if (hit) return hit;
+    await sleep(25);
+  }
+  return null;
+}
+
+async function linkRoomWithGuest(sessionId) {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId });
+  const created = await waitFor(host, "session-created");
+  const first = await client();
+  first.send_({ type: "join-session", sessionId, token: created.token });
+  assert.ok(await waitFor(first, "session-joined"));
+  assert.ok(await waitFor(host, "guest-joined"));
+  return { host, first, created };
+}
+
+test("the link opened again in another browser takes the seat, and the room stays", async () => {
+  const { host, first, created } = await linkRoomWithGuest("link-again");
+
+  const second = await client();
+  second.send_({ type: "join-session", sessionId: "link-again", token: created.token });
+  assert.ok(await waitFor(second, "session-joined"), "the newer copy gets in, not 'full'");
+
+  const taken = await waitFor(first, "seat-taken");
+  assert.equal(taken && taken.sessionId, "link-again", "the copy left behind is told, so it stops");
+
+  const moved = await waitForMatch(host, m => m.type === "guest-joined" && m.replaced === true);
+  assert.ok(moved, "the host is told it is a new copy, so it starts the connection again");
+  assert.ok(!host.inbox.some(m => m.type === "peer-disconnected"), "the room was not ended");
+
+  /* The host's signalling now reaches the new copy, and only it. */
+  host.send_({ type: "offer", sessionId: "link-again", offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(second, "offer"), "the new copy is the guest now");
+  await sleep(200);
+  assert.ok(!first.inbox.some(m => m.type === "offer"), "the old copy hears nothing more");
+});
+
+test("the copy left behind closing afterwards ends nothing", async () => {
+  const { host, first, created } = await linkRoomWithGuest("link-left-behind");
+  const second = await client();
+  second.send_({ type: "join-session", sessionId: "link-left-behind", token: created.token });
+  assert.ok(await waitFor(second, "session-joined"));
+  assert.ok(await waitFor(first, "seat-taken"));
+
+  first.terminate();                       // the app's browser, closed or put to sleep
+  await sleep(2500);                       // past two heartbeat sweeps
+  assert.ok(!host.inbox.some(m => m.type === "peer-disconnected"), "the host is not told anyone left");
+  assert.ok(!second.inbox.some(m => m.type === "peer-disconnected"), "nor the guest");
+  host.send_({ type: "offer", sessionId: "link-left-behind", offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(second, "offer"), "the room is still there, with the newer copy in it");
+});
+
+test("the link does not move a guest who came in with the PIN", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "link-vs-pin" });
+  const created = await waitFor(host, "session-created");
+  const pinGuest = await client();
+  pinGuest.send_({ type: "join-session", sessionId: "link-vs-pin", pin: created.pin });
+  assert.ok(await waitFor(pinGuest, "session-joined"));
+
+  const linkGuest = await client();
+  linkGuest.send_({ type: "join-session", sessionId: "link-vs-pin", token: created.token });
+  const refused = await waitFor(linkGuest, "pin-error");
+  assert.equal(refused && refused.code, "full");
+  await sleep(200);
+  assert.ok(!pinGuest.inbox.some(m => m.type === "seat-taken"), "the PIN guest keeps the seat");
+});
+
+test("the PIN does not move a guest who came in with the link", async () => {
+  const { first, created } = await linkRoomWithGuest("pin-vs-link");
+  const pinGuest = await client();
+  pinGuest.send_({ type: "join-session", sessionId: "pin-vs-link", pin: created.pin });
+  const refused = await waitFor(pinGuest, "pin-error");
+  assert.equal(refused && refused.code, "full");
+  await sleep(200);
+  assert.ok(!first.inbox.some(m => m.type === "seat-taken"));
+});
+
+test("the same page sending its join twice does not lose the room", async () => {
+  /* "Replacing" itself would run the guest-left clean-up on the room's own
+     guest, and delete the room. */
+  const { host, first, created } = await linkRoomWithGuest("link-twice");
+  first.send_({ type: "join-session", sessionId: "link-twice", token: created.token });
+  const answer = await waitFor(first, "pin-error");
+  assert.equal(answer && answer.code, "full", "told as before, and nothing else happens");
+  await sleep(200);
+  assert.ok(!first.inbox.some(m => m.type === "seat-taken"), "it is not told it was replaced by itself");
+  assert.ok(!host.inbox.some(m => m.type === "peer-disconnected"), "the room is still there");
+  host.send_({ type: "offer", sessionId: "link-twice", offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(first, "offer"), "and it is still the guest");
+});

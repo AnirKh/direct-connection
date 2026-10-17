@@ -103,11 +103,21 @@ function safeLabel(value, max = 32) {
  * yet. That gets "pin-required" and is not counted against anyone, where a
  * wrong PIN is.
  *
+ * A seat held through the invite link is not "full" to that same link. The
+ * link is one person's, and a second copy of it is that person in another
+ * browser — most often the app the link was sent through (Messenger,
+ * Instagram), which opened it first and took the seat, left for Safari or
+ * Chrome. Turned away as "full", the guest could not get in at all, and once
+ * the abandoned copy dropped the room went with it. So the newer copy takes
+ * the seat ("replace"). Only from the link: a guest let in by a PIN, or by
+ * tapping an open room, came another way, and the link does not move them.
+ *
  * @param {{open: boolean, tokenOk: boolean, pinOk: boolean, noCredential: boolean,
- *          full: boolean, roomLocked: boolean, ipLimited: boolean}} o
- * @returns {"admit"|"full"|"room-locked"|"ip-limited"|"pin-required"|"wrong"}
+ *          full: boolean, seatByLink: boolean, roomLocked: boolean, ipLimited: boolean}} o
+ * @returns {"admit"|"replace"|"full"|"room-locked"|"ip-limited"|"pin-required"|"wrong"}
  */
 function joinVerdict(o) {
+  if (o.tokenOk && o.full && o.seatByLink === true) return "replace";
   if (o.open || o.tokenOk) return o.full ? "full" : "admit";
   if (o.roomLocked) return "room-locked";
   if (o.full)       return "full";

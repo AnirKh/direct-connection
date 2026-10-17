@@ -408,6 +408,20 @@ A voice note opens the microphone, and opening is not instant. Two rules keep tr
 - **An unjoined room that expires says so.** After ten minutes the host gets `session-expired` and the lobby replaces the PIN and link with a notice. It used to arrive as `peer-disconnected`, which wrote "peer left" into the hidden chat screen and left the lobby advertising a room that no longer existed.
 - **A host cannot join their own room** (`own-room`). It is in the list like any other and the PIN is on screen; it used to be admitted, leaving one browser negotiating with itself.
 
+## The same link opened twice: the newer copy takes the seat
+
+Reported: a link sent through Messenger, opened by the guest, who then chose Safari — and was told the room was full. The link had opened first in Messenger's own browser, and that copy had taken the one guest seat. It stayed connected in the background, so Safari was refused; and when it finally dropped, a guest leaving deletes the room, so the invite was lost either way. The in-app notice holds the join until the person chooses, but "Continue here" joins, and an app that opens links in a Safari-based viewer is not detected at all.
+
+The invite link is one person's. A second copy of it arriving is that person in another browser, so **a seat taken through the link moves to a newer copy of the link** (`joinVerdict` → `"replace"`, in `ratelimit.js`):
+
+- **The room is kept.** The guest has not left, only changed browsers. The server swaps the seat; the copy left behind is no longer the guest, so its socket closing later ends nothing.
+- **The copy left behind is told** (`seat-taken`), says the chat moved to another browser, and **never joins with the link again** (`inviteMovedAway`). Without that, the phone putting the app to sleep drops its socket, the reconnect re-sends the join, and the two copies take the seat back and forth for as long as both are open.
+- **The host is told it is a new copy** (`guest-joined` with `replaced: true`): the old connection is let go of quietly, the chat on screen stays, a line says the other person reopened the link, and the connection starts again — verified, since the new copy carries the same room secret.
+- **Only the link moves a seat taken by the link.** A guest let in by a PIN or by tapping an open room is not moved by the link, and a PIN does not move a link guest.
+- **The same socket sending its join twice is not a second copy.** "Replacing" itself would run the guest-left clean-up on the room's own guest and delete the room; it is told "full", as before.
+
+What it costs, said plainly: anyone holding the link can take the seat from whoever holds it through the link, mid-chat. That was already true of the first person to arrive — the link is the credential — and the host is told every time it happens.
+
 ## Join locks are for PINs, not invite links
 
 Three wrong attempts lock an address out for 30 seconds; fifteen against one room lock the room for five minutes. Both exist to slow down guessing a 6-digit PIN.
@@ -481,7 +495,7 @@ Node's built-in runner, no dependencies.
 
 
 - `test/protocol.test.js` — invite-link parsing (including malformed input, which must not throw at page load), room secrets, key derivation, and the framing. Includes a man-in-the-middle case asserting that an attacker who substitutes both public keys cannot reach a working key without the room secret.
-- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, an invite token getting through a locked room, open rooms (one guest, no PIN, never open by accident), one room per socket, room-name reuse, and a peer that vanishes without disconnecting. Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
+- `test/integration/server.test.js` — spawns a real server on port 3199 with a 1-second heartbeat: join rules, PIN lockout, an invite token getting through a locked room, open rooms (one guest, no PIN, never open by accident), one room per socket, room-name reuse, a peer that vanishes without disconnecting, and the same link opened again (the seat moves, the room stays, the copy left behind ends nothing). Each client presents its own `X-Forwarded-For` so one test's rate-limit lockout does not leak into the next.
 - `test/csp.test.js` — fails if `index.html` has drifted from `csp.js`, and covers the framing and third-party-asset rules above.
 - `test/ratelimit.test.js` — the sliding window, its expiry sweep, log sanitising, and every combination of `joinVerdict`'s seven inputs. The sweep has no external symptom until the process runs out of memory, which is why it is tested directly.
 - `test/guards.test.js` — the safety decisions, every combination.

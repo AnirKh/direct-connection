@@ -224,7 +224,9 @@ test("a real browser gets no notice and the usual tidy address", () => {
 
 test("nothing joins while the notice is up", () => {
   const check = app.match(/^function checkAutoJoin\(\)\s*\{[\s\S]*?^\}/m)[0];
-  assert.match(check, /if \(!_isAutoJoin \|\| _autoJoinSent \|\| inAppHold\) return;/);
+  /* Other reasons not to join may follow the hold (inviteMovedAway); the hold
+     itself must be there. */
+  assert.match(check, /if \(!_isAutoJoin \|\| _autoJoinSent \|\| inAppHold( \|\| \w+)*\) return;/);
 });
 
 test("the notice's text, which names the app, is redrawn in the other language too", () => {

@@ -736,3 +736,38 @@ test("a code room offers no invite link", () => {
   const created = withoutComments(appSrc).match(/case "session-created": \{[\s\S]*?\n      break;/)[0];
   assert.match(created, /showRoomReady\(data\)/, "the room's creation draws that panel");
 });
+
+/* ══════════════════════════════════════════
+   The same invite link, opened again
+══════════════════════════════════════════ */
+
+const caseBlock = type => {
+  const m = withoutComments(appSrc).match(new RegExp(`case "${type}":[\\s\\S]*?\\n\\s*break;`));
+  assert.ok(m, `case "${type}" not found in app.js`);
+  return m[0];
+};
+
+test("a copy whose seat moved to another browser never joins with the link again", () => {
+  /* The two copies would take the seat back and forth: the one left in the
+     app's browser loses its socket when the phone puts it to sleep, and the
+     retry after a reconnect would send the join again. */
+  const block = caseBlock("seat-taken");
+  assert.match(block, /inviteMovedAway = true;/);
+  assert.match(block, /currentSession = null;/);
+  assert.ok(!/showReconnectButton\(\)|wsSend\(/.test(block), "nothing to offer, nothing to send");
+  assert.ok(block.indexOf("dataChannel.onclose = null") < block.indexOf("closePeerConnection()"),
+    "let go of quietly — its channel closing would write \"connection closed\"");
+
+  const join = topLevelFunctions(withoutComments(appSrc)).get("checkAutoJoin");
+  assert.match(join, /if \(!_isAutoJoin \|\| _autoJoinSent \|\| inAppHold \|\| inviteMovedAway\) return;/);
+});
+
+test("the host keeps the chat on screen when the guest's link moves to another browser", () => {
+  const block = caseBlock("guest-joined");
+  assert.match(block, /switchToChat\(currentSession\.sessionId, \{ keepMessages: data\.replaced === true \}\)/);
+  assert.ok(block.indexOf("dataChannel.onclose = null") < block.indexOf("createPeerConnection()"),
+    "the old channel is let go of quietly before the new connection");
+  assert.ok(block.indexOf("switchToChat(") < block.indexOf('t("guestReopened")'), "said after the screen is set up, so it is not cleared");
+  const sw = topLevelFunctions(withoutComments(appSrc)).get("switchToChat");
+  assert.match(sw, /if \(!keepMessages\) chatMessages\.replaceChildren\(\);/);
+});

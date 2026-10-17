@@ -811,12 +811,17 @@ wss.on("connection", (ws, req) => {
            job — see ratelimit.js. The short of it: the locks are there to slow
            PIN guessing, so a correct invite token is not held to them. */
         const rl = rateLimitCheck(ip);
+        const tokenOk = secretMatches(session.token, data.token);
         const verdict = joinVerdict({
           open:         session.open === true,
-          tokenOk:      secretMatches(session.token, data.token),
+          tokenOk,
           pinOk:        typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && secretMatches(session.pin, data.pin),
           noCredential: typeof data.pin !== "string" && typeof data.token !== "string",
           full:         Boolean(session.guest),
+          /* Taken through the link — by another socket. The same socket asking
+             twice is not a second copy of anything, and "replacing" it would
+             run cleanupClient on the room's own guest and delete the room. */
+          seatByLink:   session.guestByLink === true && session.guest !== ws,
           roomLocked:   session.joinLockedUntil > Date.now(),
           ipLimited:    !rl.allowed
         });
@@ -891,13 +896,23 @@ wss.on("connection", (ws, req) => {
         session.joinLockedUntil = 0;
         session.failedJoinCount = 0;
         session.failedJoinWindowStart = 0;
+        /* The same link, opened again in another browser: the seat moves to
+           the newer copy. The room is kept — the guest has not left, only
+           changed browsers — and the copy left behind is told, so it stops
+           rather than joining again and taking the seat back. Once it is no
+           longer the guest, its socket closing ends nothing. */
+        const replaced = verdict === "replace" ? session.guest : null;
         session.guest = ws;
+        session.guestByLink = tokenOk;
+        if (replaced && replaced.readyState === WebSocket.OPEN) {
+          replaced.send(JSON.stringify({ type: "seat-taken", sessionId: data.sessionId }));
+        }
         /* A host who is away hears of the guest when it takes the room back;
            the guest is told to wait meanwhile. */
         const hostHere = session.host?.readyState === WebSocket.OPEN;
         ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId, hostAway: !hostHere }));
         if (hostHere) {
-          session.host.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId }));
+          session.host.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId, replaced: Boolean(replaced) }));
         }
         broadcastSessionList();
         console.log(`Session ${sessionLogId(data.sessionId)} guest joined from ${ipLogId(ip)}`);

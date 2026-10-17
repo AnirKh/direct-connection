@@ -280,3 +280,48 @@ test("across every combination, a PIN room never admits without its PIN or token
     if (verdict === "pin-required") assert.ok(!o.open && o.noCredential, `pin-required for the wrong reason: ${where}`);
   }
 });
+
+/* ══════════════════════════════════════════
+   joinVerdict — the same link, opened again
+══════════════════════════════════════════ */
+
+/* A link sent through Messenger opens in Messenger's own browser first, which
+   took the seat. The guest then opened it in Safari and was told the room was
+   full — and once the copy left in Messenger dropped, the room went with it.
+   A seat held through the link now moves to a newer copy of the link. */
+
+test("a newer copy of the link takes the seat its earlier copy holds", () => {
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: true })), "replace");
+  assert.equal(joinVerdict(knock({ open: true, tokenOk: true, full: true, seatByLink: true })), "replace",
+    "an open room's link is a link like any other");
+});
+
+test("the link does not move a guest who came in another way", () => {
+  /* Let in by a PIN, or by tapping an open room: someone else, as far as the
+     server can tell. */
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: false })), "full");
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true })), "full", "an older server that never said");
+});
+
+test("only the link itself moves a seat taken by the link", () => {
+  assert.equal(joinVerdict(knock({ pinOk: true, full: true, seatByLink: true })), "full", "a PIN does not");
+  assert.equal(joinVerdict(knock({ open: true, noCredential: true, full: true, seatByLink: true })), "full", "a tap in the list does not");
+  assert.equal(joinVerdict(knock({ full: true, seatByLink: true })), "full");
+});
+
+test("an empty seat is simply taken — there is nothing to replace", () => {
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: false, seatByLink: true })), "admit");
+});
+
+test("across every combination, a seat moves only for the link, and only from the link", () => {
+  for (let bits = 0; bits < 256; bits++) {
+    const o = {
+      open: Boolean(bits & 1), tokenOk: Boolean(bits & 2), pinOk: Boolean(bits & 4), noCredential: Boolean(bits & 8),
+      full: Boolean(bits & 16), seatByLink: Boolean(bits & 32), roomLocked: Boolean(bits & 64), ipLimited: Boolean(bits & 128)
+    };
+    const verdict = joinVerdict(o);
+    const where = JSON.stringify(o);
+    assert.equal(verdict === "replace", o.tokenOk && o.full && o.seatByLink, `replace for the wrong reason: ${where}`);
+    if (verdict === "admit") assert.equal(o.full, false, `admitted into a full room: ${where}`);
+  }
+});

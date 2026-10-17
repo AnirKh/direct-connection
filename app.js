@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610170101-728e2544";
+const APP_BUILD = "202610171015-fa8a5dec";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1160,11 +1160,16 @@ function setLobbyButtons(disabled) {
 }
 
 let _autoJoinSent  = false;
+/* The invite was opened again in another browser and the seat went there
+   (seat-taken). This copy never joins with it again — not on a reconnect, not
+   ever: the two would take the seat back and forth for as long as both were
+   open. */
+let inviteMovedAway = false;
 let _autoJoinTimer = null;
 const AUTO_JOIN_TIMEOUT_MS = 20_000;
 
 function checkAutoJoin() {
-  if (!_isAutoJoin || _autoJoinSent || inAppHold) return;
+  if (!_isAutoJoin || _autoJoinSent || inAppHold || inviteMovedAway) return;
   _autoJoinSent = true;
   isConnecting = true;
   roomKind = "pin"; pakeCode = null;   // an invite link is the ECDH path, not a code room
@@ -2185,7 +2190,19 @@ async function handleSignaling(data) {
     case "guest-joined":
       if (!roomEventIsOurs(data)) break;
       forgetHostRoom();
-      switchToChat(currentSession.sessionId);
+      /* The guest opened the same link again in another browser — out of the
+         app it was sent through, into Safari or Chrome — and the seat moved
+         with them. What was set up with the copy they left is let go of
+         quietly (its channel closing would say "connection closed" and offer a
+         way out), the chat on screen stays, and the connection starts again
+         with the new copy. The line says so, since the person at the other end
+         has, as far as this page can tell, changed. */
+      if (data.replaced === true) {
+        if (dataChannel) dataChannel.onclose = null;
+        endCall(false);
+      }
+      switchToChat(currentSession.sessionId, { keepMessages: data.replaced === true });
+      if (data.replaced === true) appendSys(t("guestReopened"));
       createPeerConnection();
       dataChannel = pc.createDataChannel("chat");
       dataChannel.binaryType = "arraybuffer";
@@ -2263,6 +2280,28 @@ async function handleSignaling(data) {
       endCall(false);
       closePeerConnection();
       showReconnectButton();
+      break;
+
+    case "seat-taken":
+      /* This invite link was opened again in another browser, and the seat
+         went there — to Safari or Chrome, most often, from the app the link was
+         sent through. The chat goes on there; this copy stops, says so, and
+         never joins again (inviteMovedAway). Nothing to offer here: the way
+         back to the lobby is the arrow, as always. */
+      if (!roomEventIsOurs(data) || isHost) break;
+      inviteMovedAway = true;
+      autoJoinSettled();
+      clearConnectWatch();
+      if (dataChannel) dataChannel.onclose = null;
+      endCall(false);
+      closePeerConnection();
+      currentSession = null;
+      roomSecret = null;
+      isConnecting = false;
+      keepScreenOn(false);
+      chatMessages.querySelectorAll(".reconnect-sys-wrap").forEach(el => el.remove());
+      setQuality(`⬤ ${t("seatTakenShort")}`, "failed");
+      appendSys(t("seatTaken"));
       break;
 
     case "guest-left":
@@ -2526,7 +2565,7 @@ function clearConnectWatch() {
   connectWatch = null;
 }
 
-function switchToChat(sessionId) {
+function switchToChat(sessionId, { keepMessages = false } = {}) {
   keepScreenOn(true);
   watchConnecting();
   armBackGuard();
@@ -2536,7 +2575,7 @@ function switchToChat(sessionId) {
   document.getElementById("langSwitcher").style.display = "none";
   chatSessionLabel.textContent = sessionId;
   setQuality(`⬤ ${t("connecting")}`, "");
-  chatMessages.replaceChildren();
+  if (!keepMessages) chatMessages.replaceChildren();
   sendBtn.disabled = true;
   voiceCallBtn.disabled = true;
   videoCallBtn.disabled = true;
