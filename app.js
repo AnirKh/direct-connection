@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610172231-ad1930c1";
+const APP_BUILD = "202610172249-80d2c608";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -4108,6 +4108,7 @@ function stopCallMedia(clearOverlay = true) {
   flipCamBtn.classList.add("hidden");
   speakerBtn.classList.add("hidden");
   sharingScreen = false;                    // the screen's track went with the rest
+  if (screenMix) { screenMix.close(); screenMix = null; }   // and its sound, which was never in localStream
   updateShareBtn();
   audioInputsSeen = null;                   // the next call notes its own
   watchCallStats(false);
@@ -4277,8 +4278,55 @@ let camOffBeforeShare = false;              // a camera turned off before sharin
    they honour — of the picker, of the captured track, and of the sender, whose
    limit is the one nothing ignores — and lifted again for the camera when
    sharing stops.                                                           */
-const SCREEN_MAX = { width: 1920, height: 1080, fps: 15, bitrate: 2_500_000 };
-const SCREEN_CAPTURE = { width: { max: SCREEN_MAX.width }, height: { max: SCREEN_MAX.height }, frameRate: { max: SCREEN_MAX.fps } };
+const SCREEN_MAX = { width: 1920, height: 1080 };
+/* What a share is held to, by what it most likely is. With its sound — ticked
+   in the browser's picker — a share is nearly always a video, and moves: up to
+   30 frames a second, sent for motion. Without, it is a page to read: 15, sent
+   for sharp detail. Reported: documents were fine at 15, videos were not. */
+const SCREEN_PROFILES = { still: { fps: 15, bitrate: 2_500_000, hint: "detail" }, moving: { fps: 30, bitrate: 4_000_000, hint: "motion" } };
+const SCREEN_CAPTURE = { width: { max: SCREEN_MAX.width }, height: { max: SCREEN_MAX.height }, frameRate: { max: SCREEN_PROFILES.moving.fps } };
+
+function screenProfile(withSound) {
+  return withSound ? SCREEN_PROFILES.moving : SCREEN_PROFILES.still;
+}
+
+/* ── The shared screen's sound ──────────────
+   Reported: a video playing on the laptop sounded bad on the phone. Only the
+   picture was shared, so its sound reached the call through the laptop's
+   microphone, off its speakers — and the call's echo and noise filters, made
+   for speech, chopped it up. Now, where the browser offers it (a tab's sound,
+   or on Windows the whole screen's), the shared sound is mixed into the call
+   directly with the microphone: the call has one sound to send. The
+   microphone stays its own track underneath, so muting it mutes the voice and
+   leaves the shared sound playing. Speakers still reach the microphone too;
+   headphones on the sharing side keep it clean, which a tip says once.     */
+let screenMix = null;
+
+function mixScreenSound(mic, sound) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new Ctx();
+  const out = ctx.createMediaStreamDestination();
+  const source = track => {
+    const node = ctx.createMediaStreamSource(new MediaStream([track]));
+    node.connect(out);
+    return node;
+  };
+  let micNode = source(mic);
+  const soundNode = source(sound);
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  const track = out.stream.getAudioTracks()[0];
+  track.contentHint = "music";              // not squeezed as if it were only a voice
+  return {
+    track,
+    setMic(next) { micNode.disconnect(); micNode = source(next); },
+    close() {
+      try { micNode.disconnect(); soundNode.disconnect(); } catch (_) { /* already apart */ }
+      sound.stop();
+      track.stop();
+      ctx.close().catch(() => {});
+    }
+  };
+}
 
 /** How far a screen of this size is scaled down to fit Full HD — never up. */
 function screenScale(width, height) {
@@ -4286,8 +4334,9 @@ function screenScale(width, height) {
   return Math.max(1, width / SCREEN_MAX.width, height / SCREEN_MAX.height);
 }
 
-/** The sender's limits: Full HD for a screen, none for the camera (screen null). */
-async function limitScreenSender(sender, screen) {
+/** The sender's limits: Full HD at the profile's rate for a screen, none for
+    the camera (screen null). */
+async function limitScreenSender(sender, screen, profile = SCREEN_PROFILES.still) {
   if (!sender || typeof sender.getParameters !== "function") return;
   try {
     const params = sender.getParameters();
@@ -4295,8 +4344,8 @@ async function limitScreenSender(sender, screen) {
     const { width, height } = screen?.getSettings?.() || {};
     for (const encoding of params.encodings) {
       if (screen) {
-        encoding.maxBitrate = SCREEN_MAX.bitrate;
-        encoding.maxFramerate = SCREEN_MAX.fps;
+        encoding.maxBitrate = profile.bitrate;
+        encoding.maxFramerate = profile.fps;
         encoding.scaleResolutionDownBy = screenScale(width, height);
       } else {
         delete encoding.maxBitrate;
@@ -4318,22 +4367,41 @@ async function startScreenShare() {
   try {
     let display;
     /* Nothing awaited before this: the picker needs the tap that asked for it. */
-    try { display = await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAPTURE, audio: false }); }
+    /* audio: the picker offers to share the sound too — a tab's, or on Windows
+       the whole screen's — and the person ticks it or not. */
+    try { display = await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAPTURE, audio: true, systemAudio: "include" }); }
     catch (_) { return; }                   // the picker closed, or sharing refused: the call goes on as it was
     const screen = display.getVideoTracks()[0];
+    const sound  = display.getAudioTracks()[0] || null;
     /* Hung up, or another call begun, while the picker was up: put it straight back. */
     if (!G.mayCaptureForCall(inCall) || callPc !== pc || !localStream || !screen) {
       display.getTracks().forEach(track => track.stop());
       return;
     }
-    screen.contentHint = "detail";          // text kept sharp rather than motion smooth
+    const profile = screenProfile(Boolean(sound));
+    screen.contentHint = profile.hint;      // a page kept sharp; a video kept moving
     screen.onended = () => stopScreenShare();
     /* Where the picker did not hold to Full HD, the track is asked again. */
-    try { await screen.applyConstraints(SCREEN_CAPTURE); } catch (_) { /* the sender's limit still holds */ }
+    try { await screen.applyConstraints({ ...SCREEN_CAPTURE, frameRate: { max: profile.fps } }); } catch (_) { /* the sender's limit still holds */ }
     const sender = pc.getSenders().find(s => s.track === camera);
     if (sender) await sender.replaceTrack(screen);
     else        await attachCallTrack(screen, localStream);
-    await limitScreenSender(pc.getSenders().find(s => s.track === screen), screen);
+    await limitScreenSender(pc.getSenders().find(s => s.track === screen), screen, profile);
+    if (sound) {
+      const mic = localStream.getAudioTracks()[0];
+      const voice = pc.getSenders().find(s => s.track === mic);
+      try {
+        if (!mic || !voice) throw new Error("no microphone in the call to mix with");
+        screenMix = mixScreenSound(mic, sound);
+        await voice.replaceTrack(screenMix.track);
+        showToast(t("shareSoundTip"), "info");
+      } catch (err) {
+        /* The picture is still shared; only its sound is not. */
+        console.error("Could not share the screen's sound:", err);
+        if (screenMix) screenMix.close(); else sound.stop();
+        screenMix = null;
+      }
+    }
     camera.stop();                          // only once the screen is in its place
     sharingScreen = true;
     camOffBeforeShare = isCamOff;
@@ -4367,6 +4435,14 @@ async function stopScreenShare() {
   const sender = pc?.getSenders().find(s => s.track === screen);
   try {
     if (!G.mayCaptureForCall(inCall)) return;   // hung up: the call's own ending stops everything
+    /* The voice alone again, in the sender the mix was in. */
+    if (screenMix) {
+      const voice = pc?.getSenders().find(s => s.track === screenMix.track);
+      const mic = localStream?.getAudioTracks()[0];
+      if (voice && mic) await voice.replaceTrack(mic);
+      screenMix.close();
+      screenMix = null;
+    }
     let camera = null;
     try {
       camera = (await navigator.mediaDevices.getUserMedia({ audio: false, video: callVideo() })).getVideoTracks()[0];
@@ -4482,8 +4558,11 @@ async function followAudioDevice() {
     mic.enabled = !isMuted;                 // muted stays muted
     watchCallTrack(mic);
     const sender = pc?.getSenders().find(s => s.track === old);
-    if (sender) await sender.replaceTrack(mic);
-    else        await attachCallTrack(mic, localStream);
+    /* While a screen's sound is mixed in, the sender carries the mix: the new
+       microphone goes into the mix in the old one's place. */
+    if (screenMix)   screenMix.setMic(mic);
+    else if (sender) await sender.replaceTrack(mic);
+    else             await attachCallTrack(mic, localStream);
     localStream = new MediaStream([mic, ...localStream.getVideoTracks()]);
     old.stop();                             // only once the new one is in the call
   } catch (err) {

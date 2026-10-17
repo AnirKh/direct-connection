@@ -67,7 +67,10 @@ const grab = (pattern, what) => {
 const SOURCE = [
   grab(/^const SHARE_SUPPORTED = [^\n]*;$/m,                          "SHARE_SUPPORTED"),
   grab(/^const SCREEN_MAX = [^\n]*;$/m,                               "SCREEN_MAX"),
+  grab(/^const SCREEN_PROFILES = [^\n]*;$/m,                          "SCREEN_PROFILES"),
   grab(/^const SCREEN_CAPTURE = [^\n]*;$/m,                           "SCREEN_CAPTURE"),
+  grab(/^function screenProfile\([^)]*\)\s*\{[\s\S]*?^\}/m,           "screenProfile"),
+  grab(/^function mixScreenSound\([^)]*\)\s*\{[\s\S]*?^\}/m,          "mixScreenSound"),
   grab(/^function screenScale\([^)]*\)\s*\{[\s\S]*?^\}/m,             "screenScale"),
   grab(/^async function limitScreenSender\([^)]*\)\s*\{[\s\S]*?^\}/m,  "limitScreenSender"),
   grab(/^async function startScreenShare\(\)\s*\{[\s\S]*?^\}/m,        "startScreenShare"),
@@ -83,9 +86,10 @@ function classes(initial = []) {
 }
 
 function call({ inCall = true, video = true, camOff = false, busy = false, supported = true,
-                cancel = false, cameraRefuses = false, screenSize = [2560, 1600], refuseLimits = false } = {}) {
+                cancel = false, cameraRefuses = false, screenSize = [2560, 1600], refuseLimits = false,
+                withSound = false, mixFails = false } = {}) {
   const log = { order: [], picker: [], asked: [], replaced: [], attached: [], watched: [], toasts: [], flipUpdates: 0,
-                applied: [], params: [] };
+                applied: [], params: [], mixed: [] };
   let gate = null;
   const track = (kind, name) => ({ kind, name, readyState: "live", enabled: true,
     stop() { this.readyState = "ended"; log.order.push(`stop ${name}`); },
@@ -127,7 +131,7 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
       log.order.push("picker");
       if (gate) await gate;
       if (cancel) throw Object.assign(new Error("cancelled"), { name: "NotAllowedError" });
-      return new MediaStream([track("video", "screen")]);
+      return new MediaStream([track("video", "screen"), ...(withSound ? [track("audio", "screen sound")] : [])]);
     };
   }
   const shareBtn = { disabled: false, classList: classes(["hidden"]), icon: null, attributes: {},
@@ -146,6 +150,17 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
     tablerIcon: name => name,
     setTimeout: (f) => { log.order.push("retry later"); },
     shareBtn, toggleCamBtn,
+    /* A stand-in Web Audio: what goes into the mix, and a mixed track out. */
+    window: { AudioContext: class {
+      constructor() { if (mixFails) throw new Error("NotAllowedError"); this.state = "running"; }
+      createMediaStreamDestination() { return { stream: new MediaStream([track("audio", "mix")]) }; }
+      createMediaStreamSource(stream) {
+        const name = stream.getTracks()[0].name;
+        return { connect() { log.mixed.push(`in ${name}`); }, disconnect() { log.mixed.push(`out ${name}`); } };
+      }
+      resume() { return Promise.resolve(); }
+      close() { log.mixed.push("closed"); return Promise.resolve(); }
+    } },
     state: {
       inCall, isCamOff: camOff, restartingCallMedia: busy, cameraFacing: "user",
       callPc: { getSenders: () => senders },
@@ -156,11 +171,11 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
   const names = Object.keys(env).filter(n => n !== "state");
   const api = new Function(...names, "state", `
     let { inCall, isCamOff, restartingCallMedia, cameraFacing, callPc, localStream, localVideo } = state;
-    let sharingScreen = false, camOffBeforeShare = false;
+    let sharingScreen = false, camOffBeforeShare = false, screenMix = null;
     ${SOURCE}
     return {
       startScreenShare, stopScreenShare, updateShareBtn,
-      now: () => ({ inCall, isCamOff, restartingCallMedia, localStream, localVideo, sharingScreen }),
+      now: () => ({ inCall, isCamOff, restartingCallMedia, localStream, localVideo, sharingScreen, screenMix }),
       hangUp: () => { inCall = false; localStream = null; }
     };
   `)(...names.map(n => env[n]), env.state);
@@ -171,8 +186,8 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
 test("sharing: the picker, then the screen in the camera's sender, and only then the camera stopped", async () => {
   const c = call();
   await c.startScreenShare();
-  assert.deepEqual(c.log.picker, [{ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 15 } }, audio: false }],
-    "the screen only, at no more than Full HD — the call's microphone carries on");
+  assert.deepEqual(c.log.picker, [{ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }, audio: true, systemAudio: "include" }],
+    "no more than Full HD, and the picker offers the screen's sound too");
   assert.deepEqual(c.log.order, ["picker", "replace with screen", "stop camera"]);
   const screen = c.senders[1].track;
   assert.equal(screen.name, "screen", "the same sender: no new call");
@@ -238,6 +253,64 @@ test("a browser that will not take limits still shares", async () => {
   await c.startScreenShare();
   assert.equal(c.now().sharingScreen, true);
   assert.equal(c.senders[1].track.name, "screen");
+});
+
+/* ── Sharing with sound ── */
+
+test("shared with its sound: the voice and the screen's sound go out mixed, in the voice's own sender", async () => {
+  /* Reported: a video playing on the laptop sounded bad on the phone — only
+     its picture was shared, and its sound reached the call off the laptop's
+     speakers through a microphone made for speech. */
+  const c = call({ withSound: true });
+  await c.startScreenShare();
+  assert.deepEqual(c.log.mixed, ["in mic", "in screen sound"], "both into the one mix");
+  assert.equal(c.senders[0].track.name, "mix", "the voice's sender carries the mix: no new call");
+  assert.equal(c.senders[0].track.contentHint, "music", "not squeezed as if it were only a voice");
+  assert.deepEqual(c.now().localStream.getAudioTracks().map(t => t.name), ["mic"],
+    "the microphone stays its own track, so muting mutes the voice and leaves the shared sound playing");
+  assert.deepEqual(c.log.toasts, ["shareSoundTip"], "said once: the laptop's speakers still reach its microphone");
+});
+
+test("shared with its sound, it is taken for a video: up to 30 frames a second, sent for motion", async () => {
+  const c = call({ withSound: true });
+  await c.startScreenShare();
+  assert.equal(c.senders[1].track.contentHint, "motion");
+  assert.deepEqual(c.log.applied, [["screen", { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }]]);
+  assert.equal(c.senders[1].encoding().maxFramerate, 30);
+  assert.equal(c.senders[1].encoding().maxBitrate, 4000000);
+});
+
+test("shared without its sound, it is taken for a page: 15 frames a second, sent for detail", async () => {
+  const c = call();
+  await c.startScreenShare();
+  assert.equal(c.senders[1].track.contentHint, "detail");
+  assert.equal(c.senders[1].encoding().maxFramerate, 15);
+  assert.equal(c.senders[0].track, c.mic, "and the voice goes out alone, as ever");
+  assert.deepEqual(c.log.toasts, []);
+});
+
+test("stopping: the voice alone again, in its own sender, and the screen's sound stopped", async () => {
+  const c = call({ withSound: true });
+  await c.startScreenShare();
+  await c.stopScreenShare();
+  assert.equal(c.senders[0].track, c.mic);
+  assert.ok(c.log.mixed.includes("closed"), "the mix is taken apart");
+  assert.equal(c.log.order.includes("stop screen sound"), true, "the shared sound stops with the picture");
+  assert.equal(c.now().screenMix, null);
+});
+
+test("the sound cannot be mixed: the picture is still shared, and the voice goes out as before", async () => {
+  const c = call({ withSound: true, mixFails: true });
+  await c.startScreenShare();
+  assert.equal(c.now().sharingScreen, true);
+  assert.equal(c.senders[1].track.name, "screen");
+  assert.equal(c.senders[0].track, c.mic);
+  assert.equal(c.log.order.includes("stop screen sound"), true, "the unused sound is not left running");
+});
+
+test("a call ending while the sound is shared takes the mix apart too", () => {
+  const stop = grab(/^function stopCallMedia\([^)]*\)\s*\{[\s\S]*?^\}/m, "stopCallMedia");
+  assert.match(stop, /if \(screenMix\) \{ screenMix\.close\(\); screenMix = null; \}/);
 });
 
 test("while sharing, the self-view shows the screen unmirrored, and the button says so", async () => {
@@ -368,7 +441,8 @@ test("the button toggles; a call offers it once its devices are in; ending one r
   const attach = grab(/^async function attachCallMedia\([^)]*\)\s*\{[\s\S]*?^\}/m, "attachCallMedia");
   assert.ok(attach.lastIndexOf("updateShareBtn()") > attach.lastIndexOf("attachCallTrack("));
   const stop = grab(/^function stopCallMedia\([^)]*\)\s*\{[\s\S]*?^\}/m, "stopCallMedia");
-  assert.match(stop, /sharingScreen = false;[^\n]*\n\s*updateShareBtn\(\);/);
+  assert.ok(stop.indexOf("sharingScreen = false;") > -1 && stop.indexOf("sharingScreen = false;") < stop.indexOf("updateShareBtn();"),
+    "sharing is over before the button is redrawn");
 });
 
 test("nothing that opens the camera can put it back over a shared screen", () => {

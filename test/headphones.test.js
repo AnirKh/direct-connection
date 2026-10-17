@@ -94,7 +94,8 @@ const SEEN_AIRPODS = "a1|iPhone Microphone,a2|AirPods";
 /** A call with a microphone (and a camera, unless `video` is false). Each
     getUserMedia opens what it asks for, named `next`. */
 function call({ inCall = true, audio = true, video = true, muted = false, camOff = false, busy = false,
-                refuse = false, devices = [PHONE_MIC, AIRPODS, CAMERA], seen = SEEN_PHONE, next = "headphones" } = {}) {
+                refuse = false, devices = [PHONE_MIC, AIRPODS, CAMERA], seen = SEEN_PHONE, next = "headphones",
+                mixing = false } = {}) {
   const log = { order: [], asked: [], replaced: [], attached: [], watched: [], toasts: [], played: 0 };
   let gate = null;
   const track = (kind, name) => ({ kind, name, readyState: "live", enabled: true,
@@ -134,6 +135,8 @@ function call({ inCall = true, audio = true, video = true, muted = false, camOff
     } },
     state: {
       inCall, isMuted: muted, isCamOff: camOff, restartingCallMedia: busy, audioInputsSeen: seen,
+      /* A screen's sound mixed in with the voice, as while sharing with sound. */
+      screenMix: mixing ? { setMic: m => log.order.push(`into the mix: ${m.name}`) } : null,
       callPc: { getSenders: () => senders },
       localStream: new MediaStream([mic, cam].filter(Boolean)),
       localVideo: { srcObject: null, style: { removeProperty() {} }, play() { log.played++; return Promise.resolve(); } }
@@ -141,7 +144,7 @@ function call({ inCall = true, audio = true, video = true, muted = false, camOff
   };
   const names = Object.keys(env).filter(n => n !== "state");
   const api = new Function(...names, "state", `
-    let { inCall, isMuted, isCamOff, restartingCallMedia, callPc, localStream, localVideo, audioInputsSeen, sharingScreen = false } = state;
+    let { inCall, isMuted, isCamOff, restartingCallMedia, callPc, localStream, localVideo, audioInputsSeen, sharingScreen = false, screenMix = null } = state;
     ${SOURCE}
     return {
       followAudioDevice, restartLikeCallStart,
@@ -166,6 +169,16 @@ test("headphones connected: the microphone alone is opened again, swapped in, an
   assert.equal(c.log.attached.length, 0);
   assert.equal(c.log.watched[0].name, "headphones mic", "watched like every call track, for a lock");
   assert.deepEqual(c.now().localStream.getVideoTracks(), [c.cam]);
+});
+
+test("while a screen's sound is mixed in, new headphones' microphone goes into the mix, not over it", async () => {
+  /* The voice's sender carries the mix; replacing its track would cut the
+     shared sound off. */
+  const c = call({ mixing: true });
+  await c.followAudioDevice();
+  assert.deepEqual(c.log.order, ["open mic", "into the mix: headphones mic", "stop phone mic"]);
+  assert.equal(c.log.replaced.length, 0, "the sender keeps the mix");
+  assert.deepEqual(c.now().localStream.getAudioTracks().map(t => t.name), ["headphones mic"]);
 });
 
 test("muted stays muted", async () => {
