@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171237-97b42c09";
+const APP_BUILD = "202610171247-af8e6199";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3655,6 +3655,33 @@ function watchCallStats(on) {
   if (on) callStatsTimer = setInterval(updateCallStats, 2000);
 }
 
+/* ── Upright pictures only ──────────────────
+   Reported: a laptop in Edge heard an iPhone but never saw it, and the call's
+   own figures showed the phone's video arriving and decoding. Turned sideways,
+   the phone appeared. An iPhone held upright sends its picture sideways with
+   an instruction to turn it (the video-orientation header extension), and
+   Edge on that laptop drew such pictures black. The laptop's camera never
+   needs turning, which is why the phone always saw the laptop.
+
+   So the extension is taken out of every call description this side writes.
+   A call negotiates it only if both offer and answer carry it, so either
+   side leaving it out is enough — an older app on the other end included.
+   Without it the sender turns the picture upright itself before sending, and
+   every receiver gets a picture it only has to show. A browser that will not
+   take the changed description is given the original: the call goes ahead as
+   it always did.                                                          */
+function withoutRotationExtension(desc) {
+  const sdp = String(desc?.sdp || "").replace(/^a=extmap:\d+(?:\/\w+)? urn:3gpp:video-orientation\r?\n/gm, "");
+  return { type: desc?.type, sdp };
+}
+
+async function setCallLocalDescription(desc) {
+  const upright = withoutRotationExtension(desc);
+  if (upright.sdp === desc.sdp) return callPc.setLocalDescription(desc);
+  try { await callPc.setLocalDescription(upright); }
+  catch (_) { await callPc.setLocalDescription(desc); }
+}
+
 /* ── The call's video format ────────────────
    Reported: a laptop (Edge) calling an iPhone heard it but never saw it,
    while the iPhone saw the laptop. The format is chosen from the list of
@@ -4018,7 +4045,7 @@ async function initiateCallOffer(peerWantsVideo) {
     await attachCallMedia(withVideo);
     preferCallVideoCodecs();
     const offer = await callPc.createOffer();
-    await callPc.setLocalDescription(offer);
+    await setCallLocalDescription(offer);
     // Send offer immediately — trickle ICE candidates will follow via call-ice messages
     dcSendCallSignal({
       type: "call-offer",
@@ -4053,7 +4080,7 @@ async function handleIncomingCallOffer(data) {
     await attachCallMedia(withVideo);
     preferCallVideoCodecs();
     const answer = await callPc.createAnswer();
-    await callPc.setLocalDescription(answer);
+    await setCallLocalDescription(answer);
     // Send answer immediately — trickle ICE candidates follow via call-ice messages
     dcSendCallSignal({
       type: "call-answer",

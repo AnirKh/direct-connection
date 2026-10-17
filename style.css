@@ -842,6 +842,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   pointer-events: none;
 }
 .call-stats:empty { display: none; }
+/* The "away" note sits where the figures do; with figures showing, it goes
+   under them rather than over them. */
+.call-stats:not(:empty) ~ .call-pause-note { top: calc(104px + var(--safe-top)); }
 .call-controls {
   position: absolute; bottom: calc(32px + var(--safe-bottom));
   display: flex; gap: 18px; z-index: 10;
