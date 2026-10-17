@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171228-55e99bdc";
+const APP_BUILD = "202610171237-97b42c09";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -213,6 +213,7 @@ const toggleCamBtn     = document.getElementById("toggleCamBtn");
 const flipCamBtn       = document.getElementById("flipCamBtn");
 const speakerBtn       = document.getElementById("speakerBtn");
 const shareBtn         = document.getElementById("shareBtn");
+const callStats        = document.getElementById("callStats");
 const endCallBtn       = document.getElementById("endCallBtn");
 const senderName       = document.getElementById("senderName");
 const leaveMessage     = document.getElementById("leaveMessage");
@@ -3614,6 +3615,44 @@ async function attachCallMedia(withVideo) {
   updateSpeakerBtn();
   updateShareBtn();
   noteAudioInputs();
+  watchCallStats(true);
+}
+
+/* ── What the call's video is doing ─────────
+   One line under the call's status: what arrives (↓) and what goes (↑) —
+   format, size, frames a second, rate. Added to find out why a laptop saw
+   nothing of an iPhone: "not sent", "not arriving" and "arriving but not
+   decoded" all look like the same black picture, and these figures tell them
+   apart. Empty in a voice call — there is no video either way.             */
+let callStatsTimer = null;
+let callStatsLast  = null;
+
+function describeCallVideo(side, none) {
+  if (!side) return none;
+  const parts = [side.codec || "?"];
+  if (side.width && side.height) parts.push(`${side.width}×${side.height}`);
+  parts.push(`${side.fps} fps`);
+  if (side.kbps !== null) parts.push(`${side.kbps} kb/s`);
+  return parts.join(" · ");
+}
+
+async function updateCallStats() {
+  if (!inCall || !callPc) return;
+  let report;
+  try { report = await callPc.getStats(); } catch (_) { return; }
+  const video = DCS.callVideoStats(report, callStatsLast);
+  callStatsLast = video;
+  callStats.textContent = video.in || video.out
+    ? `↓ ${describeCallVideo(video.in, t("callVideoNone"))}\n↑ ${describeCallVideo(video.out, "—")}`
+    : "";
+}
+
+function watchCallStats(on) {
+  clearInterval(callStatsTimer);
+  callStatsTimer = null;
+  callStatsLast = null;
+  callStats.textContent = "";
+  if (on) callStatsTimer = setInterval(updateCallStats, 2000);
 }
 
 /* ── The call's video format ────────────────
@@ -4044,6 +4083,7 @@ function stopCallMedia(clearOverlay = true) {
   sharingScreen = false;                    // the screen's track went with the rest
   updateShareBtn();
   audioInputsSeen = null;                   // the next call notes its own
+  watchCallStats(false);
   cameraFacing = "user";
   showCameraFacing();
   if (clearOverlay) {

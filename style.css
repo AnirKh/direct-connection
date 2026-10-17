@@ -826,6 +826,22 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   padding: 6px 18px; border-radius: 20px;
   z-index: 10; white-space: nowrap;
 }
+/* Under the status: what arrives (↓) and what goes (↑). Small and quiet —
+   figures to read off when the picture is wrong, not something to watch. */
+.call-stats {
+  position: absolute;
+  top: calc(58px + var(--safe-top));
+  left: 50%; transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: rgba(255,255,255,0.75);
+  background: rgba(0,0,0,0.45);
+  padding: 3px 10px; border-radius: 10px;
+  z-index: 10; text-align: left;
+  white-space: pre;                 /* ↓ on one line, ↑ on the next */
+  pointer-events: none;
+}
+.call-stats:empty { display: none; }
 .call-controls {
   position: absolute; bottom: calc(32px + var(--safe-bottom));
   display: flex; gap: 18px; z-index: 10;

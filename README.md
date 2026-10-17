@@ -291,6 +291,19 @@ A video call on a phone or tablet has a button to switch between the front and b
 - **Only the front camera is mirrored.** The back camera shows the world; text in it should read the right way round on this screen too. `showCameraFacing()` sets a class and the stylesheet does the rest — the mirror stays the stylesheet's alone.
 - **A restart after a lock opens the camera last flipped to.** Both it and `attachCallMedia` ask `callVideo()`; a fixed "front camera" there turned a back camera round on every unlock. Each new call starts on the front camera.
 
+## What the call's video is doing
+
+A video call shows two small lines under its status: what arrives (↓) and what goes out (↑) — format, size, frames a second, rate — read every two seconds from the call's own stats (`DCS.callVideoStats`, drawn by `updateCallStats()`). A voice call shows none.
+
+Added while chasing a laptop that heard an iPhone but never saw it, after two fixes made from reasoning alone did not change it. "Not sent", "not arriving" and "arriving but not decoded" all look like the same black picture; these figures tell them apart:
+
+| The laptop's ↓ | The phone's ↑ | Means |
+| --- | --- | --- |
+| "no video arriving" | nothing, or 0 kb/s | the phone is not sending |
+| "no video arriving" | sending, with a rate | sent, lost on the way |
+| a rate, but 0 fps and no size | sending | arrives, never decoded |
+| fps and a size | sending | decoded — the fault is in showing it |
+
 ## The call's video format: H.264 first
 
 Reported: a laptop (Edge) calling an iPhone heard it but never saw it, while the iPhone saw the laptop. A call's video format is chosen from the list of whoever places it. Chrome and Edge list **VP8** first, so when the laptop called, the iPhone had to *send* VP8 — which it can only do in software — and its picture never arrived. An iPhone placing a call lists **H.264** first, which every iPhone encodes in hardware, and phone-to-phone calls always worked.
@@ -551,6 +564,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
+- `test/callstats.test.js` — what a video call receives and sends: `DCS.callVideoStats` against a plain Map — format, size, frames a second, the rate from the last reading, arriving but not decoded, no video either way, and that a call reads it while it lasts.
 - `test/codecs.test.js` — the call's video format: `h264First()` and `preferCallVideoCodecs()` lifted out of `app.js` and run against stand-in transceivers — H.264 to the top with everything else kept as the fallback, the sound untouched, a browser that refuses a preference left to its own, and set before both the offer and the answer.
 - `test/screenshare.test.js` — screen sharing: `G.mayShareScreen`, `G.shareOffered` and the flip refusing while sharing, then `startScreenShare()` and `stopScreenShare()` lifted out of `app.js` and run against a stand-in screen and camera — the same sender, the camera stopped only once the screen is in, the picker closed, a hang-up mid-picker, the browser's own Stop sharing, the camera coming back as it was or not at all.
 - `test/headphones.test.js` — where a call's sound goes: `G.mayMoveMic`, `G.micChangeAction` and `G.speakerOffered`, then `followAudioDevice()` and `restartLikeCallStart()` lifted out of `app.js` and run against stand-in devices — only a change in microphones counts, the same sender, the old microphone stopped only once the new one is in, muted kept, a hang-up mid-open, a microphone that will not open.

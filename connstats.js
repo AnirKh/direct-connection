@@ -269,6 +269,55 @@
     return { sent, recv };
   }
 
+  /**
+   * What a video call is receiving and sending, from the call's own stats.
+   *
+   * Added to find out why a laptop saw nothing of an iPhone: whether the
+   * phone sends video at all, whether it reaches the laptop, and whether the
+   * laptop decodes it are three different faults, and only these figures tell
+   * them apart. Each side is null when there is no video that way.
+   *
+   * `prev` is the last result, for the rate; the first has none.
+   *
+   * @returns {{in: object|null, out: object|null, at: number}}
+   *          each side {codec, width, height, fps, frames, bytes, kbps}
+   */
+  function callVideoStats(stats, prev) {
+    let inbound = null, outbound = null, at = 0;
+    const codecs = {};
+    if (stats && typeof stats.forEach === "function") {
+      stats.forEach(r => { if (r && r.type === "codec") codecs[r.id] = r.mimeType; });
+      stats.forEach(r => {
+        if (!r || (r.kind || r.mediaType) !== "video") return;
+        if (r.type === "inbound-rtp")  inbound = r;
+        /* More than one only while a sender is being swapped; the one carrying
+           the picture is the one with the most behind it. */
+        if (r.type === "outbound-rtp" && (!outbound || (r.bytesSent || 0) > (outbound.bytesSent || 0))) outbound = r;
+        if (r.timestamp > at) at = r.timestamp;
+      });
+    }
+    const side = (r, bytesKey, framesKey, before) => {
+      if (!r) return null;
+      const bytes = r[bytesKey] || 0;
+      const ms = before && r.timestamp > before.at ? r.timestamp - before.at : 0;
+      return {
+        codec:  (codecs[r.codecId] || "").replace(/^video\//i, "") || null,
+        width:  r.frameWidth  || 0,
+        height: r.frameHeight || 0,
+        fps:    Math.round(r.framesPerSecond || 0),
+        frames: r[framesKey] || 0,
+        bytes,
+        /* bytes over milliseconds × 8 is kilobits a second */
+        kbps:   ms ? Math.max(0, Math.round(((bytes - before.bytes) * 8) / ms)) : null
+      };
+    };
+    return {
+      in:  side(inbound,  "bytesReceived", "framesDecoded", prev && prev.in  && { at: prev.at, bytes: prev.in.bytes }),
+      out: side(outbound, "bytesSent",     "framesSent",    prev && prev.out && { at: prev.at, bytes: prev.out.bytes }),
+      at
+    };
+  }
+
   function fmtBytes(b) {
     if (typeof b !== "number" || !isFinite(b) || b < 0) return "0B";
     if (b < 1024)    return `${b}B`;
@@ -289,6 +338,6 @@
     selectedCandidatePair, describePath,
     usableAddress, pathAddresses,
     OS_NAMES, BROWSER_NAMES, describeDevice, deviceLabel,
-    qualityFromRtt, trafficTotals, fmtBytes, timeAgo
+    qualityFromRtt, trafficTotals, callVideoStats, fmtBytes, timeAgo
   };
 });
