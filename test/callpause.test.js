@@ -108,7 +108,7 @@ function call({ video = true, inCall = true, refuse = false, muted = false, camO
     dcReady: () => true,
     dcSendCallSignal: m => { log.sent.push(m.type); return Promise.resolve(); },
     attachCallTrack: async t => { log.attached.push(t); },
-    CALL_VIDEO: { facingMode: "user" },
+    callVideo: () => ({ facingMode: "user" }),
     state: { inCall, callPc: { connectionState: "connected", getSenders: () => senders },
              localStream: new MediaStream([mic, cam].filter(Boolean)), isMuted: muted, isCamOff: camOff,
              localVideo: { srcObject: null, play() { log.played++; return Promise.resolve(); } } }
@@ -291,7 +291,11 @@ test("the call's link changing redraws the note; ending a call clears it; a new 
 test("the call's own microphone and camera are watched from the start", () => {
   const attach = fn("attachCallMedia");
   assert.match(attach, /localStream\.getTracks\(\)\.forEach\(watchCallTrack\)/);
-  assert.match(attach, /video: withVideo \? CALL_VIDEO : false/, "the same camera settings, starting or starting again");
+  assert.match(attach, /video: withVideo \? callVideo\(\) : false/, "the same camera settings, starting or starting again");
+  /* callVideo() faces whichever way the camera was last flipped. A fixed
+     setting here turned a flipped-to back camera round to the front on every
+     unlock. */
+  assert.match(fn("restartEndedCallMedia"), /video: kinds\.includes\("video"\) \? callVideo\(\) : false/);
 });
 
 test("starting again asks the call guard before opening, and again after", () => {

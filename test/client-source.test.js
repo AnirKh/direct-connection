@@ -123,6 +123,23 @@ test("every path to the camera asks the guard first", () => {
   }
 });
 
+test("every function that opens the camera or microphone itself asks first", () => {
+  /* The test above follows attachCallMedia. Three other doors open a device
+     directly — the voice-note recorder, the restart after a lock, the camera
+     flip — and a fourth must not be able to open one without asking. Each
+     has its own question, and every one of them starts from mayCaptureForCall
+     or the recorder's own lock. */
+  const opening = Array.from(topLevelFunctions(withoutComments(appSrc)))
+    .filter(([name, body]) => name !== "attachCallMedia" && body.includes("getUserMedia("));
+  assert.ok(opening.length >= 3, `expected the recorder, the restart and the flip, found ${opening.map(([n]) => n).join(", ")}`);
+  const asks = /\b(?:G\.)?(?:mayCaptureForCall|mayFlipCamera|tracksToRestart|mayStartRecording)\(/;
+  for (const [name, body] of opening) {
+    const m = body.match(asks);
+    assert.ok(m, `${name} opens a device without asking a guard`);
+    assert.ok(m.index < body.indexOf("getUserMedia("), `${name} must ask before opening, not after`);
+  }
+});
+
 test("a call that cannot be set up tells the other side", () => {
   /* Every path that opens the camera or takes the other side's description can
      fail — a refused permission, a camera another app holds. Those paths used

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610160743-02ceb748";
+const APP_BUILD = "202610170101-728e2544";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -210,6 +210,7 @@ const remoteVideo      = document.getElementById("remoteVideo");
 const localVideo       = document.getElementById("localVideo");
 const toggleMuteBtn    = document.getElementById("toggleMuteBtn");
 const toggleCamBtn     = document.getElementById("toggleCamBtn");
+const flipCamBtn       = document.getElementById("flipCamBtn");
 const endCallBtn       = document.getElementById("endCallBtn");
 const senderName       = document.getElementById("senderName");
 const leaveMessage     = document.getElementById("leaveMessage");
@@ -3489,15 +3490,23 @@ function consentedVideo(peerWantsVideo) {
   return G.consentedVideo(pendingCallVideo, peerWantsVideo);
 }
 
-/* The call's camera, the same whether it is starting or starting again. */
+/* The call's camera, the same whether it is starting or starting again — and
+   facing whichever way it was last flipped, so a restart after the screen was
+   locked does not quietly turn a back camera round to the front. */
 const CALL_VIDEO = { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } };
+let cameraFacing = "user";              // "user" is the front camera, "environment" the back
+function callVideo() {
+  return { ...CALL_VIDEO, facingMode: cameraFacing };
+}
 
 async function attachCallMedia(withVideo) {
   stopLocalCallMedia();
   callMediaRestarts = 0;
+  cameraFacing = "user";                // every call starts on the front camera
+  showCameraFacing();
   localStream = await navigator.mediaDevices.getUserMedia({
     audio: true,
-    video: withVideo ? CALL_VIDEO : false
+    video: withVideo ? callVideo() : false
   });
   localStream.getTracks().forEach(watchCallTrack);
   localVideo.srcObject = localStream;
@@ -3512,6 +3521,7 @@ async function attachCallMedia(withVideo) {
   for (const track of localStream.getTracks()) {
     await attachCallTrack(track, localStream);
   }
+  updateFlipCamBtn();
 }
 
 function updateLocalVideoAspect() {
@@ -3906,6 +3916,9 @@ function stopCallMedia(clearOverlay = true) {
   isCamOff = false;
   toggleMuteBtn.replaceChildren(tablerIcon("microphone"));
   toggleCamBtn.replaceChildren(tablerIcon("camera"));
+  flipCamBtn.classList.add("hidden");
+  cameraFacing = "user";
+  showCameraFacing();
   if (clearOverlay) {
     callOverlay.classList.add("hidden");
     callOverlay.classList.remove("voice-only");
@@ -3952,6 +3965,94 @@ toggleCamBtn.onclick = () => {
   localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
   toggleCamBtn.replaceChildren(tablerIcon(isCamOff ? "camera-off" : "camera"));
 };
+
+/* ── Flipping the camera ─────────────────────
+   Front to back and back again, mid-call. The other camera's track goes into
+   the same sender (replaceTrack): no new call, nothing renegotiated, the other
+   side just sees a different picture.
+
+   - The camera in use is stopped before the other one is opened. Many phones
+     run only one camera at a time and refuse the second while the first is
+     open; and iOS stops the first itself, which watchCallTrack would take for
+     the camera dying and start a restart in the middle of the flip. stop()
+     fires no "ended", so stopping it here sets nothing off.
+   - G.mayFlipCamera is asked before opening — a call that is on, with a camera
+     already in it, nothing else changing it — and the call is checked again
+     once the camera has opened, as at every other opening.
+   - If the other camera will not open, the one that was in use is opened
+     again, so a failed flip leaves the call as it was, not without a picture.
+   - Only the front camera is mirrored (showCameraFacing). The back one shows
+     the world, and text in it should read the right way round here too.     */
+async function flipCamera() {
+  const current = localStream?.getVideoTracks()[0];
+  if (!G.mayFlipCamera({ inCall, hasVideo: Boolean(current), busy: restartingCallMedia })) return;
+  restartingCallMedia = true;               // shared with the restart after a lock: one change at a time
+  flipCamBtn.disabled = true;
+  const pc = callPc;
+  const sender = pc?.getSenders().find(s => s.track === current);
+  const was = cameraFacing;
+  const next = was === "environment" ? "user" : "environment";
+  current.stop();
+  try {
+    let opened, facing = next, flipFailed = false;
+    try {
+      opened = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...CALL_VIDEO, facingMode: { exact: next } } });
+    } catch (err) {
+      console.error("Could not open the other camera:", err);
+      flipFailed = true;
+      facing = was;
+      opened = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...CALL_VIDEO, facingMode: was } });
+    }
+    /* Hung up, or another call begun, while the camera was opening: put it straight back. */
+    if (!G.mayCaptureForCall(inCall) || callPc !== pc || !localStream) {
+      opened.getTracks().forEach(track => track.stop());
+      return;
+    }
+    const track = opened.getVideoTracks()[0];
+    track.enabled = !isCamOff;              // camera off stays off
+    watchCallTrack(track);
+    track.onunmute = updateLocalVideoAspect;
+    track.onended = () => localVideo.style.removeProperty("--local-video-aspect");
+    if (sender) await sender.replaceTrack(track);
+    else        await attachCallTrack(track, localStream);
+    cameraFacing = facing;
+    /* A fresh stream, not a track swapped into the one on screen — Safari may
+       never draw a track added to a stream it is already showing. */
+    localStream = new MediaStream([...localStream.getAudioTracks(), track]);
+    localVideo.srcObject = localStream;
+    localVideo.play().catch(() => {});
+    showCameraFacing();
+    if (flipFailed) showToast(t("cameraFlipFailed"), "warn");
+  } catch (err) {
+    /* Neither camera would open. The call goes on with sound, and coming back
+       to the page tries the camera again (restartEndedCallMedia). */
+    console.error("Could not reopen the camera after a failed flip:", err);
+    showToast(t("callMediaRestartFailed"), "warn");
+  } finally {
+    restartingCallMedia = false;
+    flipCamBtn.disabled = false;
+  }
+}
+
+/** The self-view is mirrored for the front camera only. */
+function showCameraFacing() {
+  localVideo.classList.toggle("back-camera", cameraFacing === "environment");
+}
+
+/** Shown only on a device with a camera on each side — see G.flipCameraOffered.
+    The answer is read after the device list arrives, so a call that ended in
+    the meantime is not given the button back. */
+async function updateFlipCamBtn() {
+  let cameras = 0;
+  try { cameras = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput").length; }
+  catch (_) { /* no list, no flip */ }
+  const track = localStream?.getVideoTracks()[0];
+  flipCamBtn.classList.toggle("hidden", !G.flipCameraOffered({
+    inCall, hasVideo: Boolean(track), facing: track?.getSettings?.().facingMode, cameras
+  }));
+}
+
+flipCamBtn.onclick = () => flipCamera();
 
 endCallBtn.onclick = () => endCall(true);
 
@@ -4016,7 +4117,7 @@ async function restartEndedCallMedia() {
   try {
     const fresh = await navigator.mediaDevices.getUserMedia({
       audio: kinds.includes("audio"),
-      video: kinds.includes("video") ? CALL_VIDEO : false
+      video: kinds.includes("video") ? callVideo() : false
     });
     /* Hung up while the phone was asking: put it all straight back. */
     if (!G.mayCaptureForCall(inCall) || !callPc || !localStream) {

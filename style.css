@@ -796,6 +796,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   -webkit-touch-callout: none;
 }
 #localVideo.dragging { cursor: grabbing; }
+/* The back camera shows the world, not you: no mirror, so text in it reads the
+   right way round here as well. showCameraFacing() in app.js sets the class. */
+#localVideo.back-camera { transform: none; }
 /* Under the status line, so it covers neither the picture's middle nor the
    voice-call avatar. */
 .call-pause-note {

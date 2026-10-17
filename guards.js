@@ -619,6 +619,37 @@
   ══════════════════════════════════════════ */
 
   /**
+   * May the call's camera be flipped to the other side now?
+   *
+   * Flipping opens a camera, so only in an agreed call (mayCaptureForCall).
+   * Only when the call already has a camera in it: a flip swaps one camera for
+   * the other, and must never be how video gets into a voice call. And not
+   * while another change to the call's camera is under way — a second press,
+   * or a restart after the screen was locked — since both swap tracks into the
+   * same sender and the loser's camera would be left running.
+   *
+   * @param {{inCall: boolean, hasVideo: boolean, busy: boolean}} o
+   */
+  function mayFlipCamera(o) {
+    return Boolean(o) && mayCaptureForCall(o.inCall) && o.hasVideo === true && !o.busy;
+  }
+
+  /**
+   * Is there another side to flip to — should the flip button show?
+   *
+   * A phone or a tablet: more than one camera, and the one in use says which
+   * way it faces. A computer's webcam says nothing about facing, and a second
+   * webcam plugged into one is not "the other side"; there the button would
+   * only fail.
+   *
+   * @param {{inCall: boolean, hasVideo: boolean, facing: string|undefined, cameras: number}} o
+   */
+  function flipCameraOffered(o) {
+    return Boolean(o) && o.inCall === true && o.hasVideo === true &&
+      (o.facing === "user" || o.facing === "environment") && o.cameras > 1;
+  }
+
+  /**
    * Which of our call's microphone and camera need starting again?
    *
    * A phone that locks mid-call may stop them for good — the track ends — and
@@ -888,7 +919,7 @@
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
-    tracksToRestart, callPauseNote, unattended, tabTitle,
+    tracksToRestart, mayFlipCamera, flipCameraOffered, callPauseNote, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,

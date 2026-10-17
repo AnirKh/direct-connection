@@ -279,6 +279,18 @@ The self-view can be **dragged** anywhere inside the call, by mouse or finger. U
 
 The call buttons stay on top of it, so dragging it under them never blocks End call.
 
+## Flipping the camera
+
+A video call on a phone or tablet has a button to switch between the front and back cameras. It shows only where there is another side to flip to — more than one camera, and the one in use says which way it faces (`G.flipCameraOffered`). A computer's webcam says nothing about facing, so a computer never gets the button.
+
+`flipCamera()` puts the other camera's track into the **same sender** with `replaceTrack`: no new call, nothing renegotiated, the other side just sees a different picture. What it has to get right:
+
+- **The camera in use is stopped before the other is opened.** Many phones run one camera at a time and refuse the second while the first is open. iOS stops the first itself — which `watchCallTrack` would take for the camera dying, and start a restart in the middle of the flip. `stop()` fires no `ended`, so stopping it ourselves sets nothing off.
+- **It asks before opening and checks again after**, like every other door to the camera: `G.mayFlipCamera` — a call that is on, that already has a camera, with nothing else changing it — and `mayCaptureForCall` once it has opened. A flip never brings video into a voice call. It shares `restartingCallMedia` with the restart after a lock, so the two can never swap tracks at once.
+- **A camera that will not open leaves the call as it was.** The one that was in use is opened again and a message says the switch failed. If neither will open, the call goes on with sound, and coming back to the page tries the camera again.
+- **Only the front camera is mirrored.** The back camera shows the world; text in it should read the right way round on this screen too. `showCameraFacing()` sets a class and the stylesheet does the rest — the mirror stays the stylesheet's alone.
+- **A restart after a lock opens the camera last flipped to.** Both it and `attachCallMedia` ask `callVideo()`; a fixed "front camera" there turned a back camera round on every unlock. Each new call starts on the front camera.
+
 ## The other person's picture on an iPhone
 
 Reported from an iPhone: sometimes, in a video call, the other person's picture stayed black — while their voice came through, your own picture showed, and they could see you. The call was working; the picture was never drawn.
@@ -477,6 +489,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
+- `test/flipcamera.test.js` — the camera flip: `G.mayFlipCamera` and `G.flipCameraOffered` in every combination, then `flipCamera()` and `updateFlipCamBtn()` lifted out of `app.js` and run against stand-in cameras — stopped before the other opens, the same sender, a hang-up mid-open, a camera that refuses, only the front mirrored.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.
 - `test/i18n.test.js` — both languages have the same keys, every key `app.js` asks for by name exists in both, and every `data-i18n`, `data-i18n-ph` and `data-i18n-aria` key in `index.html` does too, since a missing one falls back silently. That `i18n.js` loads with storage throwing, missing or holding nonsense, and that switching language works with storage blocked. Also that the page opens straight to the lobby, with "about this page" as a dropdown beside the title rather than the dialog every visit used to start with, and that on a phone that button sits below the fixed language switcher rather than under it.
