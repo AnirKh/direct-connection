@@ -329,6 +329,8 @@ In a video call, a share button puts the screen in the camera's place. **Only wh
 - **Nothing puts the camera back over the screen.** The flip refuses while sharing (`G.mayFlipCamera`), `restartLikeCallStart()` does nothing, and headphones moving move only the microphone.
 - **A sharer in another window is not "away".** The sharer is usually in the window being shown, so the page being hidden does not send `call-away` while sharing.
 
+- **Held to Full HD.** Reported: shared from a laptop, the whole screen went out at full size — 2560×1600 and more — costly and laggy, worst on the phone receiving it. A shared screen is for reading, not for watching move, so it is held to at most 1920×1080 with its shape kept, 15 frames a second and 2.5 Mb/s (`SCREEN_MAX`). It is asked three ways, since browsers differ in which they honour: of the picker (`getDisplayMedia` constraints), of the captured track (`applyConstraints`), and of the sender (`setParameters`: `maxBitrate`, `maxFramerate`, and `scaleResolutionDownBy` worked out from the captured size by `screenScale()` — never above 1, so a small screen is never scaled up). The sender's limits are lifted when sharing stops, camera or not, so the camera goes out at its own size again. Checked with two browsers: a 2560×1600 screen at 30 fps went out as 1728×1080 at 15 fps, capped at 2.5 Mb/s, and the limits were gone once sharing stopped.
+
 Sharing is video only: the call's microphone carries on as it was, and a tab's own sound is not sent. Checked with two browsers through a local server, a stand-in screen and cameras: the other side saw camera, then screen, then camera again, in the same senders.
 
 ## Headphones connected mid-call

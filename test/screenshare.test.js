@@ -66,6 +66,10 @@ const grab = (pattern, what) => {
 };
 const SOURCE = [
   grab(/^const SHARE_SUPPORTED = [^\n]*;$/m,                          "SHARE_SUPPORTED"),
+  grab(/^const SCREEN_MAX = [^\n]*;$/m,                               "SCREEN_MAX"),
+  grab(/^const SCREEN_CAPTURE = [^\n]*;$/m,                           "SCREEN_CAPTURE"),
+  grab(/^function screenScale\([^)]*\)\s*\{[\s\S]*?^\}/m,             "screenScale"),
+  grab(/^async function limitScreenSender\([^)]*\)\s*\{[\s\S]*?^\}/m,  "limitScreenSender"),
   grab(/^async function startScreenShare\(\)\s*\{[\s\S]*?^\}/m,        "startScreenShare"),
   grab(/^async function stopScreenShare\(\)\s*\{[\s\S]*?^\}/m,         "stopScreenShare"),
   grab(/^function updateShareBtn\(\)\s*\{[\s\S]*?^\}/m,                "updateShareBtn"),
@@ -79,11 +83,14 @@ function classes(initial = []) {
 }
 
 function call({ inCall = true, video = true, camOff = false, busy = false, supported = true,
-                cancel = false, cameraRefuses = false } = {}) {
-  const log = { order: [], picker: [], asked: [], replaced: [], attached: [], watched: [], toasts: [], flipUpdates: 0 };
+                cancel = false, cameraRefuses = false, screenSize = [2560, 1600], refuseLimits = false } = {}) {
+  const log = { order: [], picker: [], asked: [], replaced: [], attached: [], watched: [], toasts: [], flipUpdates: 0,
+                applied: [], params: [] };
   let gate = null;
   const track = (kind, name) => ({ kind, name, readyState: "live", enabled: true,
-    stop() { this.readyState = "ended"; log.order.push(`stop ${name}`); } });
+    stop() { this.readyState = "ended"; log.order.push(`stop ${name}`); },
+    getSettings: () => (name === "screen" ? { width: screenSize[0], height: screenSize[1] } : {}),
+    applyConstraints: async c => { log.applied.push([name, c]); } });
   class MediaStream {
     constructor(tracks = []) { this.tracks = [...tracks]; }
     getTracks() { return [...this.tracks]; }
@@ -93,9 +100,19 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
   const mic = track("audio", "mic");
   const cam = video ? track("video", "camera") : null;
   if (cam) cam.enabled = !camOff;
-  const senders = [mic, cam].filter(Boolean).map(t => ({
-    track: t, replaceTrack(n) { log.order.push(`replace with ${n ? n.name : "nothing"}`); log.replaced.push(n); this.track = n; return Promise.resolve(); }
-  }));
+  const senders = [mic, cam].filter(Boolean).map(t => {
+    let params = { transactionId: "t1", encodings: [{ active: true, scaleResolutionDownBy: 1 }] };
+    return {
+      track: t, replaceTrack(n) { log.order.push(`replace with ${n ? n.name : "nothing"}`); log.replaced.push(n); this.track = n; return Promise.resolve(); },
+      getParameters: () => JSON.parse(JSON.stringify(params)),
+      setParameters: async p => {
+        if (refuseLimits) throw new Error("InvalidModificationError");
+        params = JSON.parse(JSON.stringify(p));
+        log.params.push(params.encodings[0]);
+      },
+      encoding: () => params.encodings[0]
+    };
+  });
   const mediaDevices = {
     getUserMedia: async constraints => {
       log.asked.push(constraints);
@@ -154,7 +171,8 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
 test("sharing: the picker, then the screen in the camera's sender, and only then the camera stopped", async () => {
   const c = call();
   await c.startScreenShare();
-  assert.deepEqual(c.log.picker, [{ video: true, audio: false }], "the screen only — the call's microphone carries on");
+  assert.deepEqual(c.log.picker, [{ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 15 } }, audio: false }],
+    "the screen only, at no more than Full HD — the call's microphone carries on");
   assert.deepEqual(c.log.order, ["picker", "replace with screen", "stop camera"]);
   const screen = c.senders[1].track;
   assert.equal(screen.name, "screen", "the same sender: no new call");
@@ -163,6 +181,63 @@ test("sharing: the picker, then the screen in the camera's sender, and only then
   assert.equal(screen.contentHint, "detail", "text kept sharp");
   assert.equal(typeof screen.onended, "function", "the browser's own Stop sharing is listened for");
   assert.ok(!c.log.watched.includes(screen), "not a camera to restart if it ends — ending is the sharer stopping");
+});
+
+test("a shared screen is held to Full HD — asked of the picker, the track and the sender", async () => {
+  /* Reported: a laptop's whole screen went out at full size, costly and
+     laggy, worst on the phone receiving it. */
+  const c = call({ screenSize: [2560, 1600] });
+  await c.startScreenShare();
+  assert.deepEqual(c.log.applied, [["screen", { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 15 } }]],
+    "the track is asked again, where the picker did not hold to it");
+  const encoding = c.senders[1].encoding();
+  assert.equal(encoding.maxBitrate, 2500000);
+  assert.equal(encoding.maxFramerate, 15);
+  assert.ok(Math.abs(encoding.scaleResolutionDownBy - 1600 / 1080) < 1e-9,
+    "2560×1600 scaled to 1728×1080: its shape kept, its height fitted");
+  assert.equal(c.senders[0].encoding().maxBitrate, undefined, "the microphone is left alone");
+});
+
+test("the scale only ever shrinks a screen, to fit both ways", () => {
+  const { screenScale } = new Function(`${SOURCE.split("\n").filter(l => /^const SCREEN_MAX/.test(l))[0]}\n${grab(/^function screenScale\([^)]*\)\s*\{[\s\S]*?^\}/m, "screenScale")}\nreturn { screenScale };`)();
+  assert.equal(screenScale(3840, 2160), 2, "4K to Full HD");
+  assert.equal(screenScale(1920, 1080), 1);
+  assert.equal(screenScale(1280, 800), 1, "a small screen is never scaled up");
+  assert.ok(Math.abs(screenScale(2560, 1440) - 4 / 3) < 1e-9, "wide: fitted by its width");
+  assert.equal(screenScale(0, 0), 1, "a size not known yet is left alone");
+  assert.equal(screenScale(undefined, 900), 1);
+});
+
+test("a screen already within Full HD goes out at its own size", async () => {
+  const c = call({ screenSize: [1366, 768] });
+  await c.startScreenShare();
+  assert.equal(c.senders[1].encoding().scaleResolutionDownBy, 1);
+  assert.equal(c.senders[1].encoding().maxFramerate, 15, "still 15 frames a second: a screen is for reading");
+});
+
+test("stopping lifts the limits, so the camera goes out at its own size again", async () => {
+  const c = call();
+  await c.startScreenShare();
+  await c.stopScreenShare();
+  const encoding = c.senders[1].encoding();
+  assert.equal(encoding.maxBitrate, undefined);
+  assert.equal(encoding.maxFramerate, undefined);
+  assert.equal(encoding.scaleResolutionDownBy, 1);
+});
+
+test("the limits are lifted even when the camera will not come back", async () => {
+  /* A later return to the page brings the camera back into this sender. */
+  const c = call({ cameraRefuses: true });
+  await c.startScreenShare();
+  await c.stopScreenShare();
+  assert.equal(c.senders[1].encoding().maxBitrate, undefined);
+});
+
+test("a browser that will not take limits still shares", async () => {
+  const c = call({ refuseLimits: true });
+  await c.startScreenShare();
+  assert.equal(c.now().sharingScreen, true);
+  assert.equal(c.senders[1].track.name, "screen");
 });
 
 test("while sharing, the self-view shows the screen unmirrored, and the button says so", async () => {

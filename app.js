@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171247-af8e6199";
+const APP_BUILD = "202610172231-ad1930c1";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -4269,6 +4269,45 @@ const SHARE_SUPPORTED = typeof navigator.mediaDevices?.getDisplayMedia === "func
 let sharingScreen = false;
 let camOffBeforeShare = false;              // a camera turned off before sharing comes back off
 
+/* A shared screen is for reading, not for watching move. Reported: shared from
+   a laptop, the whole screen went out at full size — 2560×1600 and more — and
+   it was costly and laggy, worst on the phone receiving it. So a shared screen
+   is held to Full HD: at most 1920×1080 with its shape kept, 15 frames a
+   second and 2.5 Mb/s. It is asked three ways, since browsers differ in which
+   they honour — of the picker, of the captured track, and of the sender, whose
+   limit is the one nothing ignores — and lifted again for the camera when
+   sharing stops.                                                           */
+const SCREEN_MAX = { width: 1920, height: 1080, fps: 15, bitrate: 2_500_000 };
+const SCREEN_CAPTURE = { width: { max: SCREEN_MAX.width }, height: { max: SCREEN_MAX.height }, frameRate: { max: SCREEN_MAX.fps } };
+
+/** How far a screen of this size is scaled down to fit Full HD — never up. */
+function screenScale(width, height) {
+  if (!(width > 0 && height > 0)) return 1;
+  return Math.max(1, width / SCREEN_MAX.width, height / SCREEN_MAX.height);
+}
+
+/** The sender's limits: Full HD for a screen, none for the camera (screen null). */
+async function limitScreenSender(sender, screen) {
+  if (!sender || typeof sender.getParameters !== "function") return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) return;   // nothing negotiated yet to limit
+    const { width, height } = screen?.getSettings?.() || {};
+    for (const encoding of params.encodings) {
+      if (screen) {
+        encoding.maxBitrate = SCREEN_MAX.bitrate;
+        encoding.maxFramerate = SCREEN_MAX.fps;
+        encoding.scaleResolutionDownBy = screenScale(width, height);
+      } else {
+        delete encoding.maxBitrate;
+        delete encoding.maxFramerate;
+        encoding.scaleResolutionDownBy = 1;
+      }
+    }
+    await sender.setParameters(params);
+  } catch (_) { /* a browser that will not take limits sends as it would have */ }
+}
+
 async function startScreenShare() {
   const camera = localStream?.getVideoTracks()[0];
   if (sharingScreen) return;
@@ -4279,7 +4318,7 @@ async function startScreenShare() {
   try {
     let display;
     /* Nothing awaited before this: the picker needs the tap that asked for it. */
-    try { display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }); }
+    try { display = await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAPTURE, audio: false }); }
     catch (_) { return; }                   // the picker closed, or sharing refused: the call goes on as it was
     const screen = display.getVideoTracks()[0];
     /* Hung up, or another call begun, while the picker was up: put it straight back. */
@@ -4289,9 +4328,12 @@ async function startScreenShare() {
     }
     screen.contentHint = "detail";          // text kept sharp rather than motion smooth
     screen.onended = () => stopScreenShare();
+    /* Where the picker did not hold to Full HD, the track is asked again. */
+    try { await screen.applyConstraints(SCREEN_CAPTURE); } catch (_) { /* the sender's limit still holds */ }
     const sender = pc.getSenders().find(s => s.track === camera);
     if (sender) await sender.replaceTrack(screen);
     else        await attachCallTrack(screen, localStream);
+    await limitScreenSender(pc.getSenders().find(s => s.track === screen), screen);
     camera.stop();                          // only once the screen is in its place
     sharingScreen = true;
     camOffBeforeShare = isCamOff;
@@ -4346,6 +4388,9 @@ async function stopScreenShare() {
       localVideo.srcObject = localStream;
       localVideo.play().catch(() => {});
     }
+    /* The camera goes out at its own size again — and so does one that a
+       later return to the page brings back, if it would not open now. */
+    await limitScreenSender(sender, null);
     screen.stop();
     showCameraFacing();
     updateFlipCamBtn();
