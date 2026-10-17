@@ -652,6 +652,25 @@
   }
 
   /**
+   * May the call's controls — its status, its figures, its buttons — fade
+   * away for now?
+   *
+   * Reported: during a call they stayed on screen for good, over the other
+   * person and over a shared screen. They step aside once there is something
+   * behind them to see and nobody is using them: a video call, connected, with
+   * no pointer resting on them and no keyboard moving through them. Before the
+   * call connects they say what is happening; in a voice call there is
+   * nothing behind them.
+   *
+   * @param {{inCall: boolean, connected: boolean, video: boolean,
+   *          pointerOnControls: boolean, keyboardInControls: boolean}} o
+   */
+  function callChromeMayHide(o) {
+    return Boolean(o) && o.inCall === true && o.connected === true && o.video === true &&
+      !o.pointerOnControls && !o.keyboardInControls;
+  }
+
+  /**
    * Should the share button show? In a video call, where the browser can share.
    *
    * @param {{inCall: boolean, hasVideo: boolean, supported: boolean}} o
@@ -999,7 +1018,7 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
-    mayShareScreen, shareOffered, callPauseNote, unattended, tabTitle,
+    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,

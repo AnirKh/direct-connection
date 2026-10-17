@@ -842,6 +842,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   pointer-events: none;
 }
 .call-stats:empty { display: none; }
+/* The call's controls step aside once nothing has touched the call for a few
+   seconds — see showCallChrome() in app.js. Faded, not removed: they come back
+   in place, with no jump. The self-view and the away note are not included. */
+.call-status-label, .call-stats, .call-controls { transition: opacity 0.3s ease; }
+.call-overlay.chrome-hidden .call-status-label,
+.call-overlay.chrome-hidden .call-stats,
+.call-overlay.chrome-hidden .call-controls { opacity: 0; pointer-events: none; }
+.call-overlay.chrome-hidden { cursor: none; }
+/* The tap that brings them back presses nothing. */
+.call-overlay.chrome-waking .call-controls { pointer-events: none; }
 /* The "away" note sits where the figures do; with figures showing, it goes
    under them rather than over them. */
 .call-stats:not(:empty) ~ .call-pause-note { top: calc(104px + var(--safe-top)); }

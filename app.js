@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610172249-80d2c608";
+const APP_BUILD = "202610172300-c74e7e3d";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -4119,6 +4119,7 @@ function stopCallMedia(clearOverlay = true) {
     callOverlay.classList.remove("voice-only");
     remoteVideo.classList.remove("hidden");
     localVideo.classList.remove("hidden");
+    stopCallChrome();
   }
 }
 
@@ -4136,7 +4137,62 @@ function showCallOverlay(statusText, withVideo) {
     remoteVideo.classList.remove("hidden");
     localVideo.classList.add("hidden");
   }
+  showCallChrome();
 }
+
+/* ── The call's controls step aside ─────────
+   Reported: during a call the "connected" label and the buttons stayed on
+   screen for good, and a shared screen was hard to see behind them. Once the
+   call is connected and nothing has been touched for a few seconds, the
+   status, the figures and the buttons fade (G.callChromeMayHide); on a
+   computer the pointer goes too. Any tap, click, key or movement over the
+   call brings them back.
+
+   The tap that brings them back does only that: for a moment after, the
+   buttons take no taps, so a tap on the empty screen cannot land on a button
+   that was invisible when the finger came down. The self-view and the "away"
+   note are not part of it — they stay.                                      */
+const CALL_CHROME_IDLE_MS = 4000;
+const callControls = callOverlay.querySelector(".call-controls");
+let callChromeTimer = null;
+
+function showCallChrome() {
+  const wasHidden = callOverlay.classList.contains("chrome-hidden");
+  callOverlay.classList.remove("chrome-hidden");
+  if (wasHidden) {
+    callOverlay.classList.add("chrome-waking");
+    setTimeout(() => callOverlay.classList.remove("chrome-waking"), 350);
+  }
+  clearTimeout(callChromeTimer);
+  callChromeTimer = setTimeout(hideCallChrome, CALL_CHROME_IDLE_MS);
+}
+
+function hideCallChrome() {
+  callChromeTimer = null;
+  if (callOverlay.classList.contains("hidden")) return;     // no call on screen
+  const mayHide = G.callChromeMayHide({
+    inCall,
+    connected: callPc?.connectionState === "connected",
+    video: !callOverlay.classList.contains("voice-only"),
+    /* :hover sticks after a tap on a phone; only a real pointer counts */
+    pointerOnControls: window.matchMedia?.("(hover: hover)").matches === true && callControls.matches(":hover"),
+    keyboardInControls: Boolean(callControls.querySelector(":focus-visible"))
+  });
+  /* Not yet — still connecting, say: look again later rather than never. */
+  if (!mayHide) { callChromeTimer = setTimeout(hideCallChrome, CALL_CHROME_IDLE_MS); return; }
+  callOverlay.classList.add("chrome-hidden");
+}
+
+function stopCallChrome() {
+  clearTimeout(callChromeTimer);
+  callChromeTimer = null;
+  callOverlay.classList.remove("chrome-hidden", "chrome-waking");
+}
+
+for (const type of ["pointermove", "pointerdown", "focusin"]) {
+  callOverlay.addEventListener(type, () => { if (!callOverlay.classList.contains("hidden")) showCallChrome(); });
+}
+document.addEventListener("keydown", () => { if (!callOverlay.classList.contains("hidden")) showCallChrome(); });
 
 function tablerIcon(name, size, color) {
   const icon = document.createElement("i");
