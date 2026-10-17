@@ -303,6 +303,19 @@ So while a call is on, a change in the phone's microphones opens the microphone 
 
 Whether the sound then reaches the headphones is the phone's doing; the page has no say over where sound goes on an iPhone. This was checked in a browser with stand-in devices, not on a phone with real headphones.
 
+### Back to the loudspeaker
+
+Reported next: with headphones taken off mid-call, the sound landed on the iPhone's quiet **earpiece**, as for a voice call, with no way back — while a video call started without headphones was on the loudspeaker and fine. The microphone had been opened again alone, and on its own the phone treated it as a voice call.
+
+**A page cannot choose the loudspeaker over the earpiece on an iPhone** — no browser there offers it. What a page can do is what happens as a video call starts, which is when the phone picks the loudspeaker: stop the call's microphone and camera altogether and open both again (`restartLikeCallStart()`), swapping them into the same senders. Two things do that:
+
+- **Headphones coming off in a video call** (`G.micChangeAction` → `"mic-and-camera"`: fewer microphones than before, and a camera in the call). Headphones arriving still open the microphone alone — that works, and does not blink the picture.
+- **The loudspeaker button**, for whenever the sound is quiet. Only on an iPhone or iPad, only in a video call (`G.speakerOffered`): a voice call has no camera to open, and opening one would be capture nobody agreed to.
+
+Everything is stopped *first*, unlike the microphone-only move: the phone decides where the sound goes when the capture starts, and it has to start. The cost is a moment without sound or picture while both come back. Muted stays muted, camera off stays off, and it shares `restartingCallMedia` with the flip and the restart after a lock. If they will not open, the tracks are left ended and coming back to the page tries again.
+
+It is the phone's decision in the end. If an iPhone keeps the earpiece after this, a page cannot overrule it, and the button should go.
+
 ## The other person's picture on an iPhone
 
 Reported from an iPhone: sometimes, in a video call, the other person's picture stayed black — while their voice came through, your own picture showed, and they could see you. The call was working; the picture was never drawn.
@@ -518,7 +531,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
-- `test/headphones.test.js` — headphones connected mid-call: `G.mayMoveMic` in every combination, then `followAudioDevice()` lifted out of `app.js` and run against stand-in devices — only a change in microphones counts, the same sender, the old microphone stopped only once the new one is in, muted kept, a hang-up mid-open, a microphone that will not open.
+- `test/headphones.test.js` — where a call's sound goes: `G.mayMoveMic`, `G.micChangeAction` and `G.speakerOffered`, then `followAudioDevice()` and `restartLikeCallStart()` lifted out of `app.js` and run against stand-in devices — only a change in microphones counts, the same sender, the old microphone stopped only once the new one is in, muted kept, a hang-up mid-open, a microphone that will not open.
 - `test/flipcamera.test.js` — the camera flip: `G.mayFlipCamera` and `G.flipCameraOffered` in every combination, then `flipCamera()` and `updateFlipCamBtn()` lifted out of `app.js` and run against stand-in cameras — stopped before the other opens, the same sender, a hang-up mid-open, a camera that refuses, only the front mirrored.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.
 - `test/remotevideo.test.js` — the other person's picture: `createCallPeerConnection()`, `showRemoteTracks()` and `playRemoteCallMedia()` lifted out of `app.js` and run against a stand-in `<video>` and connection — never an empty stream to start, a fresh stream per arriving track, a blank picture re-attached when frames arrive, a showing one left alone.

@@ -877,6 +877,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   .icon-btn { width: 38px; height: 38px; font-size: 18px; }
   .send-btn  { width: 38px; height: 38px; }
   .bubble-row { max-width: 92%; }
+  /* Up to five call buttons on an iPhone (mute, camera, flip, loudspeaker,
+     end): 5 × 52px and their gaps is 316px, more than a 320px screen holds. */
+  .call-controls { gap: 10px; }
+  .call-btn { width: 48px; height: 48px; font-size: 19px; }
 }
 /* ── TOAST NOTIFICATIONS ───────────────────── */
 .dc-toast-container {

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171105-cce32ba1";
+const APP_BUILD = "202610171128-0ec1f2e3";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -211,6 +211,7 @@ const localVideo       = document.getElementById("localVideo");
 const toggleMuteBtn    = document.getElementById("toggleMuteBtn");
 const toggleCamBtn     = document.getElementById("toggleCamBtn");
 const flipCamBtn       = document.getElementById("flipCamBtn");
+const speakerBtn       = document.getElementById("speakerBtn");
 const endCallBtn       = document.getElementById("endCallBtn");
 const senderName       = document.getElementById("senderName");
 const leaveMessage     = document.getElementById("leaveMessage");
@@ -3607,6 +3608,7 @@ async function attachCallMedia(withVideo) {
     await attachCallTrack(track, localStream);
   }
   updateFlipCamBtn();
+  updateSpeakerBtn();
   noteAudioInputs();
 }
 
@@ -4003,6 +4005,7 @@ function stopCallMedia(clearOverlay = true) {
   toggleMuteBtn.replaceChildren(tablerIcon("microphone"));
   toggleCamBtn.replaceChildren(tablerIcon("camera"));
   flipCamBtn.classList.add("hidden");
+  speakerBtn.classList.add("hidden");
   cameraFacing = "user";
   showCameraFacing();
   if (clearOverlay) {
@@ -4168,12 +4171,22 @@ function noteAudioInputs() {
   audioInputsNow().then(list => { audioInputsSeen = list; });
 }
 
+function micCount(list) {
+  return list ? list.split(",").length : 0;
+}
+
 async function followAudioDevice() {
   const old = localStream?.getAudioTracks()[0];
   if (!G.mayMoveMic({ inCall, hasAudio: Boolean(old), busy: restartingCallMedia })) return;
   const list = await audioInputsNow();
   if (list === audioInputsSeen) return;
+  const action = G.micChangeAction({
+    before: micCount(audioInputsSeen), after: micCount(list), hasVideo: Boolean(localStream?.getVideoTracks().length)
+  });
   audioInputsSeen = list;
+  /* Headphones taken off in a video call: as the call started, so the sound
+     goes back to the loudspeaker rather than the earpiece. */
+  if (action === "mic-and-camera") { await restartLikeCallStart(); return; }
   restartingCallMedia = true;               // one change to the call's devices at a time
   const pc = callPc;
   try {
@@ -4197,6 +4210,70 @@ async function followAudioDevice() {
     restartingCallMedia = false;
   }
 }
+
+/* ── The loudspeaker ────────────────────────
+   Reported: after headphones came off mid-call, the sound was on the
+   iPhone's quiet earpiece, and there was no way to get the loudspeaker back.
+   A page on an iPhone cannot choose between them — no browser there offers
+   it. What it can do is what happens as a video call starts, which is when
+   the phone picks the loudspeaker: stop the call's microphone and camera
+   altogether and open both again (restartLikeCallStart). The headphones
+   coming off do that by themselves (micChangeAction); the button does it on
+   request. The picture blinks while the camera comes back.
+
+   Only on an iPhone or iPad, only in a video call (G.speakerOffered). It is
+   the phone's decision in the end: if it keeps the earpiece, this cannot
+   overrule it.                                                              */
+async function restartLikeCallStart() {
+  const old = localStream;
+  if (!G.mayMoveMic({ inCall, hasAudio: Boolean(old?.getAudioTracks()[0]), busy: restartingCallMedia })) return;
+  const withVideo = old.getVideoTracks().length > 0;
+  restartingCallMedia = true;               // shared with the flip and the restart after a lock
+  speakerBtn.disabled = true;
+  const pc = callPc;
+  const senders = old.getTracks().map(track => ({ kind: track.kind, sender: pc?.getSenders().find(s => s.track === track) }));
+  /* All of it stopped first: the phone decides where the sound goes when the
+     capture starts, and it has to start. stop() fires no "ended". */
+  old.getTracks().forEach(track => track.stop());
+  try {
+    const fresh = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo ? callVideo() : false });
+    /* Hung up, or another call begun, while it was opening: put it straight back. */
+    if (!G.mayCaptureForCall(inCall) || callPc !== pc || !localStream) {
+      fresh.getTracks().forEach(track => track.stop());
+      return;
+    }
+    for (const track of fresh.getTracks()) {
+      track.enabled = track.kind === "audio" ? !isMuted : !isCamOff;   // muted stays muted, camera off stays off
+      watchCallTrack(track);
+      if (track.kind === "video") {
+        track.onunmute = updateLocalVideoAspect;
+        track.onended = () => localVideo.style.removeProperty("--local-video-aspect");
+      }
+      const sender = senders.find(s => s.kind === track.kind)?.sender;
+      if (sender) await sender.replaceTrack(track);
+      else        await attachCallTrack(track, fresh);
+    }
+    localStream = fresh;
+    localVideo.srcObject = localStream;
+    localVideo.play().catch(() => {});
+    showCameraFacing();
+  } catch (err) {
+    /* Left ended, so coming back to the page tries again (restartEndedCallMedia). */
+    console.error("Could not open the call's microphone and camera again:", err);
+    showToast(t("callMediaRestartFailed"), "warn");
+  } finally {
+    restartingCallMedia = false;
+    speakerBtn.disabled = false;
+  }
+}
+
+function updateSpeakerBtn() {
+  speakerBtn.classList.toggle("hidden", !G.speakerOffered({
+    inCall, hasVideo: Boolean(localStream?.getVideoTracks().length), os: MY_DEVICE.os
+  }));
+}
+
+speakerBtn.onclick = () => restartLikeCallStart();
 
 /* Connecting headphones fires this more than once; act on where it settles. */
 navigator.mediaDevices?.addEventListener?.("devicechange", () => {

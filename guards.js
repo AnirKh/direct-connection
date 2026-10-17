@@ -652,6 +652,42 @@
   }
 
   /**
+   * What a change in the phone's microphones, mid-call, should do.
+   *
+   *   "mic"             open the microphone again, alone — headphones arriving:
+   *                     the phone prefers theirs and the sound goes with it
+   *   "mic-and-camera"  open both again, as a call starts — headphones taken
+   *                     off in a video call. Reported: with the microphone
+   *                     alone, the sound landed on the iPhone's quiet earpiece,
+   *                     as for a voice call; a video call starts on the
+   *                     loudspeaker, and opening both as it did brings that back.
+   *   "none"            nothing that matters to the sound changed
+   *
+   * @param {{before: number, after: number, hasVideo: boolean}} o
+   *        how many microphones the phone listed before and after
+   */
+  function micChangeAction(o) {
+    if (!o || !Number.isFinite(o.before) || !Number.isFinite(o.after)) return "none";
+    if (o.after < o.before && o.hasVideo === true) return "mic-and-camera";
+    return "mic";
+  }
+
+  /**
+   * Should the call show the loudspeaker button?
+   *
+   * On an iPhone or iPad a page has no way to choose the loudspeaker over the
+   * earpiece; what it can do is open the microphone and camera again as a
+   * video call starts, which is when the phone picks the loudspeaker. So only
+   * there, and only in a video call — a voice call has no camera to open, and
+   * opening one would be capture nobody agreed to.
+   *
+   * @param {{inCall: boolean, hasVideo: boolean, os: string}} o
+   */
+  function speakerOffered(o) {
+    return Boolean(o) && o.inCall === true && o.hasVideo === true && (o.os === "iphone" || o.os === "ipad");
+  }
+
+  /**
    * Is there another side to flip to — should the flip button show?
    *
    * A phone or a tablet: more than one camera, and the one in use says which
@@ -936,7 +972,7 @@
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
-    tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, callPauseNote, unattended, tabTitle,
+    tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered, callPauseNote, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
