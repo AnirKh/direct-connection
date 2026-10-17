@@ -291,6 +291,22 @@ A video call on a phone or tablet has a button to switch between the front and b
 - **Only the front camera is mirrored.** The back camera shows the world; text in it should read the right way round on this screen too. `showCameraFacing()` sets a class and the stylesheet does the rest — the mirror stays the stylesheet's alone.
 - **A restart after a lock opens the camera last flipped to.** Both it and `attachCallMedia` ask `callVideo()`; a fixed "front camera" there turned a back camera round on every unlock. Each new call starts on the front camera.
 
+## A call whose link drops tries again
+
+Asked how to make connections steadier. A call has its own connection, beside the chat's. When the chat's link failed it already tried again (an ICE restart, through the server); when a **call's** failed — Wi-Fi to mobile data mid-call, a moment without signal — the call simply **ended**.
+
+Now it tries first (`G.callRecovery`, run once a second by `stepCallRecovery()` while the link is down):
+
+- **The side that placed the call asks for a fresh route** — an ICE restart (`createOffer({ iceRestart: true })`), sent as `call-restart` over the chat's encrypted channel and answered with `call-restart-answer` on the **same** connection, so the camera and microphone carry on and nothing is set up again. Only that side asks, so two offers never cross. It asks after three seconds down — a blip may mend itself — and again every eight seconds. With the chat's channel down too, the ask waits for it.
+- **The call says "Reconnecting…"** meanwhile: a failed link now counts as reconnecting, not just a disconnected one (`G.callPauseNote`).
+- **After half a minute down, both sides give up**: the call ends with `endCall(true)`, so the other side is told, and the chat says the connection was lost rather than leaving a frozen picture.
+- **A candidate that arrives before the fresh description it belongs to** — the two travel separately — is kept and tried again once the description is in, rather than lost.
+- **Closed is still the end**: a connection that is closed was put down on purpose.
+
+A failed fresh route does not end the call by itself — that is the recovery's job when it gives up — which is why `handleCallRestart` and `handleCallRestartAnswer` are held to a rule of their own in `client-source.test.js` rather than to the call-setup one. Checked in a two-browser call by asking for a fresh route mid-call: both sides took new ICE credentials, the call stayed connected, and video kept arriving both ways.
+
+**Not done yet: a relay (TURN).** The app has STUN servers only, which help two devices find each other but carry nothing. Where a network blocks a direct link — common on mobile data, and on some office, hotel or school Wi-Fi — the devices cannot connect at all; recovery cannot help a route that never existed. A TURN relay fixes that, passing along traffic it cannot read (messages are end-to-end encrypted, calls DTLS-SRTP). The plan is Cloudflare's TURN service, with the server handing each page short-lived credentials so its secret never reaches a page.
+
 ## The call's controls step aside
 
 Reported: during a call the "connected" label and the buttons stayed on screen for good, and a shared screen was hard to see behind them. Now, once a video call is connected and nothing has touched it for four seconds, the status, the figures and the buttons fade out (`showCallChrome()` / `hideCallChrome()`), and on a computer the pointer goes too. Any tap, click, key or movement over the call brings them back, and the four seconds start again.
@@ -586,6 +602,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
+- `test/callrecovery.test.js` — a call whose link drops: `G.callRecovery` in every case, then the recovery lifted out of `app.js` and run with a stand-in clock and connection — the caller asking for a fresh route after three seconds and every eight, stopping once back up, waiting for the chat's channel, both sides giving up at half a minute and saying so, the answer on the same connection, and a stray answer changing nothing.
 - `test/callchrome.test.js` — the call's controls stepping aside: `G.callChromeMayHide` in every case, then `showCallChrome()`, `hideCallChrome()` and `stopCallChrome()` lifted out of `app.js` and run with a stand-in clock — fading after four seconds, coming back on a touch, the waking tap pressing nothing, staying while connecting or in a voice call or in use, a phone's leftover hover, and the CSS that makes faded mean untouchable.
 - `test/rotation.test.js` — upright pictures only: `withoutRotationExtension()` and `setCallLocalDescription()` lifted out of `app.js` — the video-orientation extension taken out and nothing else, the original given back to a browser that refuses the change, both the offer and the answer going through it — and the away note moved under the figures.
 - `test/callstats.test.js` — what a video call receives and sends: `DCS.callVideoStats` against a plain Map — format, size, frames a second, the rate from the last reading, arriving but not decoded, no video either way, and that a call reads it while it lasts.

@@ -63,7 +63,7 @@ function call({ inCall = true } = {}) {
   const run = new Function(
     "MediaStream", "RTCPeerConnection", "remoteVideo", "callStatusLabel", "t",
     "ICE_CONFIG", "currentSession", "dcSendCallSignal", "endCall", "inCall",
-    `let callPc = null, remoteCallStream = null;\n${SOURCE}\ncreateCallPeerConnection();`
+    `let callPc = null, remoteCallStream = null;\nconst stopCallRecovery = () => {}, watchCallLink = () => {};\n${SOURCE}\ncreateCallPeerConnection();`
   );
   run(MediaStream, RTCPeerConnection, video, { textContent: "" }, key => key,
       {}, null, () => {}, () => {}, inCall);

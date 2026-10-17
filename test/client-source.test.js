@@ -152,9 +152,22 @@ test("a call that cannot be set up tells the other side", () => {
 
      Found by what they do rather than by name, like the camera test above. */
   const fns = topLevelFunctions(withoutComments(appSrc));
+  /* A fresh route for a call already going (call-restart) is not setting one
+     up: a failed attempt must not end the call — the recovery tries again,
+     and ends it, telling the other side, only once it gives up. Checked on
+     its own below. */
+  const restarting = new Set(["handleCallRestart", "handleCallRestartAnswer"]);
   const settingUp = Array.from(fns)
-    .filter(([name, body]) => name !== "attachCallMedia" &&
+    .filter(([name, body]) => name !== "attachCallMedia" && !restarting.has(name) &&
       (body.includes("attachCallMedia(") || body.includes("callPc.setRemoteDescription(")));
+  for (const name of restarting) {
+    const body = fns.get(name);
+    assert.ok(body, `${name} not found`);
+    assert.ok(!/endCall\(/.test(body), `${name}: a failed fresh route must leave the call to the recovery, not end it`);
+    assert.ok(body.indexOf("try {") < body.indexOf("setRemoteDescription("), `${name} takes a description outside its try`);
+  }
+  assert.match(fns.get("stepCallRecovery"), /if \(action === "give-up"\) \{\s*\n\s*stopCallRecovery\(\);\s*\n\s*endCall\(true\);/,
+    "giving up tells the other side");
 
   assert.ok(settingUp.length >= 3,
     `expected the offer, the answer and the accepted answer, found ${settingUp.map(([n]) => n).join(", ")}`);

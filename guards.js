@@ -790,8 +790,39 @@
   function callPauseNote(o) {
     if (!o || o.inCall !== true) return null;
     if (o.peerAway === true) return "away";
-    if (o.linkState === "disconnected") return "reconnecting";
+    /* "failed" too: a failed call link is now worked on (callRecovery), not
+       simply ended, so it is reconnecting as much as a disconnected one. */
+    if (o.linkState === "disconnected" || o.linkState === "failed") return "reconnecting";
     return null;
+  }
+
+  /**
+   * What a call whose own link is down should do now.
+   *
+   * Reported, asking how to make connections steadier: a call whose link
+   * failed — Wi-Fi to mobile data mid-call, a moment without signal — simply
+   * ended, while the chat beside it tried again. Now the call tries too: the
+   * side that placed it asks for a fresh route (an ICE restart) over the
+   * chat's channel — one side only, so two offers never cross — after a few
+   * seconds down, and again now and then; both sides give up once it has been
+   * down long enough to be gone.
+   *
+   *   "none"     the link is up, or this is not a link that is down
+   *   "wait"     down, and nothing to do yet
+   *   "restart"  ask for a fresh route now (the side that placed the call)
+   *   "give-up"  down too long: end the call, and say why
+   *
+   * @param {{state: string, offerer: boolean, downFor: number,
+   *          sinceRestart: number, restarts: number}} o  times in ms
+   */
+  const CALL_RECOVER = Object.freeze({ firstTryMs: 3000, retryMs: 8000, giveUpMs: 30000 });
+  function callRecovery(o) {
+    if (!o || (o.state !== "disconnected" && o.state !== "failed")) return "none";
+    if (!(o.downFor >= 0)) return "wait";
+    if (o.downFor >= CALL_RECOVER.giveUpMs) return "give-up";
+    if (o.offerer === true && o.downFor >= CALL_RECOVER.firstTryMs &&
+        (o.restarts === 0 || o.sinceRestart >= CALL_RECOVER.retryMs)) return "restart";
+    return "wait";
   }
 
   /* ══════════════════════════════════════════
@@ -1018,7 +1049,7 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
-    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, unattended, tabTitle,
+    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,

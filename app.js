@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610172300-c74e7e3d";
+const APP_BUILD = "202610172335-49583390";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1878,7 +1878,10 @@ function createCallPeerConnection() {
     if (state === "connected") {
       callStatusLabel.textContent = t("callConnected");
     }
-    if (state === "failed" || state === "closed") {
+    /* Down — disconnected, or failed outright — is worked on, not ended: see
+       watchCallLink. Closed is the call being put down. */
+    watchCallLink();
+    if (state === "closed") {
       if (inCall) endCall(false);
     }
   };
@@ -1931,6 +1934,7 @@ function closeCallPeerConnection() {
     callPc = null;
   }
   remoteCallStream = null;
+  stopCallRecovery();                   // nothing left to reconnect
 }
 
 function isChatLinkUp() {
@@ -2999,6 +3003,14 @@ function handleTextMessage(data, sealed = false) {
       handleCallIce(data.candidate);
       break;
 
+    case "call-restart":
+      handleCallRestart(data);
+      break;
+
+    case "call-restart-answer":
+      handleCallRestartAnswer(data);
+      break;
+
     case "call-away":
     case "call-back":
       /* Their page was hidden — a locked screen, or another app — or is back. */
@@ -4018,9 +4030,105 @@ async function handleCallIce(candidate) {
   if (!candidate) return;
   if (callPc && callPc.remoteDescription && callPc.remoteDescription.type) {
     try { await callPc.addIceCandidate(new RTCIceCandidate(candidate)); }
-    catch (e) { console.warn("call-ice add failed:", e); }
+    catch (e) {
+      /* During a fresh route (call-restart) a candidate for it can arrive
+         before the description it belongs to — the two travel separately.
+         Kept, and tried again once that description is in; one that still
+         does not fit is dropped then. */
+      callIceQueue.push(candidate);
+    }
   } else {
     callIceQueue.push(candidate);
+  }
+}
+
+/* ── A call whose link drops ────────────────
+   Reported, asking for steadier connections: a call whose link failed —
+   Wi-Fi to mobile data mid-call, a moment without signal — simply ended,
+   while the chat beside it tried again. Now the call tries too
+   (G.callRecovery): the side that placed it asks for a fresh route — an ICE
+   restart, over the chat's encrypted channel, on the same connection, so the
+   camera and microphone carry on — after a few seconds down, and again now
+   and then. Only that side asks, so two offers never cross. The call says
+   "Reconnecting…" meanwhile, and both sides give up and say so once it has
+   been down for half a minute.                                           */
+let callOfferer      = false;          // this side placed the call
+let callDownSince    = 0;
+let callRestartAt    = 0;
+let callRestarts     = 0;
+let callRecoverTimer = null;
+
+function watchCallLink() {
+  const state = callPc?.connectionState;
+  if (state === "connected") { stopCallRecovery(); return; }
+  if (state !== "disconnected" && state !== "failed") return;
+  if (!callDownSince) callDownSince = Date.now();
+  if (!callRecoverTimer) callRecoverTimer = setInterval(stepCallRecovery, 1000);
+}
+
+function stepCallRecovery() {
+  if (!inCall || !callPc) { stopCallRecovery(); return; }
+  const now = Date.now();
+  const action = G.callRecovery({
+    state: callPc.connectionState, offerer: callOfferer,
+    downFor: now - callDownSince, sinceRestart: now - callRestartAt, restarts: callRestarts
+  });
+  if (action === "none") { stopCallRecovery(); return; }
+  if (action === "give-up") {
+    stopCallRecovery();
+    endCall(true);
+    appendSys(t("callLinkLost"));
+    return;
+  }
+  /* The ask travels on the chat's channel; with that down too, wait for it. */
+  if (action === "restart" && dcReady()) {
+    callRestartAt = now;
+    callRestarts++;
+    restartCallRoute();
+  }
+}
+
+function stopCallRecovery() {
+  clearInterval(callRecoverTimer);
+  callRecoverTimer = null;
+  callDownSince = callRestartAt = callRestarts = 0;
+}
+
+async function restartCallRoute() {
+  const pc = callPc;
+  try {
+    const offer = await pc.createOffer({ iceRestart: true });
+    if (callPc !== pc) return;
+    await setCallLocalDescription(offer);
+    dcSendCallSignal({ type: "call-restart", offer: pc.localDescription });
+  } catch (err) {
+    console.error("Could not ask for a fresh route for the call:", err);
+  }
+}
+
+/** The other side asking for a fresh route: answered on the same connection. */
+async function handleCallRestart(data) {
+  if (!inCall || !callPc || !data?.offer) return;
+  const pc = callPc;
+  try {
+    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    await drainCallIceQueue();
+    const answer = await pc.createAnswer();
+    if (callPc !== pc) return;
+    await setCallLocalDescription(answer);
+    dcSendCallSignal({ type: "call-restart-answer", answer: pc.localDescription });
+  } catch (err) {
+    console.error("Could not answer the call's fresh route:", err);
+  }
+}
+
+async function handleCallRestartAnswer(data) {
+  if (!inCall || !callPc || !data?.answer || callPc.signalingState !== "have-local-offer") return;
+  try {
+    await callPc.setRemoteDescription(new RTCSessionDescription(data.answer));
+    await drainCallIceQueue();
+  } catch (err) {
+    console.error("Could not take the call's fresh route:", err);
   }
 }
 
@@ -4041,6 +4149,7 @@ async function initiateCallOffer(peerWantsVideo) {
   showCallOverlay(withVideo ? t("videoConnecting") : t("voiceConnecting"), withVideo);
   try {
     createCallPeerConnection();
+    callOfferer = true;                 // this side asks for a fresh route if the link drops
     ensureOutgoingCallTransceivers(withVideo);
     await attachCallMedia(withVideo);
     preferCallVideoCodecs();
@@ -4073,6 +4182,7 @@ async function handleIncomingCallOffer(data) {
   showCallOverlay(t("connecting"), withVideo);
   try {
     createCallPeerConnection();
+    callOfferer = false;                // the other side asks; this one answers
     // setRemoteDescription fires ontrack immediately, before the local media is
     // attached below, so the stream is stored and played once we are ready
     await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
