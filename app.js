@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171216-7e593204";
+const APP_BUILD = "202610171228-55e99bdc";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3616,6 +3616,35 @@ async function attachCallMedia(withVideo) {
   noteAudioInputs();
 }
 
+/* ── The call's video format ────────────────
+   Reported: a laptop (Edge) calling an iPhone heard it but never saw it,
+   while the iPhone saw the laptop. The format is chosen from the list of
+   whoever places the call. Chrome and Edge list VP8 first, so the iPhone had
+   to send VP8, which it can only do in software, and its picture never
+   arrived. An iPhone placing the call lists H.264 first — what every iPhone
+   encodes in hardware — and phone-to-phone calls always worked.
+
+   So both sides list H.264 first, before the offer and before the answer.
+   Where both have it, every call uses it; a browser without it falls back to
+   the rest of the list as before, and one that will not take a preference
+   keeps its own order.                                                     */
+function h264First(codecs) {
+  const h264 = codecs.filter(c => /^video\/h264$/i.test(c.mimeType));
+  return [...h264, ...codecs.filter(c => !h264.includes(c))];
+}
+
+function preferCallVideoCodecs() {
+  if (!callPc || typeof RTCRtpReceiver === "undefined" || typeof RTCRtpReceiver.getCapabilities !== "function") return;
+  const codecs = RTCRtpReceiver.getCapabilities("video")?.codecs;
+  if (!codecs?.length) return;
+  for (const transceiver of callPc.getTransceivers()) {
+    if (transceiver.receiver?.track?.kind !== "video" || transceiver.stopped) continue;
+    if (typeof transceiver.setCodecPreferences !== "function") continue;
+    try { transceiver.setCodecPreferences(h264First(codecs)); }
+    catch (_) { /* this browser keeps its own order */ }
+  }
+}
+
 function updateLocalVideoAspect() {
   const videoTrack = localStream?.getVideoTracks()[0];
   const settings = videoTrack?.getSettings?.() || {};
@@ -3948,6 +3977,7 @@ async function initiateCallOffer(peerWantsVideo) {
     createCallPeerConnection();
     ensureOutgoingCallTransceivers(withVideo);
     await attachCallMedia(withVideo);
+    preferCallVideoCodecs();
     const offer = await callPc.createOffer();
     await callPc.setLocalDescription(offer);
     // Send offer immediately — trickle ICE candidates will follow via call-ice messages
@@ -3982,6 +4012,7 @@ async function handleIncomingCallOffer(data) {
     await callPc.setRemoteDescription(new RTCSessionDescription(data.offer));
     await drainCallIceQueue();
     await attachCallMedia(withVideo);
+    preferCallVideoCodecs();
     const answer = await callPc.createAnswer();
     await callPc.setLocalDescription(answer);
     // Send answer immediately — trickle ICE candidates follow via call-ice messages
