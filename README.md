@@ -291,6 +291,19 @@ A video call on a phone or tablet has a button to switch between the front and b
 - **Only the front camera is mirrored.** The back camera shows the world; text in it should read the right way round on this screen too. `showCameraFacing()` sets a class and the stylesheet does the rest — the mirror stays the stylesheet's alone.
 - **A restart after a lock opens the camera last flipped to.** Both it and `attachCallMedia` ask `callVideo()`; a fixed "front camera" there turned a back camera round on every unlock. Each new call starts on the front camera.
 
+## Sharing the screen
+
+In a video call, a share button puts the screen in the camera's place. **Only where the browser can share** — a computer's (Chrome, Edge, Firefox, Safari on a Mac). No iPhone or iPad browser can share its screen, and mobile browsers generally cannot, so there the button never shows (`SHARE_SUPPORTED`, `G.shareOffered`). Watching a shared screen works everywhere: to the other side it is the video it was already getting.
+
+- **The browser's own picker is the consent.** It asks which screen, window or tab, every time; nothing is shared without it. `G.mayShareScreen` decides only whether the call is one to share into — an agreed video call, nothing else changing its devices. Closing the picker leaves the call exactly as it was, with no message: not sharing is not an error.
+- **The same sender** (`replaceTrack`): no new call, nothing renegotiated. A voice call has no video sender, so it gets no button.
+- **The camera is stopped while sharing** — nothing captured that is not being sent — and opened again when sharing stops, by the button or the browser's own "Stop sharing" (the screen's track ending). The camera comes back as it was: facing the way it was last flipped, and off if it was turned off before sharing. If it will not open, the screen stops anyway and is left ended in the call, so coming back to the page tries the camera again.
+- **The self-view shows what is shared, unmirrored** (`#localVideo.screen-share`) — what the other side sees, as they see it. The button is lit while sharing.
+- **Nothing puts the camera back over the screen.** The flip refuses while sharing (`G.mayFlipCamera`), `restartLikeCallStart()` does nothing, and headphones moving move only the microphone.
+- **A sharer in another window is not "away".** The sharer is usually in the window being shown, so the page being hidden does not send `call-away` while sharing.
+
+Sharing is video only: the call's microphone carries on as it was, and a tab's own sound is not sent. Checked with two browsers through a local server, a stand-in screen and cameras: the other side saw camera, then screen, then camera again, in the same senders.
+
 ## Headphones connected mid-call
 
 Reported: Bluetooth headphones connected during a video call on an iPhone, and the other person went on coming out of the phone's speaker. On an iPhone a call's sound goes wherever its microphone is, and the call's microphone was the phone's own — opened when the call began, before the headphones arrived. Headphones connected before the call were never a problem: the call opened theirs from the start.
@@ -531,6 +544,7 @@ Node's built-in runner, no dependencies.
 - `test/shield.test.js` — the shield and its panel, lifted out of `app.js` and **run** against stand-in elements: what sentence, addresses and devices end up on screen in each state. Added because a text-level check passed while the "who can read this" sentence was never being redrawn.
 - `test/pake.test.js` — SPAKE2: every step against the official RFC 9382 test vector (`pA`, `pB`, the shared `K`, the transcript, the derived keys, both confirmation tags), plus matching words reaching one key, and wrong words, tampered messages and invalid points failing.
 - `test/build.test.js` — the build stamp: that it still describes the files, that every local file carries it, and `refuseToRunInAStalePage()` lifted out of `app.js` and run against a stand-in page.
+- `test/screenshare.test.js` — screen sharing: `G.mayShareScreen`, `G.shareOffered` and the flip refusing while sharing, then `startScreenShare()` and `stopScreenShare()` lifted out of `app.js` and run against a stand-in screen and camera — the same sender, the camera stopped only once the screen is in, the picker closed, a hang-up mid-picker, the browser's own Stop sharing, the camera coming back as it was or not at all.
 - `test/headphones.test.js` — where a call's sound goes: `G.mayMoveMic`, `G.micChangeAction` and `G.speakerOffered`, then `followAudioDevice()` and `restartLikeCallStart()` lifted out of `app.js` and run against stand-in devices — only a change in microphones counts, the same sender, the old microphone stopped only once the new one is in, muted kept, a hang-up mid-open, a microphone that will not open.
 - `test/flipcamera.test.js` — the camera flip: `G.mayFlipCamera` and `G.flipCameraOffered` in every combination, then `flipCamera()` and `updateFlipCamBtn()` lifted out of `app.js` and run against stand-in cameras — stopped before the other opens, the same sender, a hang-up mid-open, a camera that refuses, only the front mirrored.
 - `test/selfview.test.js` — the self-view: that only it is mirrored and only by the stylesheet, and `selfViewPosition()`, `moveSelfView()` and `keepSelfViewInside()` lifted out of `app.js` and run against stand-in elements — past every edge, a phone turned on its side, a hidden call.

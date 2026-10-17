@@ -142,7 +142,7 @@ function call({ inCall = true, video = true, camOff = false, busy = false, facin
   };
   const names = Object.keys(env).filter(n => n !== "state");
   const api = new Function(...names, "state", `
-    let { inCall, isCamOff, restartingCallMedia, cameraFacing, callPc, localStream, localVideo } = state;
+    let { inCall, isCamOff, restartingCallMedia, cameraFacing, callPc, localStream, localVideo, sharingScreen = false } = state;
     ${SOURCE}
     return {
       flipCamera, updateFlipCamBtn, callVideo, showCameraFacing,

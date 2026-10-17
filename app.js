@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171128-0ec1f2e3";
+const APP_BUILD = "202610171148-73223703";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -212,6 +212,7 @@ const toggleMuteBtn    = document.getElementById("toggleMuteBtn");
 const toggleCamBtn     = document.getElementById("toggleCamBtn");
 const flipCamBtn       = document.getElementById("flipCamBtn");
 const speakerBtn       = document.getElementById("speakerBtn");
+const shareBtn         = document.getElementById("shareBtn");
 const endCallBtn       = document.getElementById("endCallBtn");
 const senderName       = document.getElementById("senderName");
 const leaveMessage     = document.getElementById("leaveMessage");
@@ -3609,6 +3610,7 @@ async function attachCallMedia(withVideo) {
   }
   updateFlipCamBtn();
   updateSpeakerBtn();
+  updateShareBtn();
   noteAudioInputs();
 }
 
@@ -4006,6 +4008,8 @@ function stopCallMedia(clearOverlay = true) {
   toggleCamBtn.replaceChildren(tablerIcon("camera"));
   flipCamBtn.classList.add("hidden");
   speakerBtn.classList.add("hidden");
+  sharingScreen = false;                    // the screen's track went with the rest
+  updateShareBtn();
   cameraFacing = "user";
   showCameraFacing();
   if (clearOverlay) {
@@ -4074,7 +4078,7 @@ toggleCamBtn.onclick = () => {
      the world, and text in it should read the right way round here too.     */
 async function flipCamera() {
   const current = localStream?.getVideoTracks()[0];
-  if (!G.mayFlipCamera({ inCall, hasVideo: Boolean(current), busy: restartingCallMedia })) return;
+  if (!G.mayFlipCamera({ inCall, hasVideo: Boolean(current), busy: restartingCallMedia, sharing: sharingScreen })) return;
   restartingCallMedia = true;               // shared with the restart after a lock: one change at a time
   flipCamBtn.disabled = true;
   const pc = callPc;
@@ -4123,9 +4127,11 @@ async function flipCamera() {
   }
 }
 
-/** The self-view is mirrored for the front camera only. */
+/** The self-view is mirrored for the front camera only — never the back
+    camera, and never a shared screen. */
 function showCameraFacing() {
   localVideo.classList.toggle("back-camera", cameraFacing === "environment");
+  localVideo.classList.toggle("screen-share", sharingScreen);
 }
 
 /** Shown only on a device with a camera on each side — see G.flipCameraOffered.
@@ -4142,6 +4148,123 @@ async function updateFlipCamBtn() {
 }
 
 flipCamBtn.onclick = () => flipCamera();
+
+/* ── Sharing the screen ─────────────────────
+   In a video call, from a browser that can — a computer's; no iPhone or iPad
+   browser can share its screen. The browser's own picker chooses the screen,
+   window or tab, and is the consent: nothing is shared without it.
+
+   The screen takes the camera's place in the same sender (replaceTrack): no new
+   call, and the other side sees the screen where the camera was. The camera is
+   stopped meanwhile — nothing is captured that is not being sent — and opened
+   again when sharing stops, by the button or by the browser's own "Stop
+   sharing" (the track ending).
+
+   While sharing, the self-view shows what is shared, not mirrored; the flip
+   has nothing to flip; headphones moving move only the microphone; and the
+   page being hidden — the sharer is usually in the window being shown — does
+   not tell the other side they have gone away.                              */
+const SHARE_SUPPORTED = typeof navigator.mediaDevices?.getDisplayMedia === "function";
+let sharingScreen = false;
+let camOffBeforeShare = false;              // a camera turned off before sharing comes back off
+
+async function startScreenShare() {
+  const camera = localStream?.getVideoTracks()[0];
+  if (sharingScreen) return;
+  if (!G.mayShareScreen({ inCall, hasVideo: Boolean(camera), busy: restartingCallMedia, supported: SHARE_SUPPORTED })) return;
+  restartingCallMedia = true;               // one change to the call's devices at a time
+  shareBtn.disabled = true;
+  const pc = callPc;
+  try {
+    let display;
+    /* Nothing awaited before this: the picker needs the tap that asked for it. */
+    try { display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }); }
+    catch (_) { return; }                   // the picker closed, or sharing refused: the call goes on as it was
+    const screen = display.getVideoTracks()[0];
+    /* Hung up, or another call begun, while the picker was up: put it straight back. */
+    if (!G.mayCaptureForCall(inCall) || callPc !== pc || !localStream || !screen) {
+      display.getTracks().forEach(track => track.stop());
+      return;
+    }
+    screen.contentHint = "detail";          // text kept sharp rather than motion smooth
+    screen.onended = () => stopScreenShare();
+    const sender = pc.getSenders().find(s => s.track === camera);
+    if (sender) await sender.replaceTrack(screen);
+    else        await attachCallTrack(screen, localStream);
+    camera.stop();                          // only once the screen is in its place
+    sharingScreen = true;
+    camOffBeforeShare = isCamOff;
+    isCamOff = false;                       // sharing is choosing to be seen — the screen, not the camera
+    toggleCamBtn.replaceChildren(tablerIcon("camera"));
+    localStream = new MediaStream([...localStream.getAudioTracks(), screen]);
+    localVideo.srcObject = localStream;
+    localVideo.play().catch(() => {});
+    showCameraFacing();
+    updateFlipCamBtn();
+  } finally {
+    restartingCallMedia = false;
+    shareBtn.disabled = false;
+    updateShareBtn();
+  }
+}
+
+async function stopScreenShare() {
+  const screen = localStream?.getVideoTracks()[0];
+  if (!sharingScreen || !screen) return;
+  /* Another change is finishing — the share only just began, say. Once it has. */
+  if (restartingCallMedia) { setTimeout(stopScreenShare, 300); return; }
+  restartingCallMedia = true;
+  shareBtn.disabled = true;
+  sharingScreen = false;
+  screen.onended = null;
+  /* As it was before sharing: a camera turned off then is off again now. */
+  isCamOff = camOffBeforeShare;
+  toggleCamBtn.replaceChildren(tablerIcon(isCamOff ? "camera-off" : "camera"));
+  const pc = callPc;
+  const sender = pc?.getSenders().find(s => s.track === screen);
+  try {
+    if (!G.mayCaptureForCall(inCall)) return;   // hung up: the call's own ending stops everything
+    let camera = null;
+    try {
+      camera = (await navigator.mediaDevices.getUserMedia({ audio: false, video: callVideo() })).getVideoTracks()[0];
+    } catch (err) {
+      /* No camera: the screen stops anyway, and is left ended in the call, so
+         coming back to the page tries the camera again (restartEndedCallMedia). */
+      console.error("Could not open the camera again after sharing:", err);
+      showToast(t("callMediaRestartFailed"), "warn");
+    }
+    if (!G.mayCaptureForCall(inCall) || callPc !== pc || !localStream) { camera?.stop(); return; }
+    if (camera) {
+      camera.enabled = !isCamOff;
+      watchCallTrack(camera);
+      camera.onunmute = updateLocalVideoAspect;
+      camera.onended = () => localVideo.style.removeProperty("--local-video-aspect");
+      if (sender) await sender.replaceTrack(camera);
+      else        await attachCallTrack(camera, localStream);
+      localStream = new MediaStream([...localStream.getAudioTracks(), camera]);
+      localVideo.srcObject = localStream;
+      localVideo.play().catch(() => {});
+    }
+    screen.stop();
+    showCameraFacing();
+    updateFlipCamBtn();
+  } finally {
+    restartingCallMedia = false;
+    shareBtn.disabled = false;
+    updateShareBtn();
+  }
+}
+
+function updateShareBtn() {
+  shareBtn.classList.toggle("hidden", !G.shareOffered({
+    inCall, hasVideo: Boolean(localStream?.getVideoTracks().length), supported: SHARE_SUPPORTED
+  }));
+  shareBtn.classList.toggle("sharing", sharingScreen);
+  shareBtn.replaceChildren(tablerIcon(sharingScreen ? "screen-share-off" : "screen-share"));
+  shareBtn.setAttribute("aria-label", t(sharingScreen ? "stopSharing" : "shareScreen"));
+}
+
+shareBtn.onclick = () => (sharingScreen ? stopScreenShare() : startScreenShare());
 
 /* ── Headphones connected mid-call ──────────
    Reported: Bluetooth headphones connected during a video call on an iPhone,
@@ -4180,8 +4303,10 @@ async function followAudioDevice() {
   if (!G.mayMoveMic({ inCall, hasAudio: Boolean(old), busy: restartingCallMedia })) return;
   const list = await audioInputsNow();
   if (list === audioInputsSeen) return;
+  /* While a screen is shared there is no camera to open again: the
+     microphone moves alone, and the share goes on. */
   const action = G.micChangeAction({
-    before: micCount(audioInputsSeen), after: micCount(list), hasVideo: Boolean(localStream?.getVideoTracks().length)
+    before: micCount(audioInputsSeen), after: micCount(list), hasVideo: Boolean(localStream?.getVideoTracks().length) && !sharingScreen
   });
   audioInputsSeen = list;
   /* Headphones taken off in a video call: as the call started, so the sound
@@ -4227,6 +4352,7 @@ async function followAudioDevice() {
 async function restartLikeCallStart() {
   const old = localStream;
   if (!G.mayMoveMic({ inCall, hasAudio: Boolean(old?.getAudioTracks()[0]), busy: restartingCallMedia })) return;
+  if (sharingScreen) return;                // it would put the camera back over the shared screen
   const withVideo = old.getVideoTracks().length > 0;
   restartingCallMedia = true;               // shared with the flip and the restart after a lock
   speakerBtn.disabled = true;
@@ -4381,7 +4507,9 @@ async function restartEndedCallMedia() {
 document.addEventListener("visibilitychange", () => {
   if (!inCall) return;
   const away = document.visibilityState === "hidden";
-  if (dcReady()) dcSendCallSignal({ type: away ? "call-away" : "call-back" }).catch(() => {});
+  /* Sharing a screen, the sharer is usually in the window being shown — the
+     page hidden behind it is not someone gone away. */
+  if (dcReady() && !(away && sharingScreen)) dcSendCallSignal({ type: away ? "call-away" : "call-back" }).catch(() => {});
   if (!away) restartEndedCallMedia();
 });
 

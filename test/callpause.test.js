@@ -116,7 +116,7 @@ function call({ video = true, inCall = true, refuse = false, muted = false, camO
   env.state.localVideo.srcObject = env.state.localStream;
   const names = Object.keys(env).filter(n => n !== "state");
   const api = new Function(...names, "state", `
-    let { inCall, callPc, localStream, isMuted, isCamOff, localVideo } = state;
+    let { inCall, callPc, localStream, isMuted, isCamOff, localVideo, sharingScreen = false } = state;
     ${BLOCK}
     return {
       restartEndedCallMedia, updateCallPauseNote, watchCallTrack,

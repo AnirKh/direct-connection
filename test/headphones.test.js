@@ -141,7 +141,7 @@ function call({ inCall = true, audio = true, video = true, muted = false, camOff
   };
   const names = Object.keys(env).filter(n => n !== "state");
   const api = new Function(...names, "state", `
-    let { inCall, isMuted, isCamOff, restartingCallMedia, callPc, localStream, localVideo, audioInputsSeen } = state;
+    let { inCall, isMuted, isCamOff, restartingCallMedia, callPc, localStream, localVideo, audioInputsSeen, sharingScreen = false } = state;
     ${SOURCE}
     return {
       followAudioDevice, restartLikeCallStart,

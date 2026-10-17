@@ -631,7 +631,33 @@
    * @param {{inCall: boolean, hasVideo: boolean, busy: boolean}} o
    */
   function mayFlipCamera(o) {
-    return Boolean(o) && mayCaptureForCall(o.inCall) && o.hasVideo === true && !o.busy;
+    return Boolean(o) && mayCaptureForCall(o.inCall) && o.hasVideo === true && !o.busy && !o.sharing;
+  }
+
+  /**
+   * May this side start sharing its screen now?
+   *
+   * The browser asks which screen, window or tab, every time — that picker is
+   * the consent, and nothing is shared without it. This only decides whether
+   * the call is one to share into: an agreed call (mayCaptureForCall) that
+   * already sends video, since the screen takes the camera's place in the same
+   * sender. A voice call has no video to replace. Not while another change to
+   * the call's devices is under way, and not where the browser cannot share
+   * (no iPhone or iPad browser can).
+   *
+   * @param {{inCall: boolean, hasVideo: boolean, busy: boolean, supported: boolean}} o
+   */
+  function mayShareScreen(o) {
+    return Boolean(o) && mayCaptureForCall(o.inCall) && o.hasVideo === true && !o.busy && o.supported === true;
+  }
+
+  /**
+   * Should the share button show? In a video call, where the browser can share.
+   *
+   * @param {{inCall: boolean, hasVideo: boolean, supported: boolean}} o
+   */
+  function shareOffered(o) {
+    return Boolean(o) && o.inCall === true && o.hasVideo === true && o.supported === true;
   }
 
   /**
@@ -972,7 +998,8 @@
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
-    tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered, callPauseNote, unattended, tabTitle,
+    tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
+    mayShareScreen, shareOffered, callPauseNote, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
