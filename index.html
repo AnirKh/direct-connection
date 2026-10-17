@@ -15,9 +15,9 @@
        Install button at the bottom left is in the lobby (installOffer in
        guards.js). iPhones read the apple-* lines, since Safari takes the icon
        and title from these rather than from the manifest. -->
-  <link rel="manifest" href="manifest.webmanifest?v=202610171015-fa8a5dec">
-  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610171015-fa8a5dec">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610171015-fa8a5dec">
+  <link rel="manifest" href="manifest.webmanifest?v=202610171038-31f76d72">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610171038-31f76d72">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610171038-31f76d72">
   <meta name="theme-color" content="#15151a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -62,7 +62,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610171015-fa8a5dec"></script>
+  <script src="framebust.js?v=202610171038-31f76d72"></script>
 
   <!--
     integrity is not cosmetic here. style-src allows this origin, and CSS alone
@@ -79,7 +79,7 @@
         integrity="sha384-XAeMOW3g/ahgKWjRcH7Xp+LVEQ/hkKrV0zkAUTnFwlaWK1aXfd9vVufdwqr/836i"
         crossorigin="anonymous"
         referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="style.css?v=202610171015-fa8a5dec">
+  <link rel="stylesheet" href="style.css?v=202610171038-31f76d72">
 </head>
 <body>
 
@@ -442,14 +442,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610171015-fa8a5dec"></script>
-  <script src="connstats.js?v=202610171015-fa8a5dec"></script>
-  <script src="guards.js?v=202610171015-fa8a5dec"></script>
-  <script src="i18n.js?v=202610171015-fa8a5dec"></script>
+  <script src="protocol.js?v=202610171038-31f76d72"></script>
+  <script src="connstats.js?v=202610171038-31f76d72"></script>
+  <script src="guards.js?v=202610171038-31f76d72"></script>
+  <script src="i18n.js?v=202610171038-31f76d72"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610171015-fa8a5dec"></script>
-  <script src="pake.js?v=202610171015-fa8a5dec"></script>
-  <script src="app.js?v=202610171015-fa8a5dec"></script>
+  <script src="vendor/noble.js?v=202610171038-31f76d72"></script>
+  <script src="pake.js?v=202610171038-31f76d72"></script>
+  <script src="app.js?v=202610171038-31f76d72"></script>
 </body>
 </html>

@@ -66,11 +66,15 @@ test("no wsSend payload mentions a secret", () => {
 test("join-session sends only the fields the server needs", () => {
   const joins = wsSendPayloads().filter(p => p.includes("join-session"));
   assert.ok(joins.length > 0, "expected at least one join-session send");
-  const allowed = new Set(["type", "sessionId", "pin", "token"]);
+  /* `visible` is whether the page is on screen — a copy of a link may take a
+     seat from another only then. A yes or a no, nothing of the room's. */
+  const allowed = new Set(["type", "sessionId", "pin", "token", "visible"]);
   for (const payload of joins) {
     for (const [, key] of payload.matchAll(/([A-Za-z_$][\w$]*)\s*:/g)) {
       assert.ok(allowed.has(key), `join-session must not carry "${key}":\n${payload}`);
     }
+    const visible = payload.match(/visible:\s*([^,}]+)/);
+    if (visible) assert.equal(visible[1].trim(), 'document.visibilityState === "visible"', "visible must be the page's own visibility and nothing else");
   }
 });
 
@@ -760,6 +764,34 @@ test("a copy whose seat moved to another browser never joins with the link again
 
   const join = topLevelFunctions(withoutComments(appSrc)).get("checkAutoJoin");
   assert.match(join, /if \(!_isAutoJoin \|\| _autoJoinSent \|\| inAppHold \|\| inviteMovedAway\) return;/);
+});
+
+test("a copy that lost the seat, or was refused it, offers to continue there — and only a tap takes it", () => {
+  /* Reported: a copy in the background took the seat from the Safari page the
+     guest was looking at. Now the server lets only an on-screen copy take a
+     seat, and every copy that ends up without one has a button, so whichever
+     one the person is looking at can become the one in use. */
+  const taken = caseBlock("seat-taken");
+  assert.match(taken, /chatMessages\.appendChild\(continueHereButton\(\)\);/);
+  /* Its channel's close handler is not let run, so what it would have tidied
+     is tidied here: seen left behind in a browser, call buttons still on and
+     the old link's figures still showing. */
+  assert.match(taken, /voiceCallBtn\.disabled = true;\s*\n\s*videoCallBtn\.disabled = true;\s*\n\s*statsBar\.textContent = "";/);
+
+  const errors = withoutComments(appSrc).match(/case "pin-error": \{[\s\S]*?\n    \}/);
+  assert.ok(errors, 'case "pin-error" not found');
+  const held = errors[0].match(/data\.code === "held-elsewhere"\) \{[\s\S]*?\} else if/);
+  assert.ok(held, "held-elsewhere is not handled on its own");
+  assert.match(held[0], /inviteMovedAway = true;/, "nothing more joins by itself from that copy");
+  assert.match(held[0], /continueHereButton\(\)/);
+
+  const fns = topLevelFunctions(withoutComments(appSrc));
+  const button = fns.get("continueHereButton");
+  assert.match(button, /btn\.onclick = continueWithInviteHere;/, "the join is the tap's, not a timer's");
+  const cont = fns.get("continueWithInviteHere");
+  assert.match(cont, /inviteMovedAway = false;\s*\n\s*_autoJoinSent = false;/, "this copy is the one in use now");
+  assert.match(cont, /checkAutoJoin\(\)/, "through the same join as the link's own, on-screen flag and all");
+  assert.ok(cont.indexOf("leaveBtn.click()") < cont.indexOf("checkAutoJoin()"), "back to the lobby first, where the answer is shown");
 });
 
 test("the host keeps the chat on screen when the guest's link moves to another browser", () => {

@@ -822,6 +822,9 @@ wss.on("connection", (ws, req) => {
              twice is not a second copy of anything, and "replacing" it would
              run cleanupClient on the room's own guest and delete the room. */
           seatByLink:   session.guestByLink === true && session.guest !== ws,
+          /* Whether anyone is looking at the page asking. Only such a copy may
+             take a seat from another — see joinVerdict. */
+          visible:      data.visible === true,
           roomLocked:   session.joinLockedUntil > Date.now(),
           ipLimited:    !rl.allowed
         });
@@ -854,6 +857,16 @@ wss.on("connection", (ws, req) => {
             type: "pin-error",
             code: "full",
             message: "Session is full"
+          }));
+          break;
+        }
+
+        if (verdict === "held-elsewhere") {
+          ws.send(JSON.stringify({
+            type: "pin-error",
+            code: "held-elsewhere",
+            sessionId: data.sessionId,
+            message: "This link is open in another browser."
           }));
           break;
         }

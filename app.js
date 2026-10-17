@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610171015-fa8a5dec";
+const APP_BUILD = "202610171038-31f76d72";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1179,13 +1179,40 @@ function checkAutoJoin() {
   msg.style.color = "var(--accent-text)";
   msg.textContent = I18N[LANG].joiningSession(_autoSessionId);
   lobbyStatus.replaceChildren(msg);
-  wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken });
+  /* `visible`: whether anyone is looking at this page. Only then may it take a
+     seat another copy of the link holds — a copy in the background is told the
+     link is open elsewhere instead (held-elsewhere). */
+  wsSend({ type: "join-session", sessionId: _autoSessionId, token: _autoToken, visible: document.visibilityState === "visible" });
 
   /* The server always answers a join — unless the socket dies first. Without a
      deadline the lobby stays disabled behind "Joining…" with nothing to click
      and nothing coming. */
   clearTimeout(_autoJoinTimer);
   _autoJoinTimer = setTimeout(autoJoinTimedOut, AUTO_JOIN_TIMEOUT_MS);
+}
+
+/** "Continue here", on a copy of the link whose seat went to another copy, or
+    that was turned away because another copy holds it. The person, looking at
+    this one, makes it the one in use — by a tap, never by itself: the copies
+    would otherwise take the seat back and forth. From the chat screen it goes
+    back to the lobby first, where the join's answer is shown. */
+function continueWithInviteHere() {
+  if (!chatScreen.classList.contains("hidden")) leaveBtn.click();
+  inviteMovedAway = false;
+  _autoJoinSent = false;
+  if (ws && ws.readyState === WebSocket.OPEN) checkAutoJoin();   // otherwise the socket opening sends it
+}
+
+/** The "Continue here" button, under whatever said the link is open elsewhere. */
+function continueHereButton() {
+  const wrap = document.createElement("div");
+  wrap.className = "reconnect-sys-wrap continue-here";
+  const btn = document.createElement("button");
+  btn.className = "reconnect-sys-btn";
+  btn.textContent = t("inAppContinue");
+  btn.onclick = continueWithInviteHere;
+  wrap.appendChild(btn);
+  return wrap;
 }
 
 /** A definitive answer arrived (joined, refused, or errored) — stop the clock. */
@@ -2299,9 +2326,17 @@ async function handleSignaling(data) {
       roomSecret = null;
       isConnecting = false;
       keepScreenOn(false);
+      /* What the channel's close would have tidied, had it been let run: no
+         calls from a chat that has moved, and no figures for a link that has gone. */
+      voiceCallBtn.disabled = true;
+      videoCallBtn.disabled = true;
+      statsBar.textContent = "";
       chatMessages.querySelectorAll(".reconnect-sys-wrap").forEach(el => el.remove());
       setQuality(`⬤ ${t("seatTakenShort")}`, "failed");
       appendSys(t("seatTaken"));
+      /* Wrong copy? The one the person is looking at may be this one. */
+      chatMessages.appendChild(continueHereButton());
+      scrollBottom();
       break;
 
     case "guest-left":
@@ -2399,6 +2434,17 @@ async function handleSignaling(data) {
            the user would have been shown had the list been right. */
         if (data.code === "pin-required") openPinModal(listJoin);
         else { showToast(msg, "error"); requestSessionList(); }
+      } else if (target === "lobby" && data.code === "held-elsewhere") {
+        /* Another copy of this link holds the seat, and this one was not on
+           screen when it asked. Nothing more joins by itself from here; the
+           button takes the seat if this is the copy the person wants. */
+        inviteMovedAway = true;
+        const note = document.createElement("div");
+        note.style.cssText = "color:var(--orange);text-align:center";
+        note.textContent = t("heldElsewhere");
+        lobbyStatus.replaceChildren(note, continueHereButton());
+        setLobbyButtons(false);
+        isConnecting = false;
       } else if (target === "lobby") {
         const wrap = document.createElement("span");
         wrap.style.color = "var(--danger-text)";

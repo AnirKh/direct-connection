@@ -290,10 +290,22 @@ test("across every combination, a PIN room never admits without its PIN or token
    full — and once the copy left in Messenger dropped, the room went with it.
    A seat held through the link now moves to a newer copy of the link. */
 
-test("a newer copy of the link takes the seat its earlier copy holds", () => {
-  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: true })), "replace");
-  assert.equal(joinVerdict(knock({ open: true, tokenOk: true, full: true, seatByLink: true })), "replace",
+test("a newer copy of the link, on screen, takes the seat its earlier copy holds", () => {
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: true, visible: true })), "replace");
+  assert.equal(joinVerdict(knock({ open: true, tokenOk: true, full: true, seatByLink: true, visible: true })), "replace",
     "an open room's link is a link like any other");
+});
+
+test("a copy nobody is looking at does not take the seat — it is told the link is open elsewhere", () => {
+  /* Reported after the first version: a copy in the background took the seat
+     from the Safari page the guest was looking at, and the chat died. */
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: true, visible: false })), "held-elsewhere");
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: true })), "held-elsewhere",
+    "a page too old to say is not on screen as far as the server knows");
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: true, seatByLink: true, visible: "true" })), "held-elsewhere",
+    "only exactly true");
+  assert.equal(joinVerdict(knock({ tokenOk: true, full: false, visible: false })), "admit",
+    "an empty seat is taken on screen or off it");
 });
 
 test("the link does not move a guest who came in another way", () => {
@@ -313,15 +325,17 @@ test("an empty seat is simply taken — there is nothing to replace", () => {
   assert.equal(joinVerdict(knock({ tokenOk: true, full: false, seatByLink: true })), "admit");
 });
 
-test("across every combination, a seat moves only for the link, and only from the link", () => {
-  for (let bits = 0; bits < 256; bits++) {
+test("across every combination, a seat moves only for the link, only from the link, only on screen", () => {
+  for (let bits = 0; bits < 512; bits++) {
     const o = {
       open: Boolean(bits & 1), tokenOk: Boolean(bits & 2), pinOk: Boolean(bits & 4), noCredential: Boolean(bits & 8),
-      full: Boolean(bits & 16), seatByLink: Boolean(bits & 32), roomLocked: Boolean(bits & 64), ipLimited: Boolean(bits & 128)
+      full: Boolean(bits & 16), seatByLink: Boolean(bits & 32), roomLocked: Boolean(bits & 64), ipLimited: Boolean(bits & 128),
+      visible: Boolean(bits & 256)
     };
     const verdict = joinVerdict(o);
     const where = JSON.stringify(o);
-    assert.equal(verdict === "replace", o.tokenOk && o.full && o.seatByLink, `replace for the wrong reason: ${where}`);
+    assert.equal(verdict === "replace", o.tokenOk && o.full && o.seatByLink && o.visible, `replace for the wrong reason: ${where}`);
+    assert.equal(verdict === "held-elsewhere", o.tokenOk && o.full && o.seatByLink && !o.visible, `held-elsewhere for the wrong reason: ${where}`);
     if (verdict === "admit") assert.equal(o.full, false, `admitted into a full room: ${where}`);
   }
 });

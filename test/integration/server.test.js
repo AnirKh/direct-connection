@@ -1081,7 +1081,7 @@ test("the link opened again in another browser takes the seat, and the room stay
   const { host, first, created } = await linkRoomWithGuest("link-again");
 
   const second = await client();
-  second.send_({ type: "join-session", sessionId: "link-again", token: created.token });
+  second.send_({ type: "join-session", sessionId: "link-again", token: created.token, visible: true });
   assert.ok(await waitFor(second, "session-joined"), "the newer copy gets in, not 'full'");
 
   const taken = await waitFor(first, "seat-taken");
@@ -1101,7 +1101,7 @@ test("the link opened again in another browser takes the seat, and the room stay
 test("the copy left behind closing afterwards ends nothing", async () => {
   const { host, first, created } = await linkRoomWithGuest("link-left-behind");
   const second = await client();
-  second.send_({ type: "join-session", sessionId: "link-left-behind", token: created.token });
+  second.send_({ type: "join-session", sessionId: "link-left-behind", token: created.token, visible: true });
   assert.ok(await waitFor(second, "session-joined"));
   assert.ok(await waitFor(first, "seat-taken"));
 
@@ -1151,4 +1151,33 @@ test("the same page sending its join twice does not lose the room", async () => 
   assert.ok(!host.inbox.some(m => m.type === "peer-disconnected"), "the room is still there");
   host.send_({ type: "offer", sessionId: "link-twice", offer: { type: "offer", sdp: "x" } });
   assert.ok(await waitFor(first, "offer"), "and it is still the guest");
+});
+
+test("a copy nobody is looking at does not take the seat from the one in use", async () => {
+  /* Reported after the first version: the guest was looking at Safari when it
+     said the chat had moved to another browser — a copy in the background had
+     taken the seat, and the host's connection to it never came up. */
+  const { host, first, created } = await linkRoomWithGuest("link-hidden");
+  const behind = await client();
+  behind.send_({ type: "join-session", sessionId: "link-hidden", token: created.token, visible: false });
+  const refused = await waitFor(behind, "pin-error");
+  assert.equal(refused && refused.code, "held-elsewhere", "told the link is open elsewhere, not 'full'");
+  await sleep(200);
+  assert.ok(!first.inbox.some(m => m.type === "seat-taken"), "the copy in use keeps the seat");
+  assert.ok(!host.inbox.some(m => m.type === "guest-joined" && m.replaced), "the host is not sent to a page nobody has open");
+
+  /* "Continue here" on that copy, tapped — so on screen — does take it. */
+  behind.send_({ type: "join-session", sessionId: "link-hidden", token: created.token, visible: true });
+  assert.ok(await waitFor(behind, "session-joined"));
+  assert.ok(await waitFor(first, "seat-taken"));
+});
+
+test("a page too old to say whether it is on screen cannot take a seat", async () => {
+  const { first, created } = await linkRoomWithGuest("link-old-page");
+  const old = await client();
+  old.send_({ type: "join-session", sessionId: "link-old-page", token: created.token });
+  const refused = await waitFor(old, "pin-error");
+  assert.equal(refused && refused.code, "held-elsewhere");
+  await sleep(200);
+  assert.ok(!first.inbox.some(m => m.type === "seat-taken"));
 });

@@ -112,12 +112,21 @@ function safeLabel(value, max = 32) {
  * the seat ("replace"). Only from the link: a guest let in by a PIN, or by
  * tapping an open room, came another way, and the link does not move them.
  *
+ * And only a copy someone is looking at (`visible`). The first version let any
+ * copy take the seat, and one nobody was looking at — a second Safari tab
+ * opened behind the first, an app's browser loading again in the background —
+ * took it from the copy in use: the guest watched Safari say the chat had moved
+ * elsewhere, and the host tried to connect to a page nobody had open. A copy
+ * in the background is told the link is open elsewhere ("held-elsewhere") and
+ * offers to continue there, which a tap — on screen by definition — can do.
+ *
  * @param {{open: boolean, tokenOk: boolean, pinOk: boolean, noCredential: boolean,
- *          full: boolean, seatByLink: boolean, roomLocked: boolean, ipLimited: boolean}} o
- * @returns {"admit"|"replace"|"full"|"room-locked"|"ip-limited"|"pin-required"|"wrong"}
+ *          full: boolean, seatByLink: boolean, visible: boolean,
+ *          roomLocked: boolean, ipLimited: boolean}} o
+ * @returns {"admit"|"replace"|"held-elsewhere"|"full"|"room-locked"|"ip-limited"|"pin-required"|"wrong"}
  */
 function joinVerdict(o) {
-  if (o.tokenOk && o.full && o.seatByLink === true) return "replace";
+  if (o.tokenOk && o.full && o.seatByLink === true) return o.visible === true ? "replace" : "held-elsewhere";
   if (o.open || o.tokenOk) return o.full ? "full" : "admit";
   if (o.roomLocked) return "room-locked";
   if (o.full)       return "full";
