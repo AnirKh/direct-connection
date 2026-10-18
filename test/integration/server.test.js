@@ -1027,7 +1027,8 @@ test("a host who does not come back in time loses the room: not listed, not join
   assert.ok(await waitFor(back, "reclaim-failed"));
 });
 
-test("a host whose link drops mid-chat still ends the room, as before", async () => {
+test("a host whose link drops mid-chat is waited for — and the room goes only if it never comes back", async () => {
+  /* It used to end the room at once, and nothing could repair the chat after. */
   const host = await client();
   host.send_({ type: "create-session", sessionId: "away-mid-chat" });
   const created = await waitFor(host, "session-created");
@@ -1035,7 +1036,132 @@ test("a host whose link drops mid-chat still ends the room, as before", async ()
   guest.send_({ type: "join-session", sessionId: "away-mid-chat", pin: created.pin });
   assert.ok(await waitFor(guest, "session-joined"));
   host.terminate();
-  assert.ok(await waitFor(guest, "peer-disconnected"), "the guest is told; the chat itself decides whether it goes on");
+  assert.ok(await waitFor(guest, "peer-away"), "the guest is told the host's link dropped");
+  assert.ok(!guest.inbox.some(m => m.type === "peer-disconnected"), "not that the room is gone");
+  assert.ok(await waitFor(guest, "peer-disconnected", 4000), "past HOST_AWAY_MS with no return, it is");
+});
+
+/* ══════════════════════════════════════════
+   A seat kept through a dropped link
+══════════════════════════════════════════ */
+
+/* Assessing why calls did not survive a phone changing networks: a room was
+   deleted the moment either side's link to the server dropped mid-chat, and
+   every repair of the chat goes through the room. Now the seat is kept, and
+   the page takes it back on its new link. */
+
+async function chatRoom(sessionId) {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId });
+  const created = await waitFor(host, "session-created");
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId, pin: created.pin });
+  const joined = await waitFor(guest, "session-joined");
+  assert.ok(joined && await waitFor(host, "guest-joined"), "setup: no chat");
+  return { host, guest, created, joined };
+}
+
+test("joining hands the guest a key of its own, nothing like the room's token, and in no list", async () => {
+  const { created, joined } = await chatRoom("keep-key");
+  assert.match(joined.guestKey, /^[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(joined.guestKey, created.token);
+  assert.notEqual(joined.guestKey, created.hostKey);
+  const probe = await client();
+  probe.send_({ type: "list-sessions" });
+  const list = await waitFor(probe, "session-list");
+  assert.ok(!JSON.stringify(list).includes(joined.guestKey));
+});
+
+test("a guest whose link drops mid-chat takes its seat back with its key; the host is told both ways", async () => {
+  const { host, guest, joined } = await chatRoom("keep-guest");
+  guest.terminate();                        // a phone changing networks
+  assert.ok(await waitFor(host, "peer-away"), "the host is told the guest's link dropped");
+  assert.ok(!host.inbox.some(m => m.type === "peer-disconnected"), "not that the room is gone");
+
+  const back = await client();              // the same page, on its new link
+  back.send_({ type: "rejoin-session", sessionId: "keep-guest", guestKey: joined.guestKey });
+  const rejoined = await waitFor(back, "session-rejoined");
+  assert.ok(rejoined, "the seat is taken back");
+  assert.equal(rejoined.hostAway, false);
+  assert.ok(await waitFor(host, "peer-back"), "and the host is told the way to repair the chat is open");
+
+  /* The repair goes through again, both ways. */
+  host.send_({ type: "renegotiate-offer", sessionId: "keep-guest", offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(back, "renegotiate-offer"), "host to guest");
+  back.send_({ type: "repair-request", sessionId: "keep-guest" });
+  assert.ok(await waitFor(host, "repair-request"), "guest to host");
+});
+
+test("a host whose link drops mid-chat takes the room back — the chat goes on, nothing starts again", async () => {
+  const { host, guest, created } = await chatRoom("keep-host");
+  host.inbox.length = 0;
+  host.terminate();
+  assert.ok(await waitFor(guest, "peer-away"));
+
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: "keep-host", hostKey: created.hostKey });
+  const reclaimed = await waitFor(back, "session-reclaimed");
+  assert.equal(reclaimed && reclaimed.resumed, true, "back to a chat, not a waiting room");
+  assert.ok(await waitFor(guest, "peer-back"));
+  await sleep(200);
+  assert.ok(!back.inbox.some(m => m.type === "guest-joined"), "a guest-joined would start the chat over");
+  assert.ok(!guest.inbox.some(m => m.type === "host-back"), "nor is the guest told to wait for a new start");
+  back.send_({ type: "renegotiate-offer", sessionId: "keep-host", offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(guest, "renegotiate-offer"), "and the repair goes through");
+});
+
+test("the seat is not free while it is kept: not listed, and a newcomer is turned away", async () => {
+  const { host, guest, created } = await chatRoom("keep-full");
+  guest.terminate();
+  assert.ok(await waitFor(host, "peer-away"));
+  assert.ok(!(await listedNames()).includes("keep-full"));
+  const stranger = await client();
+  stranger.send_({ type: "join-session", sessionId: "keep-full", pin: created.pin });
+  const refused = await waitFor(stranger, "pin-error");
+  assert.equal(refused && refused.code, "full");
+});
+
+test("a guest that never comes back: the host is told once the wait is over, and the room is gone", async () => {
+  const { host, guest, joined } = await chatRoom("keep-expire");
+  guest.terminate();
+  assert.ok(await waitFor(host, "peer-away"));
+  assert.ok(await waitFor(host, "peer-disconnected", 4000), "past HOST_AWAY_MS");
+  const late = await client();
+  late.send_({ type: "rejoin-session", sessionId: "keep-expire", guestKey: joined.guestKey });
+  assert.ok(await waitFor(late, "rejoin-failed"), "too late to take it back");
+});
+
+test("only the right key takes a seat back", async () => {
+  const { guest, joined, created } = await chatRoom("keep-wrong-key");
+  guest.terminate();
+  await sleep(200);
+  for (const guestKey of ["A".repeat(32), created.token, created.hostKey, undefined]) {
+    const thief = await client();
+    thief.send_({ type: "rejoin-session", sessionId: "keep-wrong-key", guestKey });
+    assert.ok(await waitFor(thief, "rejoin-failed"), `refused: ${String(guestKey).slice(0, 6)}`);
+  }
+  const back = await client();
+  back.send_({ type: "rejoin-session", sessionId: "keep-wrong-key", guestKey: joined.guestKey });
+  assert.ok(await waitFor(back, "session-rejoined"), "and the right one still does");
+});
+
+test("a page back on a new link before its old one is noticed gone takes the seat; the old one closing later ends nothing", async () => {
+  const { host, guest, joined } = await chatRoom("keep-overlap");
+  const back = await client();
+  back.send_({ type: "rejoin-session", sessionId: "keep-overlap", guestKey: joined.guestKey });
+  assert.ok(await waitFor(back, "session-rejoined"));
+  host.inbox.length = 0;
+  guest.terminate();                        // the old link, noticed only now
+  await sleep(400);
+  assert.ok(!host.inbox.some(m => m.type === "peer-away" || m.type === "peer-disconnected"), "the old link is no longer the guest");
+  host.send_({ type: "renegotiate-offer", sessionId: "keep-overlap", offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(back, "renegotiate-offer"));
+});
+
+test("leaving on purpose still ends the room at once", async () => {
+  const { host, guest } = await chatRoom("keep-leave");
+  guest.send_({ type: "leave-session" });
+  assert.ok(await waitFor(host, "peer-disconnected", 1000), "no waiting for a guest that said goodbye");
 });
 
 test("a host who comes back too late cannot take the room back, even if nobody else touched it", async () => {

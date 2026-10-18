@@ -211,19 +211,22 @@ test("the link dropping shows a note and takes the room back on reconnecting; wi
 
 const CASES = between('    case "host-back":', '    case "guest-joined":');
 
-function answers({ isHost = true, ours = true, redraw = false } = {}) {
-  const log = { drawn: [], saved: 0, forgot: 0, lost: 0, sys: [], watching: 0, status: 0, lists: 0, screenOn: [] };
+function answers({ isHost = true, ours = true, redraw = false, seatPending = false } = {}) {
+  const log = { drawn: [], saved: 0, forgot: 0, lost: 0, sys: [], watching: 0, status: 0, lists: 0, screenOn: [],
+                repairs: 0, gone: 0 };
   const run = new Function(
     "roomEventIsOurs", "lobbyStatus", "showRoomReady", "keepScreenOn", "saveHostRoom", "forgetHostRoom",
     "renderSessionList", "loseWaitingRoom", "appendSys", "watchConnecting", "t", "start",
-    `let isHost = start.isHost, reclaimPending = true, reclaimRedraw = start.redraw, _lastSessionList = [];
+    "repairChatNow", "roomGoneForGood",
+    `let isHost = start.isHost, reclaimPending = !start.seatPending, reclaimRedraw = start.redraw, _lastSessionList = [];
+     let seatPending = start.seatPending, serverRoomGone = false;
      let currentSession = { sessionId: "bat-room", token: "old" };
      let roomReadyInfo = { sessionId: "bat-room", pin: "123456", token: "old", kind: "pin" };
      function deliver(data) { switch (data.type) {\n${CASES}\n} }
-     return { deliver, state: () => ({ reclaimPending, reclaimRedraw, currentSession, roomReadyInfo }) };`
+     return { deliver, state: () => ({ reclaimPending, reclaimRedraw, currentSession, roomReadyInfo, seatPending, serverRoomGone }) };`
   )(() => ours, { replaceChildren: () => log.status++ }, d => log.drawn.push(d), on => log.screenOn.push(on),
     () => log.saved++, () => log.forgot++, () => log.lists++, () => log.lost++, k => log.sys.push(k),
-    () => log.watching++, k => k, { isHost, redraw });
+    () => log.watching++, k => k, { isHost, redraw, seatPending }, () => log.repairs++, () => log.gone++);
   return { ...run, log };
 }
 
@@ -254,6 +257,26 @@ test("not taken back: forgotten, and said to be closed, with Create again", () =
   assert.equal(a.log.forgot, 1);
   assert.equal(a.log.lost, 1);
   assert.equal(a.state().reclaimPending, false);
+});
+
+test("taken back mid-chat: the chat goes on and is repaired — the waiting room's panel is not touched", () => {
+  /* The server now keeps a chat's seat through a dropped link, and says
+     resumed: true when the host takes a chat back rather than a waiting room. */
+  const a = answers({ seatPending: true });
+  a.deliver({ ...RECLAIMED, resumed: true });
+  assert.equal(a.state().seatPending, false);
+  assert.equal(a.state().serverRoomGone, false);
+  assert.equal(a.log.repairs, 1, "the chat's link repaired now, through the seat taken back");
+  assert.equal(a.log.saved + a.log.status + a.log.drawn.length, 0, "nothing of the waiting room");
+  assert.equal(a.state().currentSession.token, "old");
+});
+
+test("not taken back mid-chat: the room is gone, but the chat is not ended for that alone", () => {
+  const a = answers({ seatPending: true });
+  a.deliver({ type: "reclaim-failed", sessionId: "bat-room" });
+  assert.equal(a.log.gone, 1, "the chat goes on while its own link is up — roomGoneForGood decides");
+  assert.equal(a.log.lost, 0, "not the waiting room's loss");
+  assert.equal(a.log.forgot, 0);
 });
 
 test("someone else's answer, or a guest page, changes nothing", () => {

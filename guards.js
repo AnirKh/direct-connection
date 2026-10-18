@@ -815,6 +815,34 @@
    * @param {{state: string, offerer: boolean, downFor: number,
    *          sinceRestart: number, restarts: number}} o  times in ms
    */
+  /**
+   * What the chat's own link, when it is down, should do now.
+   *
+   * Found assessing why calls did not survive a phone changing networks: the
+   * chat's repair waited for the link to be declared failed — tens of seconds
+   * — and only the host could start it; on "disconnected" the code called
+   * restartIce(), which nothing then acted on. Now, a couple of seconds down,
+   * the host makes a fresh offer through the server and the guest asks the
+   * host to (repair-request) — the host alone offers, so two never cross —
+   * again every few seconds, but only while the way through the server is
+   * open: our seat there, theirs too. There is no giving up here: the room's
+   * own wait for a side that does not come back ends the chat (peer-
+   * disconnected), and so does the channel closing.
+   *
+   *   "none" | "wait" | "restart" (the host) | "ask" (the guest)
+   *
+   * @param {{state: string, host: boolean, downFor: number, sinceRepair: number,
+   *          repairs: number, pathOpen: boolean}} o  times in ms
+   */
+  const CHAT_REPAIR = Object.freeze({ firstTryMs: 2000, retryMs: 6000 });
+  function chatRepair(o) {
+    if (!o || (o.state !== "disconnected" && o.state !== "failed")) return "none";
+    if (!(o.downFor >= 0) || o.pathOpen !== true) return "wait";
+    if (o.downFor < CHAT_REPAIR.firstTryMs) return "wait";
+    if (o.repairs > 0 && !(o.sinceRepair >= CHAT_REPAIR.retryMs)) return "wait";
+    return o.host === true ? "restart" : "ask";
+  }
+
   const CALL_RECOVER = Object.freeze({ firstTryMs: 3000, retryMs: 8000, giveUpMs: 30000 });
   function callRecovery(o) {
     if (!o || (o.state !== "disconnected" && o.state !== "failed")) return "none";
@@ -1049,7 +1077,8 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
-    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery, unattended, tabTitle,
+    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery,
+    CHAT_REPAIR, chatRepair, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,

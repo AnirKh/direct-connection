@@ -12,6 +12,9 @@
   - A code room outlives its guest: the seat is freed and the host told
   - A waiting room outlives its host's dropped link for HOST_AWAY_MS; the host
     takes it back with its host key (reclaim-session)
+  - So does a chat, either side's link: the host takes its seat back with its
+    host key, the guest with its guest key (rejoin-session); the other side
+    hears peer-away / peer-back, and repair-request passes between them
   - At most UPLOADS_AT_ONCE leave-a-message uploads read at a time
   - Session cleanup on disconnect
   - WebSocket heartbeat (30s ping/pong) drops clients that vanished silently
@@ -34,8 +37,9 @@
     ALLOWED_ORIGINS       Comma-separated browser origins (must include your static site origin)
     PUBLIC_SESSION_LIST   Set to "0" to never expose other users' room names in the lobby
     HEARTBEAT_MS          Ping sweep interval, 1000–300000 (default 30000)
-    HOST_AWAY_MS          How long a waiting room is kept for a host whose link
-                          dropped, 1000–3600000 (default 600000)
+    HOST_AWAY_MS          How long a seat is kept for a side whose link dropped —
+                          a waiting room's host, either side of a chat —
+                          1000–3600000 (default 600000)
 */
 
 "use strict";
@@ -500,11 +504,61 @@ function hostAwayExpired(session, now = Date.now()) {
   return !session.host && now - session.hostAwaySince > HOST_AWAY_MS;
 }
 
+/* ── A seat kept for a page whose link dropped ──
+   Reported, assessing why calls did not survive a phone changing networks:
+   a room was deleted the moment either side's link to this server dropped
+   mid-chat, and nothing could bring it back. Every repair of the chat's own
+   link goes through the room, so after that blink nothing could be repaired.
+
+   Now a dropped link — a network change, a locked screen, a blip — keeps the
+   seat for the page to take back (rejoin-session for a guest, with the guest
+   key it was given on joining; reclaim-session for a host, with its host key,
+   as a waiting room's host already could). The other side is told
+   (peer-away / peer-back), so it waits for the way to be repaired rather than
+   giving up. Leaving on purpose (leave-session) still ends the room at once.
+   A seat nobody comes back for goes after HOST_AWAY_MS, as before. */
+function markAway(sessionId, session, side) {
+  const now = Date.now();
+  if (side === "host") { session.host = null;  session.hostAwaySince  = now; }
+  else                 { session.guest = null; session.guestAwaySince = now; }
+  const timer = `${side}AwayTimer`;
+  clearTimeout(session[timer]);
+  session[timer] = setTimeout(() => expireAway(sessionId, side), HOST_AWAY_MS + 100);
+  if (session[timer].unref) session[timer].unref();
+}
+
+/** Nobody came back for the seat: the room goes — or, for a code room's
+    guest, the seat opens to the next person, as when a guest leaves one. */
+function expireAway(sessionId, side) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  if (side === "host" ? (session.host || !session.hostAwaySince) : (session.guest || !session.guestAwaySince)) return;   // came back
+  if (side === "host") { dropSession(sessionId, session); broadcastSessionList(); return; }
+  session.guestAwaySince = 0;
+  session.guestKey = null;
+  if (session.kind === "code" && session.host) { session.paired = false; freeGuestSeat(sessionId, session); return; }
+  if (session.host && session.host.readyState === WebSocket.OPEN) {
+    session.host.send(JSON.stringify({ type: "peer-disconnected", sessionId }));
+  }
+  clearTimeout(session.hostAwayTimer);
+  sessions.delete(sessionId);
+  console.log(`Session ${sessionLogId(sessionId)} removed — its guest did not come back`);
+  broadcastSessionList();
+}
+
+/** Tells whoever is still there that the other side's link is back, or gone for now. */
+function tellOther(session, from, type, sessionId) {
+  const other = from === "host" ? session.guest : session.host;
+  if (other && other.readyState === WebSocket.OPEN) other.send(JSON.stringify({ type, sessionId }));
+}
+
 /** Deletes a room, telling its guest if there is one. */
 function dropSession(sessionId, session) {
   if (session.guest && session.guest.readyState === WebSocket.OPEN) {
     session.guest.send(JSON.stringify({ type: "peer-disconnected", sessionId }));
   }
+  clearTimeout(session.hostAwayTimer);
+  clearTimeout(session.guestAwayTimer);
   sessions.delete(sessionId);
   console.log(`Session ${sessionLogId(sessionId)} removed`);
 }
@@ -533,7 +587,7 @@ function ipLogId(ip) {
 function publicSessions() {
   if (!PUBLIC_SESSION_LIST) return [];
   return Array.from(sessions)
-    .filter(([, s]) => !s.guest && !hostAwayExpired(s))
+    .filter(([, s]) => !s.guest && !s.guestAwaySince && !hostAwayExpired(s))   // a seat kept for a guest is not free
     /* `open` lets the lobby show which rooms can be entered without a PIN, and
        skip the PIN dialog for them. It gives nothing away: the server answers
        the same question for anyone who tries the door. */
@@ -605,18 +659,29 @@ function broadcastSessionList() {
     Also what enforces one room per socket: creating or joining calls it first. */
 function cleanupClient(ws, { dropped = false } = {}) {
   for (const [sessionId, session] of sessions) {
-    /* The host's link dropped — not a leave — while the room still waits for
-       its guest: keep it, for the host to take back (see HOST_AWAY_MS). */
-    if (dropped && session.host === ws && !session.guest) {
-      session.host = null;
-      session.hostAwaySince = Date.now();
+    /* The host's link dropped — not a leave: keep the room, for the host to
+       take back (see HOST_AWAY_MS). A room still waiting for its guest always
+       was kept; one with a chat in it now is too, and the guest is told. */
+    if (dropped && session.host === ws) {
+      markAway(sessionId, session, "host");
+      if (session.paired) tellOther(session, "host", "peer-away", sessionId);
       console.log(`Session ${sessionLogId(sessionId)} host away`);
+      continue;
+    }
+    /* A guest in a chat whose link dropped: its seat is kept for it to take
+       back with its guest key, and the host is told. */
+    if (dropped && session.guest === ws && session.paired) {
+      markAway(sessionId, session, "guest");
+      tellOther(session, "guest", "peer-away", sessionId);
+      console.log(`Session ${sessionLogId(sessionId)} guest away`);
       continue;
     }
     /* A guest leaving a room whose host is away: nobody to tell, and the room
        is still the host's — free the seat. */
     if (session.guest === ws && !session.host) {
       session.guest = null;
+      session.paired = false;
+      session.guestKey = null;
       session.waitingSince = Date.now();
       broadcastSessionList();
       continue;
@@ -648,6 +713,10 @@ function cleanupClient(ws, { dropped = false } = {}) {
     turned away (release-guest). */
 function freeGuestSeat(sessionId, session) {
   session.guest = null;
+  session.paired = false;
+  session.guestKey = null;
+  session.guestAwaySince = 0;
+  clearTimeout(session.guestAwayTimer);
   session.waitingSince = Date.now();     // the ten minutes to find a guest start again
   if (session.host && session.host.readyState === WebSocket.OPEN) {
     session.host.send(JSON.stringify({ type: "guest-left", sessionId }));
@@ -817,7 +886,8 @@ wss.on("connection", (ws, req) => {
           tokenOk,
           pinOk:        typeof data.pin === "string" && /^\d{6}$/.test(data.pin) && secretMatches(session.pin, data.pin),
           noCredential: typeof data.pin !== "string" && typeof data.token !== "string",
-          full:         Boolean(session.guest),
+          /* A seat kept for a guest whose link dropped is still taken. */
+          full:         Boolean(session.guest) || session.guestAwaySince > 0,
           /* Taken through the link — by another socket. The same socket asking
              twice is not a second copy of anything, and "replacing" it would
              run cleanupClient on the room's own guest and delete the room. */
@@ -917,15 +987,23 @@ wss.on("connection", (ws, req) => {
         const replaced = verdict === "replace" ? session.guest : null;
         session.guest = ws;
         session.guestByLink = tokenOk;
+        /* A seat kept for a copy whose link had dropped is taken over too:
+           that copy's key no longer brings it back. */
+        session.guestAwaySince = 0;
+        clearTimeout(session.guestAwayTimer);
+        /* This guest's alone, to take the seat back with if its link drops —
+           never in a link, never shown. */
+        session.guestKey = generateToken();
         if (replaced && replaced.readyState === WebSocket.OPEN) {
           replaced.send(JSON.stringify({ type: "seat-taken", sessionId: data.sessionId }));
         }
         /* A host who is away hears of the guest when it takes the room back;
            the guest is told to wait meanwhile. */
         const hostHere = session.host?.readyState === WebSocket.OPEN;
-        ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId, hostAway: !hostHere }));
+        session.paired = hostHere;          // the host knows this guest: a chat, not a wait
+        ws.send(JSON.stringify({ type: "session-joined", sessionId: data.sessionId, hostAway: !hostHere, guestKey: session.guestKey }));
         if (hostHere) {
-          session.host.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId, replaced: Boolean(replaced) }));
+          session.host.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId, replaced: verdict === "replace" }));
         }
         broadcastSessionList();
         console.log(`Session ${sessionLogId(data.sessionId)} guest joined from ${ipLogId(ip)}`);
@@ -968,21 +1046,55 @@ wss.on("connection", (ws, req) => {
           break;
         }
         if (session.host !== ws) cleanupClient(ws);    // one room per socket
+        /* Back to a chat it was in (the guest was known before the link
+           dropped): the chat goes on — nothing is started again, and the guest
+           is told the way to repair it is open. Back to a waiting room: as
+           before, with any guest who arrived meanwhile introduced now. */
+        const resumed = session.paired === true;
         session.host = ws;
         session.hostAwaySince = 0;
-        session.waitingSince = Date.now();            // a fresh ten minutes to find a guest
+        clearTimeout(session.hostAwayTimer);
+        if (!resumed) session.waitingSince = Date.now();   // a fresh ten minutes to find a guest
         ws.send(JSON.stringify({
           type: "session-reclaimed", sessionId: data.sessionId,
           pin: session.pin, token: session.token, kind: session.kind, open: session.open,
-          guestWaiting: Boolean(session.guest)
+          guestWaiting: Boolean(session.guest), resumed
         }));
-        if (session.guest?.readyState === WebSocket.OPEN) {
+        if (resumed) {
+          tellOther(session, "host", "peer-back", data.sessionId);
+        } else if (session.guest?.readyState === WebSocket.OPEN) {
           session.guest.send(JSON.stringify({ type: "host-back", sessionId: data.sessionId }));
           ws.send(JSON.stringify({ type: "guest-joined", sessionId: data.sessionId }));
+          session.paired = true;
         }
         broadcastSessionList();
         break;
       }
+
+      /* A guest whose link dropped mid-chat, back on a new one, taking its seat
+         again with the guest key it was given on joining — which never left
+         its page, so nobody else can present it. Its old link may not have
+         been noticed as gone yet; the seat is the new one's either way. */
+      case "rejoin-session": {
+        const session = sessions.get(data.sessionId);
+        if (!session || !session.guestKey || !secretMatches(session.guestKey, data.guestKey)) {
+          ws.send(JSON.stringify({ type: "rejoin-failed", sessionId: data.sessionId }));
+          break;
+        }
+        if (session.guest !== ws) cleanupClient(ws);   // one room per socket
+        session.guest = ws;
+        session.guestAwaySince = 0;
+        clearTimeout(session.guestAwayTimer);
+        const hostHere = session.host?.readyState === WebSocket.OPEN;
+        ws.send(JSON.stringify({ type: "session-rejoined", sessionId: data.sessionId, hostAway: !hostHere }));
+        if (hostHere) tellOther(session, "guest", "peer-back", data.sessionId);
+        break;
+      }
+
+      /* The guest asking the host to start a fresh route for their chat — only
+         the host makes the offer, so two never cross. Passed on like the
+         rest of the repair. */
+      case "repair-request": relayToOther(ws, data.sessionId, { type: "repair-request", sessionId: data.sessionId }); break;
 
       /* The host of a code room turning away a guest whose word did not match,
          so the seat is free for the next attempt — or the right one. Only the
@@ -996,6 +1108,8 @@ wss.on("connection", (ws, req) => {
           guest.send(JSON.stringify({ type: "peer-disconnected", sessionId: data.sessionId }));
         }
         session.guest = null;
+        session.paired = false;
+        session.guestKey = null;          // turned away: its key takes nothing back
         session.waitingSince = Date.now();
         broadcastSessionList();
         break;
@@ -1057,14 +1171,16 @@ setInterval(() => {
       if (hostAwayExpired(s, now)) { dropSession(id, s); pruned++; }
       continue;
     }
-    /* Host socket already gone but "close" never fired — a backstop. Treated
-       as the drop it is: a waiting room is kept for the host, one with a
-       guest in it is over. */
+    /* A socket already gone but "close" never fired — a backstop. Treated as
+       the drop it is: the seat is kept, for its page to take back. */
     if (s.host.readyState !== WebSocket.OPEN) {
-      if (!s.guest) { s.host = null; s.hostAwaySince = now; continue; }
-      dropSession(id, s);
-      pruned++;
+      markAway(id, s, "host");
+      if (s.paired) tellOther(s, "host", "peer-away", id);
       continue;
+    }
+    if (s.guest && s.guest.readyState !== WebSocket.OPEN && s.paired) {
+      markAway(id, s, "guest");
+      tellOther(s, "guest", "peer-away", id);
     }
     if (!s.guest && now - (s.waitingSince || s.createdAt) > TEN_MIN) {
       /* Its own message, not peer-disconnected: there never was a peer. The

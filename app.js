@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610172335-49583390";
+const APP_BUILD = "202610180015-8057e2da";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -606,6 +606,9 @@ let roomReadyInfo  = null;    // what session-created said, to draw the ready pa
 let hostKey        = null;    // the server's proof that this page is the room's host — never in a link
 let reclaimPending = false;   // our link dropped while hosting a waiting room: take it back on reconnecting
 let reclaimRedraw  = false;   // and the panel is not on screen — this page was opened fresh
+let guestKey       = null;    // the server's proof that this page is the room's guest — never in a link
+let seatPending    = false;   // our link dropped mid-chat: the server keeps our seat; take it back on reconnecting
+let peerServerAway = false;   // the other side's link to the server dropped: repairs through it wait for its return
 let codeFailures   = 0;
 let codeLockedUntil = 0;
 
@@ -1263,6 +1266,7 @@ function connectWebSocket() {
     sendPendingCreate();
     restoreHostRoom();
     sendReclaim();
+    resumeSeat();
     if (!_keepAliveInterval) {
       _keepAliveInterval = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1274,9 +1278,14 @@ function connectWebSocket() {
   ws.onclose   = () => {
     // Clear keep-alive so it doesn't stack when we reconnect
     if (_keepAliveInterval) { clearInterval(_keepAliveInterval); _keepAliveInterval = null; }
-    /* The server drops a socket's room when the socket goes. A chat in progress
-       carries on directly, but can no longer be repaired through the server. */
-    if (pc) serverRoomGone = true;
+    /* Mid-chat, the server now keeps our seat for a while (the other side is
+       told peer-away) and we take it back on reconnecting (resumeSeat), so the
+       chat can still be repaired through it. Only without a key to do that —
+       an older server — is the room taken as gone, as it used to be. */
+    if (pc && currentSession) {
+      if (isHost ? hostKey : guestKey) seatPending = true;
+      else serverRoomGone = true;
+    }
     /* A room still waiting for its guest is simply gone: say so. */
     if (G.waitingRoomLost({ isHost, hasSession: Boolean(currentSession), chatStarted: Boolean(pc) })) {
       /* The server keeps it for us. An older server, which gave no host key,
@@ -1674,6 +1683,14 @@ function awaitReclaim() {
   lobbyStatus.replaceChildren(note);
 }
 
+/** Our link dropped mid-chat: take our seat back on the new one — the host
+    with its host key, the guest with its guest key. */
+function resumeSeat() {
+  if (!seatPending || !currentSession) return;
+  if (isHost && hostKey)        wsSend({ type: "reclaim-session", sessionId: currentSession.sessionId, hostKey });
+  else if (!isHost && guestKey) wsSend({ type: "rejoin-session",  sessionId: currentSession.sessionId, guestKey });
+}
+
 function sendReclaim() {
   if (!reclaimPending || !hostKey || !currentSession) return;
   wsSend({ type: "reclaim-session", sessionId: currentSession.sessionId, hostKey });
@@ -1828,6 +1845,7 @@ function closePeerConnection() {
   closeCallPeerConnection();
   dataChannel = null;
   sendBtn.disabled = true;
+  stopChatRepair();                      // nothing left to repair
 }
 
 function createPeerConnection() {
@@ -1845,10 +1863,12 @@ function createPeerConnection() {
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
     if (s === "checking")                        setQuality(`⬤ ${t("connecting")}`, "");
-    if (s === "connected" || s === "completed")  { setQuality(`⬤ ${t("connected")}`, "connected"); startStatsPolling(); }
-    if (s === "disconnected")                    { setQuality(`⬤ ${t("reconnecting")}`, "poor"); pc.restartIce(); }
+    if (s === "connected" || s === "completed")  { setQuality(`⬤ ${t("connected")}`, "connected"); startStatsPolling(); stopChatRepair(); }
     if (s === "failed" && G.linkLostForGood({ iceState: s, serverRoomGone })) { endChatLinkLost(); return; }
-    if (s === "failed")                          { setQuality(`⬤ ${t("connFailed")}`, "failed"); handleFullRenegotiation(); }
+    /* Down — disconnected or failed outright — is repaired, from either side:
+       see watchChatLink. (A bare restartIce() used to stand here; nothing
+       acted on it.) */
+    if (s === "disconnected" || s === "failed")  { setQuality(`⬤ ${t("reconnecting")}`, "poor"); watchChatLink(); }
     if (s === "closed")                          setQuality(`⬤ ${t("connClosed")}`, "failed");
   };
 
@@ -1953,6 +1973,90 @@ function endChatLinkLost() {
   showReconnectButton();
 }
 
+/* ── The chat's link, repaired ──────────────
+   Found assessing why calls did not survive a phone changing networks. The
+   chat's link was repaired only once declared failed — tens of seconds — only
+   by the host, and only through a room that had already been deleted the
+   moment either side's link to the server dropped. The server now keeps the
+   seat (see rejoin-session / reclaim-session there) and this side takes it
+   back on reconnecting (resumeSeat). Then, a couple of seconds after the link
+   goes down (G.chatRepair), the host makes a fresh offer through the server
+   and the guest asks the host to (repair-request); again every few seconds,
+   while the way through the server is open. The call's own recovery rides on
+   the chat's channel, so it follows once this is repaired.                  */
+let chatDownSince   = 0;
+let chatRepairAt    = 0;
+let chatRepairs     = 0;
+let chatRepairTimer = null;
+
+function watchChatLink() {
+  const s = pc?.iceConnectionState;
+  if (s === "connected" || s === "completed") { stopChatRepair(); return; }
+  if ((s !== "disconnected" && s !== "failed") || chatOver()) return;
+  if (!chatDownSince) chatDownSince = Date.now();
+  if (!chatRepairTimer) chatRepairTimer = setInterval(stepChatRepair, 1000);
+}
+
+/** Our seat on the server is ours, and so is theirs: a repair can get through. */
+function serverPathOpen() {
+  return Boolean(ws && ws.readyState === WebSocket.OPEN && currentSession && !seatPending && !peerServerAway && !serverRoomGone);
+}
+
+/** Nothing left to repair: no chat, or its channel closed — the other side
+    gone for good, which no fresh route brings back. */
+function chatOver() {
+  return !pc || !currentSession || dataChannel?.readyState === "closed";
+}
+
+function stepChatRepair() {
+  if (chatOver()) { stopChatRepair(); return; }
+  const now = Date.now();
+  const action = G.chatRepair({
+    state: pc.iceConnectionState, host: isHost, pathOpen: serverPathOpen(),
+    downFor: now - chatDownSince, sinceRepair: now - chatRepairAt, repairs: chatRepairs
+  });
+  if (action === "none") { stopChatRepair(); return; }
+  if (action === "wait") return;
+  chatRepairAt = now;
+  chatRepairs++;
+  if (action === "restart") handleFullRenegotiation();
+  else wsSend({ type: "repair-request", sessionId: currentSession.sessionId });
+}
+
+function stopChatRepair() {
+  clearInterval(chatRepairTimer);
+  chatRepairTimer = null;
+  chatDownSince = chatRepairAt = chatRepairs = 0;
+}
+
+/** The way through the server has just opened — our seat back, or theirs —
+    or the other side asked (the host only): repair now rather than at the
+    next step. Asked, the host restarts even if its own side still looks up:
+    the guest sees what the host does not. */
+function repairChatNow(asked = false) {
+  if (chatOver()) return;
+  if (asked) {
+    if (isHost && serverPathOpen() && Date.now() - chatRepairAt >= 3000) {
+      chatRepairAt = Date.now();
+      chatRepairs++;
+      handleFullRenegotiation();
+    }
+    return;
+  }
+  watchChatLink();
+  if (chatRepairTimer) stepChatRepair();
+}
+
+/** The server no longer has our room — it restarted, or kept the seat too
+    long. The chat goes on while its own link is up, and ends if it is not. */
+function roomGoneForGood() {
+  seatPending = false;
+  serverRoomGone = true;
+  if (isHost) hostKey = null;          // a key to a room that is no more:
+  else guestKey = null;                //   nothing to take back next time
+  if (pc && G.linkLostForGood({ iceState: pc.iceConnectionState, serverRoomGone })) endChatLinkLost();
+}
+
 async function handleFullRenegotiation() {
   if (!pc || !currentSession || !isHost) return;
   try {
@@ -1997,6 +2101,7 @@ function setupDataChannel() {
     for (const k of Object.keys(orphanChunks)) delete orphanChunks[k];
     orphanChunkCount = 0;
     refusedTransfers.clear();
+    stopChatRepair();
     showReconnectButton();
   };
 
@@ -2178,6 +2283,11 @@ async function handleSignaling(data) {
       listJoinId = null;
       isHost = false;
       currentSession = { sessionId: data.sessionId };
+      /* Ours alone, to take the seat back with if our link drops mid-chat.
+         Kept in memory only: a reload is a new page, and a new join. */
+      guestKey = typeof data.guestKey === "string" ? data.guestKey : null;
+      seatPending = false;
+      peerServerAway = false;
       /* Present only when this join came from an invite link. */
       roomSecret = pendingRoomSecret;
       pendingRoomSecret = null;
@@ -2201,6 +2311,14 @@ async function handleSignaling(data) {
     case "session-reclaimed":
       /* Our room, taken back: the same PIN, the same link. */
       if (!roomEventIsOurs(data) || !isHost) break;
+      /* Back to a chat in progress: the seat is ours again and the chat's link
+         can be repaired through it. Nothing about the waiting room. */
+      if (data.resumed === true) {
+        seatPending = false;
+        serverRoomGone = false;
+        repairChatNow();
+        break;
+      }
       reclaimPending = false;
       lobbyStatus.replaceChildren();
       currentSession.token = data.token;
@@ -2214,6 +2332,9 @@ async function handleSignaling(data) {
     case "reclaim-failed":
       /* Gone after all — kept too long, or the server restarted. */
       if (!roomEventIsOurs(data)) break;
+      /* Mid-chat: the chat goes on while its own link is up — it just can no
+         longer be repaired through the server. Not the waiting room's loss. */
+      if (seatPending) { roomGoneForGood(); break; }
       reclaimPending = false;
       reclaimRedraw = false;
       lobbyStatus.replaceChildren();
@@ -2224,6 +2345,7 @@ async function handleSignaling(data) {
     case "guest-joined":
       if (!roomEventIsOurs(data)) break;
       forgetHostRoom();
+      peerServerAway = false;            // a guest just arrived: its link is up
       /* The guest opened the same link again in another browser — out of the
          app it was sent through, into Safari or Chrome — and the seat moved
          with them. What was set up with the copy they left is let go of
@@ -2272,14 +2394,21 @@ async function handleSignaling(data) {
     case "ice-candidate":
       if (!pc) break;
       if (pc.remoteDescription && pc.remoteDescription.type) {
-        try { await pc.addIceCandidate(data.candidate); } catch (e) { console.error(e); }
+        /* During a repair a candidate for the fresh route can arrive before
+           the description it belongs to: kept, and tried again with it. */
+        try { await pc.addIceCandidate(data.candidate); } catch (_) { iceQueue.push(data.candidate); }
       } else {
         iceQueue.push(data.candidate);
       }
       break;
 
     case "renegotiate-offer":
+      if (!pc || !currentSession) break;
       await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      /* Candidates for this fresh route that came in ahead of it. */
+      while (iceQueue.length) {
+        try { await pc.addIceCandidate(iceQueue.shift()); } catch (_) { /* one for the old route */ }
+      }
       {
         const ra = await pc.createAnswer();
         await pc.setLocalDescription(ra);
@@ -2289,7 +2418,48 @@ async function handleSignaling(data) {
       break;
 
     case "renegotiate-answer":
+      if (!pc || pc.signalingState !== "have-local-offer") break;   // an answer to nothing we asked
       await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      while (iceQueue.length) {
+        try { await pc.addIceCandidate(iceQueue.shift()); } catch (_) { /* one for the old route */ }
+      }
+      break;
+
+    /* ── Our seat kept through a dropped link (see rejoin-session in server.js) ── */
+
+    case "session-rejoined":
+      /* Our seat taken back: the chat can be repaired through it again. */
+      if (!roomEventIsOurs(data) || isHost) break;
+      seatPending = false;
+      serverRoomGone = false;
+      peerServerAway = data.hostAway === true;
+      repairChatNow();
+      break;
+
+    case "rejoin-failed":
+      /* Kept too long, or the server restarted: the room is gone. */
+      if (!roomEventIsOurs(data)) break;
+      roomGoneForGood();
+      break;
+
+    case "peer-away":
+      /* The other side's link to the server dropped; its seat is kept. The
+         chat may well go on directly — only a repair has to wait. */
+      if (!roomEventIsOurs(data)) break;
+      peerServerAway = true;
+      break;
+
+    case "peer-back":
+      /* Back: if our link is down, repair it now. */
+      if (!roomEventIsOurs(data)) break;
+      peerServerAway = false;
+      repairChatNow();
+      break;
+
+    case "repair-request":
+      /* The guest sees our link down — perhaps before we do. */
+      if (!roomEventIsOurs(data) || !isHost) break;
+      repairChatNow(true);
       break;
 
     /* No call-offer / call-answer / call-ice cases here on purpose. Call
@@ -2324,6 +2494,8 @@ async function handleSignaling(data) {
          back to the lobby is the arrow, as always. */
       if (!roomEventIsOurs(data) || isHost) break;
       inviteMovedAway = true;
+      guestKey = null;                   // the seat is the other copy's now
+      seatPending = false;
       autoJoinSettled();
       clearConnectWatch();
       if (dataChannel) dataChannel.onclose = null;
@@ -2639,7 +2811,10 @@ leaveBtn.onclick = () => {
   clearConnectWatch();
   forgetHostRoom();
   hostKey = null;
+  guestKey = null;
   reclaimPending = false;
+  seatPending = false;
+  peerServerAway = false;
   wsSend({ type: "leave-session", sessionId: currentSession?.sessionId });
   endCall(false);
   closePeerConnection();

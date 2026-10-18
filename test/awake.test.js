@@ -114,13 +114,16 @@ test("the notice still ends a chat that never got going, or whose link has faile
 ══════════════════════════════════════════ */
 
 function link({ serverRoomGone }) {
-  const log = { sys: [], quality: [], renegotiations: 0, closed: 0, buttons: 0 };
+  const log = { sys: [], quality: [], renegotiations: 0, closed: 0, buttons: 0, repairing: 0, repaired: 0 };
   let made = null;
   class RTCPeerConnection { constructor() { made = this; } close() {} restartIce() {} }
-  /* closePeerConnection is stood in for so the real one's DOM is not needed. */
+  /* closePeerConnection is stood in for so the real one's DOM is not needed;
+     the repair's own steps are tested in chatrepair.test.js — here, only
+     whether a link going down starts one. */
   const run = new Function(
     "G", "t", "RTCPeerConnection", "ICE_CONFIG", "currentSession", "wsSend", "setQuality", "startStatsPolling",
     "handleFullRenegotiation", "setupDataChannel", "appendSys", "endCall", "showReconnectButton", "closed", "flag",
+    "watchChatLink", "stopChatRepair",
     `let pc = null, dataChannel = null, serverRoomGone = false;
      function closePeerConnection() { closed(); }
      ${fn("createPeerConnection")}
@@ -131,18 +134,29 @@ function link({ serverRoomGone }) {
   );
   const api = run(G, k => k, RTCPeerConnection, {}, { sessionId: "r" }, () => {}, (text, cls) => log.quality.push(cls),
     () => {}, () => log.renegotiations++, () => {}, k => log.sys.push(k), () => {}, () => log.buttons++,
-    () => log.closed++, serverRoomGone);
+    () => log.closed++, serverRoomGone, () => log.repairing++, () => log.repaired++);
   const to = state => { made.iceConnectionState = state; made.oniceconnectionstatechange(); };
   return { ...log, log, to, api };
 }
 
 test("a link that fails while the server still has the room is repaired through it, as before", () => {
+  /* The repair now has steps of its own — a couple of seconds' wait, either
+     side able to start it — so going down starts it rather than firing one
+     offer there and then. See chatrepair.test.js for the steps. */
   const l = link({ serverRoomGone: false });
   const closedBefore = l.log.closed;
   l.to("failed");
-  assert.equal(l.log.renegotiations, 1);
+  assert.equal(l.log.repairing, 1, "the repair is started");
   assert.deepEqual(l.log.sys, []);
   assert.equal(l.log.closed, closedBefore);
+});
+
+test("a link that only goes disconnected is repaired too — it used to get a restartIce() nothing acted on", () => {
+  const l = link({ serverRoomGone: false });
+  l.to("disconnected");
+  assert.equal(l.log.repairing, 1);
+  l.to("connected");
+  assert.equal(l.log.repaired, 1, "and the repair stops once the link is back");
 });
 
 test("a link that fails after the server dropped the room ends the chat and says so, instead of retrying for ever", () => {
@@ -175,9 +189,11 @@ test("a fresh connection starts with the server holding the room", () => {
    The rest of the wiring
 ══════════════════════════════════════════ */
 
-test("our own link to the server dropping also marks the room gone, mid-chat", () => {
+test("our own link to the server dropping mid-chat: our seat is taken back with our key, and only without one is the room gone", () => {
+  /* It used to mark the room gone outright: the server deleted it when the
+     link dropped. Now the server keeps the seat for a page that has its key. */
   const onclose = between("  ws.onclose   = () => {", "  ws.onerror");
-  assert.match(onclose, /if \(pc\) serverRoomGone = true;/);
+  assert.match(onclose, /if \(pc && currentSession\) \{\s*\n\s*if \(isHost \? hostKey : guestKey\) seatPending = true;\s*\n\s*else serverRoomGone = true;/);
 });
 
 test("the channel closing after the server's notice is said as the other side leaving", () => {
