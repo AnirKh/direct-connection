@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610180015-8057e2da";
+const APP_BUILD = "202610201031-4ab75b8c";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -4611,20 +4611,25 @@ const SHARE_SUPPORTED = typeof navigator.mediaDevices?.getDisplayMedia === "func
 let sharingScreen = false;
 let camOffBeforeShare = false;              // a camera turned off before sharing comes back off
 
-/* A shared screen is for reading, not for watching move. Reported: shared from
-   a laptop, the whole screen went out at full size — 2560×1600 and more — and
-   it was costly and laggy, worst on the phone receiving it. So a shared screen
-   is held to Full HD: at most 1920×1080 with its shape kept, 15 frames a
-   second and 2.5 Mb/s. It is asked three ways, since browsers differ in which
+/* Reported: shared from a laptop, the whole screen went out at full size —
+   2560×1600 and more — and it was costly and laggy, worst on the phone
+   receiving it. So a shared screen is held to Full HD at most, with its shape
+   kept, and to its profile's size, frame rate and data rate (below). It is
+   asked three ways, since browsers differ in which
    they honour — of the picker, of the captured track, and of the sender, whose
    limit is the one nothing ignores — and lifted again for the camera when
    sharing stops.                                                           */
 const SCREEN_MAX = { width: 1920, height: 1080 };
 /* What a share is held to, by what it most likely is. With its sound — ticked
-   in the browser's picker — a share is nearly always a video, and moves: up to
-   30 frames a second, sent for motion. Without, it is a page to read: 15, sent
-   for sharp detail. Reported: documents were fine at 15, videos were not. */
-const SCREEN_PROFILES = { still: { fps: 15, bitrate: 2_500_000, hint: "detail" }, moving: { fps: 30, bitrate: 4_000_000, hint: "motion" } };
+   in the browser's picker — a share is nearly always a video, and moves: sent
+   for motion. Without, it is a page to read: Full HD, sent for sharp detail.
+   Reported: documents were fine at 15, videos were not at 30; then asked for
+   videos at 60 frames a second, one step down in size — so 720p (1280×720)
+   at 60, at the same 4 Mb/s Full HD at 30 had, about as much per pixel — and
+   documents at 30, smoother to scroll. A page that sits still costs little at
+   any rate, so its 2.5 Mb/s stays. The picker is asked for the most either
+   takes; the track and the sender are then held to the one it is. */
+const SCREEN_PROFILES = { still: { width: 1920, height: 1080, fps: 30, bitrate: 2_500_000, hint: "detail" }, moving: { width: 1280, height: 720, fps: 60, bitrate: 4_000_000, hint: "motion" } };
 const SCREEN_CAPTURE = { width: { max: SCREEN_MAX.width }, height: { max: SCREEN_MAX.height }, frameRate: { max: SCREEN_PROFILES.moving.fps } };
 
 function screenProfile(withSound) {
@@ -4669,10 +4674,16 @@ function mixScreenSound(mic, sound) {
   };
 }
 
-/** How far a screen of this size is scaled down to fit Full HD — never up. */
-function screenScale(width, height) {
+/** How far a screen of this size is scaled down to fit `max` — Full HD,
+    unless a profile says less — and never up. */
+function screenScale(width, height, max = SCREEN_MAX) {
   if (!(width > 0 && height > 0)) return 1;
-  return Math.max(1, width / SCREEN_MAX.width, height / SCREEN_MAX.height);
+  return Math.max(1, width / max.width, height / max.height);
+}
+
+/** The track's own limits for a profile: its size and its frame rate. */
+function screenConstraints(profile) {
+  return { width: { max: profile.width }, height: { max: profile.height }, frameRate: { max: profile.fps } };
 }
 
 /** The sender's limits: Full HD at the profile's rate for a screen, none for
@@ -4687,7 +4698,7 @@ async function limitScreenSender(sender, screen, profile = SCREEN_PROFILES.still
       if (screen) {
         encoding.maxBitrate = profile.bitrate;
         encoding.maxFramerate = profile.fps;
-        encoding.scaleResolutionDownBy = screenScale(width, height);
+        encoding.scaleResolutionDownBy = screenScale(width, height, profile);
       } else {
         delete encoding.maxBitrate;
         delete encoding.maxFramerate;
@@ -4722,8 +4733,9 @@ async function startScreenShare() {
     const profile = screenProfile(Boolean(sound));
     screen.contentHint = profile.hint;      // a page kept sharp; a video kept moving
     screen.onended = () => stopScreenShare();
-    /* Where the picker did not hold to Full HD, the track is asked again. */
-    try { await screen.applyConstraints({ ...SCREEN_CAPTURE, frameRate: { max: profile.fps } }); } catch (_) { /* the sender's limit still holds */ }
+    /* The track is asked again for the profile's size and rate — and where the
+       picker did not hold to Full HD, for that too. */
+    try { await screen.applyConstraints(screenConstraints(profile)); } catch (_) { /* the sender's limit still holds */ }
     const sender = pc.getSenders().find(s => s.track === camera);
     if (sender) await sender.replaceTrack(screen);
     else        await attachCallTrack(screen, localStream);

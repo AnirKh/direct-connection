@@ -72,6 +72,7 @@ const SOURCE = [
   grab(/^function screenProfile\([^)]*\)\s*\{[\s\S]*?^\}/m,           "screenProfile"),
   grab(/^function mixScreenSound\([^)]*\)\s*\{[\s\S]*?^\}/m,          "mixScreenSound"),
   grab(/^function screenScale\([^)]*\)\s*\{[\s\S]*?^\}/m,             "screenScale"),
+  grab(/^function screenConstraints\([^)]*\)\s*\{[\s\S]*?^\}/m,       "screenConstraints"),
   grab(/^async function limitScreenSender\([^)]*\)\s*\{[\s\S]*?^\}/m,  "limitScreenSender"),
   grab(/^async function startScreenShare\(\)\s*\{[\s\S]*?^\}/m,        "startScreenShare"),
   grab(/^async function stopScreenShare\(\)\s*\{[\s\S]*?^\}/m,         "stopScreenShare"),
@@ -186,8 +187,8 @@ function call({ inCall = true, video = true, camOff = false, busy = false, suppo
 test("sharing: the picker, then the screen in the camera's sender, and only then the camera stopped", async () => {
   const c = call();
   await c.startScreenShare();
-  assert.deepEqual(c.log.picker, [{ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }, audio: true, systemAudio: "include" }],
-    "no more than Full HD, and the picker offers the screen's sound too");
+  assert.deepEqual(c.log.picker, [{ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 60 } }, audio: true, systemAudio: "include" }],
+    "no more than Full HD, nor 60 frames a second — the most either profile takes — and the picker offers the screen's sound too");
   assert.deepEqual(c.log.order, ["picker", "replace with screen", "stop camera"]);
   const screen = c.senders[1].track;
   assert.equal(screen.name, "screen", "the same sender: no new call");
@@ -203,11 +204,11 @@ test("a shared screen is held to Full HD — asked of the picker, the track and 
      laggy, worst on the phone receiving it. */
   const c = call({ screenSize: [2560, 1600] });
   await c.startScreenShare();
-  assert.deepEqual(c.log.applied, [["screen", { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 15 } }]],
+  assert.deepEqual(c.log.applied, [["screen", { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }]],
     "the track is asked again, where the picker did not hold to it");
   const encoding = c.senders[1].encoding();
   assert.equal(encoding.maxBitrate, 2500000);
-  assert.equal(encoding.maxFramerate, 15);
+  assert.equal(encoding.maxFramerate, 30);
   assert.ok(Math.abs(encoding.scaleResolutionDownBy - 1600 / 1080) < 1e-9,
     "2560×1600 scaled to 1728×1080: its shape kept, its height fitted");
   assert.equal(c.senders[0].encoding().maxBitrate, undefined, "the microphone is left alone");
@@ -221,13 +222,15 @@ test("the scale only ever shrinks a screen, to fit both ways", () => {
   assert.ok(Math.abs(screenScale(2560, 1440) - 4 / 3) < 1e-9, "wide: fitted by its width");
   assert.equal(screenScale(0, 0), 1, "a size not known yet is left alone");
   assert.equal(screenScale(undefined, 900), 1);
+  assert.equal(screenScale(1920, 1080, { width: 1280, height: 720 }), 1.5, "Full HD to 720p, for a video");
+  assert.equal(screenScale(1280, 720, { width: 1280, height: 720 }), 1);
 });
 
 test("a screen already within Full HD goes out at its own size", async () => {
   const c = call({ screenSize: [1366, 768] });
   await c.startScreenShare();
   assert.equal(c.senders[1].encoding().scaleResolutionDownBy, 1);
-  assert.equal(c.senders[1].encoding().maxFramerate, 15, "still 15 frames a second: a screen is for reading");
+  assert.equal(c.senders[1].encoding().maxFramerate, 30, "30 frames a second, at its own size");
 });
 
 test("stopping lifts the limits, so the camera goes out at its own size again", async () => {
@@ -271,20 +274,32 @@ test("shared with its sound: the voice and the screen's sound go out mixed, in t
   assert.deepEqual(c.log.toasts, ["shareSoundTip"], "said once: the laptop's speakers still reach its microphone");
 });
 
-test("shared with its sound, it is taken for a video: up to 30 frames a second, sent for motion", async () => {
-  const c = call({ withSound: true });
+test("shared with its sound, it is taken for a video: 60 frames a second at 720p, sent for motion", async () => {
+  /* Asked for: videos at 60 frames a second, one step down from Full HD. */
+  const c = call({ withSound: true, screenSize: [2560, 1600] });
   await c.startScreenShare();
   assert.equal(c.senders[1].track.contentHint, "motion");
-  assert.deepEqual(c.log.applied, [["screen", { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }]]);
-  assert.equal(c.senders[1].encoding().maxFramerate, 30);
-  assert.equal(c.senders[1].encoding().maxBitrate, 4000000);
+  assert.deepEqual(c.log.applied, [["screen", { width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 60 } }]],
+    "the track asked for 720p at 60");
+  const encoding = c.senders[1].encoding();
+  assert.equal(encoding.maxFramerate, 60);
+  assert.equal(encoding.maxBitrate, 4000000, "the same rate Full HD at 30 had: about as much per pixel");
+  assert.ok(Math.abs(encoding.scaleResolutionDownBy - 1600 / 720) < 1e-9,
+    "2560×1600 scaled to 1152×720: its shape kept, its height fitted");
 });
 
-test("shared without its sound, it is taken for a page: 15 frames a second, sent for detail", async () => {
+test("a video shared from a screen already within 720p goes out at its own size, at 60", async () => {
+  const c = call({ withSound: true, screenSize: [1280, 720] });
+  await c.startScreenShare();
+  assert.equal(c.senders[1].encoding().scaleResolutionDownBy, 1);
+  assert.equal(c.senders[1].encoding().maxFramerate, 60);
+});
+
+test("shared without its sound, it is taken for a page: Full HD at 30 frames a second, sent for detail", async () => {
   const c = call();
   await c.startScreenShare();
   assert.equal(c.senders[1].track.contentHint, "detail");
-  assert.equal(c.senders[1].encoding().maxFramerate, 15);
+  assert.equal(c.senders[1].encoding().maxFramerate, 30, "asked for: documents at 30, as smooth to scroll as a video at 30 was");
   assert.equal(c.senders[0].track, c.mic, "and the voice goes out alone, as ever");
   assert.deepEqual(c.log.toasts, []);
 });
