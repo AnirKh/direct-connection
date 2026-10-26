@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260805-7c214285";
+const APP_BUILD = "202610260831-25928b3b";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -2999,8 +2999,18 @@ function setQuality(text, cls) {
 ══════════════════════════════════════════════ */
 
 sendBtn.onclick = sendTextMessage;
+
+/* Enter sends on a computer and starts a new line on a phone, whose keyboard
+   has no Shift to hold and whose ↵ key says "new line" (G.enterSends). Asked
+   at each press: a tablet can turn into a laptop and back. The keyboard is
+   told too, so the key it draws says what it will do. */
+const typingWithFinger = () => window.matchMedia?.("(pointer: coarse)").matches === true;
+messageInput.setAttribute("enterkeyhint", typingWithFinger() ? "enter" : "send");
 messageInput.addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTextMessage(); }
+  if (e.key !== "Enter") return;
+  if (!G.enterSends({ touch: typingWithFinger(), shift: e.shiftKey, composing: e.isComposing || e.keyCode === 229 })) return;
+  e.preventDefault();
+  sendTextMessage();
 });
 messageInput.addEventListener("input", () => {
   messageInput.style.height = "auto";

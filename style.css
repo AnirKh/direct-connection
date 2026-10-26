@@ -589,6 +589,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   font-size: 14px; line-height: 1.5;
   word-break: break-word; overflow-wrap: anywhere;
   max-width: 100%;
+  /* A message's own line breaks are kept — they were folded into spaces, so
+     a message written on several lines arrived on one. */
+  white-space: pre-wrap;
 }
 /* Me — tail bottom-right */
 .bubble-row.me   .bubble {

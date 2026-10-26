@@ -527,6 +527,24 @@
    */
   const MAX_MESSAGE_CHARS = 10000;
 
+  /**
+   * Does this Enter in the message box send the message, or start a new line?
+   *
+   * It always sent. On a phone — whose keyboard has no Shift to hold — a
+   * message could not have a second line, and the keyboard's own ↵ key did
+   * the opposite of what it shows. On a phone (`touch`: the pointer is a
+   * finger) Enter now starts a new line and the send button sends; on a
+   * computer Enter sends and Shift+Enter starts a line, as before. An Enter
+   * that finishes a word still being composed — Chinese, Japanese or Korean
+   * input — never sends: it used to send the half-written word.
+   *
+   * @param {{touch: boolean, shift: boolean, composing: boolean}} o
+   */
+  function enterSends(o) {
+    if (!o || o.composing === true || o.shift === true) return false;
+    return o.touch !== true;
+  }
+
   /** May this message be sent — or, arriving, be shown? */
   function messageFits(text) {
     return typeof text === "string" && text.length <= MAX_MESSAGE_CHARS;
@@ -1234,7 +1252,7 @@
     mayAcceptPeerKey, shieldState,
     CODE_MAX_ATTEMPTS, CODE_LOCK_MS, codeAttemptState, codeLockSecondsLeft, lockMinutes,
     SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, droppedKind, incomingTransfer, withinDeclaredSize,
-    MAX_MESSAGE_CHARS, messageFits, draftState,
+    MAX_MESSAGE_CHARS, messageFits, draftState, enterSends,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,

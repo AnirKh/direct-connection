@@ -224,6 +224,73 @@ test("a message over the limit from a changed app is not shown, and says so", as
 });
 
 /* ══════════════════════════════════════════
+   The Enter key
+══════════════════════════════════════════ */
+
+test("Enter sends on a computer; Shift+Enter, a phone's Enter, or a word still being composed starts a line", () => {
+  assert.equal(G.enterSends({ touch: false, shift: false, composing: false }), true, "a computer");
+  assert.equal(G.enterSends({ touch: false, shift: true, composing: false }), false, "Shift+Enter: a new line");
+  assert.equal(G.enterSends({ touch: true, shift: false, composing: false }), false, "a phone: a new line, the button sends");
+  assert.equal(G.enterSends({ touch: false, shift: false, composing: true }), false, "finishing a Chinese, Japanese or Korean word");
+  assert.equal(G.enterSends(undefined), false);
+});
+
+const ENTER = (() => {
+  const from = app.indexOf("/* Enter sends on a computer and starts a new line on a phone");
+  const to = app.indexOf('messageInput.addEventListener("input"', from);
+  assert.ok(from > 0 && to > from, "the Enter key's block not found in app.js");
+  return app.slice(from, to);
+})();
+
+/** The message box's Enter key on a device with a finger (`touch`) or a mouse. */
+function enterKey({ touch }) {
+  let onKey = null;
+  const box = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener: (type, f) => { if (type === "keydown") onKey = f; } };
+  let sent = 0;
+  new Function("G", "window", "messageInput", "sendTextMessage", ENTER)(
+    G, { matchMedia: q => ({ matches: q === "(pointer: coarse)" && touch }) }, box, () => { sent++; });
+  const press = (extra = {}) => {
+    const e = { key: "Enter", shiftKey: false, isComposing: false, keyCode: 13, prevented: false, preventDefault() { this.prevented = true; }, ...extra };
+    onKey(e);
+    return { sent, newLine: !e.prevented };
+  };
+  return { press, hint: box.attrs.enterkeyhint, sent: () => sent };
+}
+
+test("on a computer Enter sends, and Shift+Enter is a new line, as before", () => {
+  const k = enterKey({ touch: false });
+  assert.deepEqual(k.press(), { sent: 1, newLine: false });
+  assert.deepEqual(k.press({ shiftKey: true }), { sent: 1, newLine: true });
+  assert.equal(k.hint, "send", "the keyboard's key says Send");
+});
+
+test("on a phone Enter is a new line — it used to send, so no message could have two lines", () => {
+  const k = enterKey({ touch: true });
+  assert.deepEqual(k.press(), { sent: 0, newLine: true });
+  assert.equal(k.hint, "enter", "and the keyboard's key says so");
+});
+
+test("an Enter that finishes a word still being composed never sends", () => {
+  const k = enterKey({ touch: false });
+  assert.deepEqual(k.press({ isComposing: true }), { sent: 0, newLine: true });
+  assert.deepEqual(k.press({ keyCode: 229 }), { sent: 0, newLine: true }, "as older browsers report it");
+});
+
+test("other keys are typed as always", () => {
+  const k = enterKey({ touch: false });
+  assert.deepEqual(k.press({ key: "a" }), { sent: 0, newLine: true });
+});
+
+test("a message written on several lines is shown on several lines", () => {
+  /* The bubble folded them into spaces, so even Shift+Enter on a computer
+     arrived as one line. */
+  const css = fs.readFileSync(path.join(__dirname, "..", "style.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const bubble = css.match(/\n\.bubble \{([^}]*)\}/);
+  assert.ok(bubble, ".bubble not found in style.css");
+  assert.match(bubble[1], /white-space:\s*pre-wrap;/);
+});
+
+/* ══════════════════════════════════════════
    Links
 ══════════════════════════════════════════ */
 
