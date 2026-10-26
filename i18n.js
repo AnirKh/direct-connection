@@ -179,6 +179,8 @@ const I18N = {
     stopRecord:      "Зогсоох & илгээх",
     micDenied:       "Микрофон ашиглах эрхийг татгалзлаа",
     micFailed:       "Дуу бичиж эхэлж чадсангүй — микрофоныг сулласан.",
+    voiceTooShort:   "Дуу хэт богино байна — илгээгээгүй. Микрофон дараад ярьж, дахин дарна уу.",
+    voiceCantPlay:   "Энд тоглуулах боломжгүй — татах",
     // Leave message status
     writeFirst:      "Эхлэн мэдээлэл бичнэ үү.",
     sending:         "Илгээж байна…",
@@ -388,6 +390,8 @@ const I18N = {
     stopRecord:      "Tap to stop & send",
     micDenied:       "Microphone access denied",
     micFailed:       "Could not start recording — the microphone was released.",
+    voiceTooShort:   "Too short — not sent. Tap the mic, speak, then tap it again.",
+    voiceCantPlay:   "Can't play here — download",
     writeFirst:      "Please write a message first.",
     sending:         "Sending…",
     msgSent:         "✓ Message sent!",

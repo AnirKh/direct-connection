@@ -261,6 +261,65 @@
     return o.askedIn === o.currentRoom;
   }
 
+  /**
+   * The formats a voice note is recorded in, best first. MP4 with AAC plays
+   * everywhere this app runs: it is the only thing an iPhone records, and
+   * Chrome and Edge record it too. WebM and Ogg are for a browser that makes
+   * nothing else (Firefox).
+   */
+  const VOICE_FORMATS = Object.freeze([
+    "audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"
+  ]);
+
+  /**
+   * Which format to ask the recorder for: the first of VOICE_FORMATS it says
+   * it can make, or "" — let it choose — if it can make none of them, or
+   * cannot be asked.
+   *
+   * Notes used to be recorded in whatever the browser chose, which on a
+   * computer is WebM, and an iPhone showed "Error" in place of them.
+   *
+   * @param {(type: string) => boolean} isTypeSupported
+   */
+  function pickVoiceFormat(isTypeSupported) {
+    if (typeof isTypeSupported !== "function") return "";
+    for (const type of VOICE_FORMATS) {
+      try { if (isTypeSupported(type)) return type; } catch (_) { return ""; }
+    }
+    return "";
+  }
+
+  /**
+   * What a finished recording really is: the recorder's own word for it, or
+   * its data's. Every note used to be labelled WebM, whatever it was — and an
+   * iPhone records MP4, and picks how to play a sound by its label, so it
+   * showed "Error" in place of its own notes. A recorder that calls a sound
+   * "video/…" (some do, for MP4) is taken at its container.
+   */
+  function voiceType(recorderType, dataType) {
+    for (const said of [recorderType, dataType]) {
+      const type = baseType(said).replace(/^video\//, "audio/");
+      if (/^audio\/[a-z0-9.+-]+$/.test(type)) return type;
+    }
+    return "audio/webm";
+  }
+
+  /** The name a voice note goes by, to match what it is. */
+  function voiceFileName(type) {
+    const base = baseType(type);
+    return base === "audio/mp4" ? "voice.m4a" : base === "audio/ogg" ? "voice.ogg" : "voice.webm";
+  }
+
+  /** The shortest voice note sent. A tap with a second tap straight after
+      records next to nothing — about a hundred bytes, which no phone can
+      play — and showed as an error on both sides. */
+  const MIN_VOICE_MS = 1000;
+
+  /** Is this recording worth sending — long enough, and with anything in it? */
+  function voiceLongEnough(ms, bytes) {
+    return Number.isFinite(ms) && ms >= MIN_VOICE_MS && Number.isFinite(bytes) && bytes > 0;
+  }
+
   /* ══════════════════════════════════════════
      Invite-link join
   ══════════════════════════════════════════ */
@@ -1084,6 +1143,7 @@
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
+    VOICE_FORMATS, pickVoiceFormat, voiceType, voiceFileName, MIN_VOICE_MS, voiceLongEnough,
     shouldRetryAutoJoin, joinRefusalTarget,
     mayApplyRoomEvent
   };

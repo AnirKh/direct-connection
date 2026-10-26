@@ -634,6 +634,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* ── VOICE BUBBLE ──────────────────────────── */
 .voice-bubble { display: flex; align-items: center; gap: 8px; }
 .voice-bubble audio { width: min(180px, 50vw); height: 32px; }
+/* A note this browser cannot play — see voicePlayer() in app.js. The bubble's
+   own colour, on either side's bubble; the browser's blue was unreadable. */
+.voice-bubble a { color: inherit; text-decoration: underline; font-size: 13px; }
 
 /* ── SYSTEM MESSAGE ────────────────────────── */
 .sys-msg {

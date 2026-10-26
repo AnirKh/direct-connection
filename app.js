@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610201031-4ab75b8c";
+const APP_BUILD = "202610260145-22316c27";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3229,7 +3229,7 @@ async function sendBinary(file, kind) {
   const localUrl = trackBlobUrl(URL.createObjectURL(file));  // tracked — revoked on leave
   if (kind === "file")  appendFileBubble("me", localUrl, file.name, file.size, null);
   if (kind === "image") resolveImageNow("me", localUrl, file.name);
-  if (kind === "voice") resolveVoiceNow("me", localUrl);
+  if (kind === "voice") resolveVoiceNow("me", localUrl, file.name);
   attachSendProgress(id);
 
   const idBytes = new TextEncoder().encode(id);
@@ -3489,7 +3489,7 @@ async function assembleTransfer(id) {
 
   if (info.kind === "file")  resolveFileBubble(id, url, info.name);
   if (info.kind === "image") resolveImagePlaceholder(id, url, info.name);
-  if (info.kind === "voice") resolveVoicePlaceholder(id, url);
+  if (info.kind === "voice") resolveVoicePlaceholder(id, url, info.name);
 }
 
 /** Marks a receiving placeholder as failed rather than delivering a truncated file. */
@@ -3581,6 +3581,18 @@ function abandonVoiceRecording() {
   releaseVoiceCapture();
 }
 
+/** A recorder for a voice note, in a format both sides can play
+    (G.pickVoiceFormat) — or in the browser's own choice, if it will make
+    none of them. */
+function newVoiceRecorder(stream) {
+  const format = G.pickVoiceFormat(type => MediaRecorder.isTypeSupported(type));
+  if (format) {
+    try { return new MediaRecorder(stream, { mimeType: format }); }
+    catch (_) { /* said it could, then would not: let it choose */ }
+  }
+  return new MediaRecorder(stream);
+}
+
 async function toggleVoiceRecord() {
   /* Stopping comes first and is never gated on the connection: a recording in
      progress must always be stoppable, including after the peer has gone. */
@@ -3623,7 +3635,8 @@ async function toggleVoiceRecord() {
        different room entirely — see the check there. */
     voiceSession = askedIn;
 
-    mediaRecorder = new MediaRecorder(stream);
+    const recorder = mediaRecorder = newVoiceRecorder(stream);
+    let startedAt = 0;
     mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
 
     mediaRecorder.onstop = () => {
@@ -3644,11 +3657,21 @@ async function toggleVoiceRecord() {
         if (!discard && chunks.length) console.warn("Discarding a voice note: the room it was recorded in is gone");
         return;
       }
-      const blob = new Blob(chunks, { type: "audio/webm" });
-      sendBinary(new File([blob], "voice.webm", { type: "audio/webm" }), "voice");
+      /* Labelled what it really is — it used to be called WebM whatever it
+         was, and an iPhone showed "Error" in place of its own. */
+      const type = G.voiceType(recorder.mimeType, chunks[0] && chunks[0].type);
+      const blob = new Blob(chunks, { type });
+      /* A tap and an at-once second tap record next to nothing, which plays
+         on neither side: said, and not sent. */
+      if (!G.voiceLongEnough(Date.now() - startedAt, blob.size)) {
+        showToast(t("voiceTooShort"), "warn");
+        return;
+      }
+      sendBinary(new File([blob], G.voiceFileName(type), { type }), "voice");
     };
 
     mediaRecorder.start();
+    startedAt = Date.now();
     _isRecording = true;
     voiceRecordBtn.classList.add("recording");
     voiceRecordBtn.title = t("stopRecord");
@@ -5148,7 +5171,23 @@ function resolveImageNow(who, url, name) {
   scrollBottom();
 }
 
-function resolveVoiceNow(who, url) {
+/** A voice note's player. One this browser cannot play — a note from a
+    browser that records in a format this one does not know — becomes a line
+    saying so, with a way to save it, rather than a player saying "Error". */
+function voicePlayer(url, name) {
+  const audio = document.createElement("audio");
+  audio.src = url; audio.controls = true;
+  audio.onerror = () => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "voice";
+    link.textContent = `⚠️ ${t("voiceCantPlay")}`;
+    audio.replaceWith(link);
+  };
+  return audio;
+}
+
+function resolveVoiceNow(who, url, name) {
   const row    = document.createElement("div");
   row.className = `bubble-row ${who}`;
   const bubble = document.createElement("div");
@@ -5156,9 +5195,7 @@ function resolveVoiceNow(who, url) {
   const wrap = document.createElement("div");
   wrap.className = "voice-bubble";
   wrap.appendChild(tablerIcon("microphone", 18, "var(--accent-text)"));
-  const audio = document.createElement("audio");
-  audio.src = url; audio.controls = true;
-  wrap.appendChild(audio);
+  wrap.appendChild(voicePlayer(url, name));
   bubble.appendChild(wrap);
   row.appendChild(bubble);
   const meta = document.createElement("div");
@@ -5294,16 +5331,14 @@ function appendVoicePlaceholder(who, id) {
   scrollBottom();
 }
 
-function resolveVoicePlaceholder(id, url) {
+function resolveVoicePlaceholder(id, url, name) {
   const row = findTransferRow(id);
   if (!row) return;
   const vb = row.querySelector(".voice-bubble");
   if (!vb) return;
-  const audio = document.createElement("audio");
-  audio.src = url; audio.controls = true;
   const mic = document.createElement("span");
   mic.textContent = "🎤";
-  vb.replaceChildren(mic, audio);
+  vb.replaceChildren(mic, voicePlayer(url, name));
   scrollBottom();
 }
 
