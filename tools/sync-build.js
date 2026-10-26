@@ -51,7 +51,11 @@ const CLIENT_FILES = [
   "index.html", "style.css",
   "framebust.js", "protocol.js", "connstats.js", "guards.js", "i18n.js",
   "vendor/noble.js", "pake.js", "app.js",
-  "manifest.webmanifest", "icons/icon.svg", "icons/apple-touch-icon.png"
+  "manifest.webmanifest", "icons/icon.svg", "icons/apple-touch-icon.png",
+  /* The icon font's stylesheet. The font itself is not listed: index.html
+     does not load it (the stylesheet does, at its own ?v3.31.0), and it
+     changes only with the stylesheet, which is. */
+  "vendor/tabler/tabler-icons.min.css"
 ];
 
 /* Pictures are hashed as the bytes they are. Read as text, two different

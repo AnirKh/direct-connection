@@ -74,7 +74,7 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
     G, I18N, LANG: lang,
     t: key => I18N[lang][key],
     console: { warn() {}, error() {}, log() {} },
-    document: { createElement: element },
+    document: { createElement: element, createTextNode: text => ({ text, textContent: text }) },
     messageInput, messageCounter, srAnnouncer, chatMessages,
     dcReady: () => true, e2eReady: true,
     e2eEncrypt: async text => ({ ct: `sealed(${text.length})`, iv: "iv" }),
@@ -88,7 +88,7 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
   const names = Object.keys(env);
   const api = new Function(...names, `
     let msgIdCounter = 0;
-    ${["announce", "appendBubble", "appendSys", "updateMessageCounter", "sendTextMessage"].map(fn).join("\n")}
+    ${["announce", "fillMessage", "appendBubble", "appendSys", "updateMessageCounter", "sendTextMessage"].map(fn).join("\n")}
     function deliver(data) { switch (data.type) {\n${textCase}\n} }
     return { sendTextMessage, updateMessageCounter, announce, appendBubble, appendSys, deliver };
   `)(...names.map(n => env[n]));
@@ -96,9 +96,15 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
   const type = text => { messageInput.value = text; api.updateMessageCounter(); };
   const bubbles = who => chatMessages.children.filter(r => r.className === `bubble-row ${who}`)
                                               .map(r => r.children[0].textContent);
+  /* A bubble as its parts: words, and links with where they go. */
+  const parts = who => chatMessages.children.filter(r => r.className === `bubble-row ${who}`).map(r => {
+    const b = r.children[0];
+    if (!b.children.length) return [b.textContent];
+    return b.children.map(c => (c.tag === "a" ? { link: c.textContent, href: c.href, target: c.target, rel: c.rel, title: c.title } : c.text));
+  });
   const sys = () => chatMessages.children.filter(r => r.className === "sys-msg").map(r => r.textContent);
   const heard = () => srAnnouncer.children.map(c => c.textContent);
-  return { ...api, log, type, bubbles, sys, heard, messageInput, messageCounter };
+  return { ...api, log, type, bubbles, parts, sys, heard, messageInput, messageCounter };
 }
 
 /* ══════════════════════════════════════════
@@ -215,6 +221,58 @@ test("a message over the limit from a changed app is not shown, and says so", as
   assert.deepEqual(c.bubbles("peer"), []);
   assert.deepEqual(c.log.acks, [], "not acknowledged as delivered");
   assert.deepEqual(c.sys(), [I18N.en.messageTooLongArrived]);
+});
+
+/* ══════════════════════════════════════════
+   Links
+══════════════════════════════════════════ */
+
+test("a web address in a message is a link, opening in a new tab; the words round it stay words", async () => {
+  const c = chat();
+  c.deliver({ type: "text", ct: "see https://example.com/a. and www.mn.mn", iv: "iv", msgId: 1 });
+  await settle();
+  const tab = { target: "_blank", rel: "noopener noreferrer" };
+  assert.deepEqual(c.parts("peer"), [[
+    "see ",
+    { link: "https://example.com/a", href: "https://example.com/a", title: "https://example.com/a", ...tab },
+    ". and ",
+    { link: "www.mn.mn", href: "https://www.mn.mn/", title: "https://www.mn.mn/", ...tab }
+  ]], "shown as written, going where it really goes, and the full stop left to the sentence");
+});
+
+test("your own links too", async () => {
+  const c = chat();
+  c.type("https://anirkh.github.io/direct-connection/");
+  await c.sendTextMessage();
+  assert.equal(c.parts("me")[0][0].href, "https://anirkh.github.io/direct-connection/");
+});
+
+test("nothing but a web page becomes a link — and a message with none is plain text", async () => {
+  const c = chat();
+  for (const [i, text] of ["javascript:alert(1)", "data:text/html,<b>x</b>", "https://google.com@evil.com", "no address here"].entries()) {
+    c.deliver({ type: "text", ct: text, iv: "iv", msgId: 10 + i });
+  }
+  await settle();
+  assert.deepEqual(c.parts("peer"), [["javascript:alert(1)"], ["data:text/html,<b>x</b>"], ["https://google.com@evil.com"], ["no address here"]]);
+});
+
+test("the splitting, by its rule", () => {
+  assert.deepEqual(G.splitLinks("(https://en.wikipedia.org/wiki/Foo_(bar))"),
+    [{ text: "(" }, { text: "https://en.wikipedia.org/wiki/Foo_(bar)", href: "https://en.wikipedia.org/wiki/Foo_(bar)" }, { text: ")" }],
+    "a bracket the address opened is kept; the sentence's is not");
+  assert.deepEqual(G.splitLinks("go http://a.io!"), [{ text: "go " }, { text: "http://a.io", href: "http://a.io/" }, { text: "!" }]);
+  assert.deepEqual(G.splitLinks("xhttps://a.io"), [{ text: "xhttps://a.io" }], "only at the start of a word");
+  assert.deepEqual(G.splitLinks("https://"), [{ text: "https://" }], "no host, no link");
+  assert.deepEqual(G.splitLinks(""), []);
+  assert.deepEqual(G.splitLinks(undefined), []);
+  const words = "Шууд холбоос https://anirkh.github.io/ — нээ";
+  assert.equal(G.splitLinks(words).map(p => p.text).join(""), words, "nothing is lost or added");
+});
+
+test("links are built from words and <a> alone, never from markup", () => {
+  const fill = fn("fillMessage");
+  assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(fill));
+  assert.match(fn("appendBubble"), /fillMessage\(bubble, text\);/);
 });
 
 /* ══════════════════════════════════════════

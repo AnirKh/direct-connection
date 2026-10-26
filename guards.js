@@ -588,6 +588,62 @@
   }
 
   /* ══════════════════════════════════════════
+     Links in a message
+  ══════════════════════════════════════════ */
+
+  /** Where a link may start: a web address, or one beginning "www.". */
+  const LINK_START = /\b(?:https?:\/\/|www\.)[^\s<>"]+/gi;
+
+  /** A sentence's punctuation after an address is the sentence's: "see x.com."
+      A closing bracket stays when the address opened one, as Wikipedia's do. */
+  function trimLinkEnd(raw) {
+    const count = (s, ch) => s.split(ch).length - 1;
+    let out = raw;
+    for (;;) {
+      const last = out.slice(-1);
+      if (/[.,!?;:'"’”»…]/.test(last)) { out = out.slice(0, -1); continue; }
+      const open = { ")": "(", "]": "[", "}": "{" }[last];
+      if (open && count(out, open) < count(out, last)) { out = out.slice(0, -1); continue; }
+      return out;
+    }
+  }
+
+  /** Where an address really goes — or null for anything that is not plainly
+      a web page: another scheme, no host, or a host hidden behind "name@",
+      which reads as one site and opens another. */
+  function linkHref(raw) {
+    let url;
+    try { url = new URL(/^www\./i.test(raw) ? `https://${raw}` : raw); } catch (_) { return null; }
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (!url.hostname || url.username || url.password) return null;
+    return url.href;
+  }
+
+  /**
+   * A message cut into its words and its links, so a web address can be
+   * tapped rather than copied. Only http and https become links — never
+   * javascript:, data: or anything else a message could hold — and each is
+   * shown as it was written, opening where it really goes (`href`).
+   *
+   * @returns {{text: string, href?: string}[]}
+   */
+  function splitLinks(text) {
+    const s = typeof text === "string" ? text : "";
+    const parts = [];
+    let done = 0;
+    for (const m of s.matchAll(LINK_START)) {
+      const raw = trimLinkEnd(m[0]);
+      const href = raw && linkHref(raw);
+      if (!href) continue;
+      if (m.index > done) parts.push({ text: s.slice(done, m.index) });
+      parts.push({ text: raw, href });
+      done = m.index + raw.length;
+    }
+    if (done < s.length) parts.push({ text: s.slice(done) });
+    return parts;
+  }
+
+  /* ══════════════════════════════════════════
      The phone's Back button during a chat
   ══════════════════════════════════════════ */
 
@@ -1184,7 +1240,7 @@
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
     mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery,
     CHAT_REPAIR, chatRepair, unattended, tabTitle,
-    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress,
+    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, splitLinks,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,

@@ -631,6 +631,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .file-bubble .file-size { font-size: 11px; color: var(--muted); }
 .file-bubble a { color: var(--accent); font-size: 12px; margin-top: 3px; display: inline-block; }
 
+/* A web address in a message — see fillMessage() in app.js. The bubble's own
+   colour on either side's bubble, underlined; a long one wraps rather than
+   pushing the bubble off the screen. */
+.bubble > a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
+
+/* Something arrived while older messages were being read — see scrollBottom()
+   in app.js. Over the message box, under the call and the dialogs. */
+.new-messages-btn {
+  position: absolute; z-index: 30;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(76px + var(--safe-bottom));
+  width: auto; min-height: 36px; margin: 0; padding: 7px 14px;
+  display: flex; align-items: center; gap: 6px;
+  border-radius: 18px; font-size: 13px; font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+}
+
 /* ── VOICE BUBBLE ──────────────────────────── */
 .voice-bubble { display: flex; align-items: center; gap: 8px; }
 .voice-bubble audio { width: min(180px, 50vw); height: 32px; }

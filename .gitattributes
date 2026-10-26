@@ -6,3 +6,9 @@
 
 # Pictures are bytes, not text: never convert their line endings.
 *.png binary
+
+# The icon font and its stylesheet, kept exactly as published — byte for
+# byte, so the stylesheet still hashes to the release's own integrity value
+# (see "Icon font" in the README).
+*.woff2 binary
+vendor/tabler/** -text

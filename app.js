@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260548-518d3ef7";
+const APP_BUILD = "202610260805-7c214285";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -190,6 +190,7 @@ const connectionPath   = document.getElementById("connectionPath");
 const statsBar         = document.getElementById("statsBar");
 const leaveBtn         = document.getElementById("leaveBtn");
 const chatMessages     = document.getElementById("chatMessages");
+const newMessagesBtn   = document.getElementById("newMessagesBtn");   // see scrollBottom
 const typingIndicator  = document.getElementById("typingIndicator");
 const messageInput     = document.getElementById("messageInput");
 const messageCounter   = document.getElementById("messageCounter");
@@ -1110,6 +1111,8 @@ applyI18n();
 let _stickToBottom = true;
 chatMessages.addEventListener("scroll", () => {
   _stickToBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 48;
+  /* Down at the newest by hand: nothing is waiting below any more. */
+  if (_stickToBottom) newMessagesBtn.classList.add("hidden");
 });
 
 function fitToVisibleArea() {
@@ -2853,7 +2856,11 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
   document.getElementById("langSwitcher").style.display = "none";
   chatSessionLabel.textContent = sessionId;
   setQuality(`⬤ ${t("connecting")}`, "");
-  if (!keepMessages) chatMessages.replaceChildren();
+  if (!keepMessages) {
+    chatMessages.replaceChildren();
+    _stickToBottom = true;                 // a new chat starts at its newest
+    newMessagesBtn.classList.add("hidden");
+  }
   sendBtn.disabled = true;
   voiceCallBtn.disabled = true;
   videoCallBtn.disabled = true;
@@ -5465,19 +5472,39 @@ window.addEventListener("drop", e => { if (carriesFiles(e)) e.preventDefault(); 
    BUBBLE RENDERERS
 ══════════════════════════════════════════════ */
 
+/** A message's words, its web addresses made links (G.splitLinks) that open in
+    a new tab, so the chat stays where it is. A web address used to be plain
+    text, to be copied out by hand. Built from text and <a> alone, never from
+    markup: nothing in a message can become anything but words or an http(s)
+    link. Each link says where it really goes when pointed at. */
+function fillMessage(el, text) {
+  const parts = G.splitLinks(text);
+  if (!parts.some(part => part.href)) { el.textContent = text; return; }
+  for (const part of parts) {
+    if (!part.href) { el.appendChild(document.createTextNode(part.text)); continue; }
+    const link = document.createElement("a");
+    link.href = part.href;
+    link.textContent = part.text;
+    link.title = part.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    el.appendChild(link);
+  }
+}
+
 function appendBubble(who, text) {
   const row    = document.createElement("div");
   row.className = `bubble-row ${who}`;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = text;
+  fillMessage(bubble, text);
   row.appendChild(bubble);
   const meta = document.createElement("div");
   meta.className = "bubble-meta";
   meta.textContent = now();
   row.appendChild(meta);
   chatMessages.appendChild(row);
-  scrollBottom();
+  scrollBottom(who === "me");       // what you sent, you see; theirs waits if you are reading
   if (who === "peer") { announce(`${t("srNewMessage")}: ${text}`); noticeArrival(); }
   return row;
 }
@@ -5497,7 +5524,7 @@ function resolveImageNow(who, url, name) {
   meta.textContent = now();
   row.appendChild(meta);
   chatMessages.appendChild(row);
-  scrollBottom();
+  scrollBottom(who === "me");
 }
 
 /** A voice note's player. One this browser cannot play — a note from a
@@ -5532,7 +5559,7 @@ function resolveVoiceNow(who, url, name) {
   meta.textContent = now();
   row.appendChild(meta);
   chatMessages.appendChild(row);
-  scrollBottom();
+  scrollBottom(who === "me");
 }
 
 function appendImagePlaceholder(who, id, name) {
@@ -5619,7 +5646,7 @@ function appendFileBubble(who, url, name, size, id) {
   meta.textContent = now();
   row.appendChild(meta);
   chatMessages.appendChild(row);
-  scrollBottom();
+  scrollBottom(who === "me");
 }
 
 function resolveFileBubble(id, url, name) {
@@ -5703,7 +5730,24 @@ function now() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function scrollBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
+/* ── Reading older messages ─────────────────
+   Every arrival scrolled the chat to the bottom, even while someone had
+   scrolled up to read something earlier: it was pulled away from under them.
+   Now the chat stays put while they read, and a "↓ New messages" button over
+   the message box says something came; it takes them down. Their own
+   messages still go to the bottom (`force`) — they want to see what they
+   sent. Reaching the bottom by hand puts the button away too (the scroll
+   listener, beside fitToVisibleArea). */
+function scrollBottom(force = false) {
+  if (force || _stickToBottom) {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    _stickToBottom = true;
+    newMessagesBtn.classList.add("hidden");
+    return;
+  }
+  newMessagesBtn.classList.remove("hidden");
+}
+newMessagesBtn.onclick = () => scrollBottom(true);
 
 /* ══════════════════════════════════════════════
    LEAVE A MESSAGE

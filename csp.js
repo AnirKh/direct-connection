@@ -29,7 +29,9 @@
 
 "use strict";
 
-const TABLER_CDN_ORIGIN = "https://cdn.jsdelivr.net";
+/* Nothing is loaded from another site any more: the icon font, the one thing
+   that was (from a CDN), is served from here — vendor/tabler/. So styles and
+   fonts come from 'self' only. */
 
 const DEFAULT_ALLOWED_ORIGINS = [
   "https://direct-connection.onrender.com",
@@ -52,8 +54,8 @@ function buildCsp(origins, { asHeader }) {
   return [
     "default-src 'self'",
     "script-src 'self'",
-    `style-src 'self' 'unsafe-inline' ${TABLER_CDN_ORIGIN}`,
-    `font-src 'self' ${TABLER_CDN_ORIGIN} data:`,
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
     "img-src 'self' blob: data:",
     "media-src 'self' blob: mediastream:",
     `connect-src ${Array.from(connect).join(" ")}`,
@@ -81,7 +83,6 @@ module.exports = {
   buildCsp,
   wsOriginFor,
   DEFAULT_ALLOWED_ORIGINS,
-  TABLER_CDN_ORIGIN,
   META_CSP,
   META_TAG_PATTERN
 };

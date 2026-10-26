@@ -814,5 +814,5 @@ test("the host keeps the chat on screen when the guest's link moves to another b
     "the old channel is let go of quietly before the new connection");
   assert.ok(block.indexOf("switchToChat(") < block.indexOf('t("guestReopened")'), "said after the screen is set up, so it is not cleared");
   const sw = topLevelFunctions(withoutComments(appSrc)).get("switchToChat");
-  assert.match(sw, /if \(!keepMessages\) chatMessages\.replaceChildren\(\);/);
+  assert.match(sw, /if \(!keepMessages\) \{\s*\n\s*chatMessages\.replaceChildren\(\);/);
 });
