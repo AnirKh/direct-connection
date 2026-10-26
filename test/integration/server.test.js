@@ -104,6 +104,97 @@ test("a duplicate room name is refused", async () => {
   assert.equal(refused.code, "name-taken", "said with a code, so the page can say it in its own language");
 });
 
+/* A create the page sends again, because its link dropped before the answer
+   came back: the server had made the room, kept it for its away host, and
+   refused the second create as "name taken". The create's own key gets the
+   same room back. */
+const CREATE_KEY = "k".repeat(10) + "Create_Key-0123";      // 25 base64url characters
+
+test("a create sent again with its key gets the same room back, not \"name taken\"", async () => {
+  const first = await client();
+  first.send_({ type: "create-session", sessionId: "room-resent", createKey: CREATE_KEY });
+  const made = await waitFor(first, "session-created");
+  first.terminate();                                         // the link drops; the answer is lost with it
+  await sleep(300);
+  const again = await client();
+  again.send_({ type: "create-session", sessionId: "room-resent", createKey: CREATE_KEY });
+  const answer = await waitFor(again, "session-created");
+  assert.ok(answer, `got ${JSON.stringify(again.inbox.find(m => m.type === "error"))}`);
+  for (const field of ["pin", "token", "hostKey", "kind"]) assert.equal(answer[field], made[field], `the same ${field}`);
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "room-resent", pin: made.pin });
+  assert.ok(await waitFor(guest, "session-joined"), "the PIN already shared still works");
+  assert.ok(await waitFor(again, "guest-joined"), "and the page that sent it again is the host");
+});
+
+test("on the same link too — an answer lost, the link kept — and never counted as another room", async () => {
+  const ws = await client();
+  ws.send_({ type: "create-session", sessionId: "room-resent-twice", createKey: CREATE_KEY.replace("k", "j") });
+  const made = await waitFor(ws, "session-created");
+  for (let i = 0; i < 12; i++) {
+    ws.inbox.length = 0;
+    ws.send_({ type: "create-session", sessionId: "room-resent-twice", createKey: CREATE_KEY.replace("k", "j") });
+    const answer = await waitFor(ws, "session-created", 1500);
+    assert.ok(answer && answer.pin === made.pin, `send ${i + 2}: ${JSON.stringify(ws.inbox)}`);
+    assert.ok(!ws.inbox.some(m => m.type === "error"), `send ${i + 2} was refused as well: ${JSON.stringify(ws.inbox)}`);
+  }
+});
+
+test("a malformed key is not kept, so it gets nothing back", async () => {
+  const first = await client();
+  first.send_({ type: "create-session", sessionId: "room-resent-bad-key", createKey: "short" });
+  assert.ok(await waitFor(first, "session-created"), "the room is made as any room is");
+  first.terminate();
+  await sleep(300);
+  const again = await client();
+  again.send_({ type: "create-session", sessionId: "room-resent-bad-key", createKey: "short" });
+  const refused = await waitFor(again, "error");
+  assert.equal(refused && refused.code, "name-taken");
+});
+
+test("another key, a malformed one, or none is still \"name taken\"", async () => {
+  const owner = await client();
+  owner.send_({ type: "create-session", sessionId: "room-resent-others", createKey: CREATE_KEY.replace("k", "m") });
+  await waitFor(owner, "session-created");
+  for (const createKey of [CREATE_KEY.replace("k", "n"), undefined, "short", CREATE_KEY.replace("k", "m") + "!", 42]) {
+    const other = await client();
+    other.send_({ type: "create-session", sessionId: "room-resent-others", createKey });
+    const refused = await waitFor(other, "error");
+    assert.equal(refused && refused.code, "name-taken", JSON.stringify(createKey));
+  }
+});
+
+test("a guest who arrived while the host was away is introduced when the create comes again", async () => {
+  const first = await client();
+  first.send_({ type: "create-session", sessionId: "room-resent-guest", open: true, createKey: CREATE_KEY.replace("k", "p") });
+  await waitFor(first, "session-created");
+  first.terminate();
+  await sleep(300);
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "room-resent-guest" });
+  const joined = await waitFor(guest, "session-joined");
+  assert.equal(joined && joined.hostAway, true, "setup: the guest waits for the host");
+  const again = await client();
+  again.send_({ type: "create-session", sessionId: "room-resent-guest", open: true, createKey: CREATE_KEY.replace("k", "p") });
+  assert.ok(await waitFor(again, "session-created"));
+  assert.ok(await waitFor(again, "guest-joined"), "the host meets the guest");
+  assert.ok(await waitFor(guest, "host-back"), "and the guest is told");
+});
+
+test("a room whose chat has begun cannot be taken by its create key", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "room-resent-chat", createKey: CREATE_KEY.replace("k", "q") });
+  const made = await waitFor(host, "session-created");
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "room-resent-chat", pin: made.pin });
+  assert.ok(await waitFor(host, "guest-joined"), "setup: the chat begins");
+  const late = await client();
+  late.send_({ type: "create-session", sessionId: "room-resent-chat", createKey: CREATE_KEY.replace("k", "q") });
+  const refused = await waitFor(late, "error");
+  assert.equal(refused && refused.code, "name-taken");
+  assert.ok(!guest.inbox.some(m => m.type === "host-back" || m.type === "peer-disconnected"), "the chat is left alone");
+});
+
 test("invalid room names are refused", async () => {
   const ws = await client();
   for (const bad of ["", "  padded  ", "x".repeat(81), "bad<>name"]) {

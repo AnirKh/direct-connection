@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260231-d23586e4";
+const APP_BUILD = "202610260548-518d3ef7";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1023,7 +1023,6 @@ const SERVER_URL = window.DIRECT_CONNECTION_SERVER_URL ||
     : DEFAULT_SERVER_URL);
 const WS_URL = SERVER_URL.replace(/^http/, "ws");
 const CHUNK_SIZE    = 65536;
-const MAX_DC_MSG    = 200000;
 const MAX_P2P_FILE_BYTES = 150 * 1024 * 1024; // 150 MB hard cap for P2P transfers
 /* What may be arriving at once: two maximum-size files side by side. */
 const INCOMING_BUDGET_BYTES = 2 * MAX_P2P_FILE_BYTES;
@@ -1382,9 +1381,21 @@ refreshBtn.onclick = requestSessionList;
    link is down, so a Create pressed then — while Render woke up, or just after
    a drop — sent nothing, and the page sat on "Creating…" with every create
    button disabled for good. It is kept until answered, and sent (again) each
-   time the link comes up; a room the server made and then dropped with the
-   old socket is simply made afresh. */
+   time the link comes up.
+
+   Sent again, it may find the room already made: the first one arrived, and
+   only its answer was lost with the link. The server keeps such a room for
+   its host, and refused the second create as "name taken" — this page's own
+   room blocking its name. So each create carries a key of its own, the same
+   every time it is sent (makeCreateKey), and the server answers the same key
+   with the same room. The key is random, this page's, and only ever sent
+   with its create: it is not the room secret, and is never in a link. */
 let pendingCreate = null;
+
+function makeCreateKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
 function sendPendingCreate() {
   if (pendingCreate && ws && ws.readyState === WebSocket.OPEN) wsSend(pendingCreate);
@@ -1633,7 +1644,8 @@ function createRoom(kind) {
   setCreateButtons(true);
   createInfo.textContent = t("creating");
   roomKind = kind;   // so the host takes the code path when the channel opens
-  pendingCreate = { type: "create-session", sessionId, open: kind === "open", code: kind === "code" };
+  pendingCreate = { type: "create-session", sessionId, open: kind === "open", code: kind === "code",
+                    createKey: makeCreateKey() };
   sendPendingCreate();
 }
 
@@ -3563,11 +3575,13 @@ function drainBuffer() {
 ══════════════════════════════════════════════ */
 
 sendImageBtn.onclick = () => { attachMenu.classList.add("hidden"); imageInput.click(); };
+/* Several at once: the picker used to take one, and a dozen photos meant a
+   dozen trips through the menu. Sent one after another (sendFiles). Read
+   before the picker is emptied, so the same ones can be picked again. */
 imageInput.onchange = () => {
-  const file = imageInput.files[0];
-  if (!file) return;
-  sendBinary(file, "image");
+  const files = Array.from(imageInput.files || []);
   imageInput.value = "";
+  sendFiles(files, "image");
 };
 
 /* ══════════════════════════════════════════════
@@ -3576,10 +3590,9 @@ imageInput.onchange = () => {
 
 sendFileBtn.onclick = () => { attachMenu.classList.add("hidden"); fileInput.click(); };
 fileInput.onchange = () => {
-  const file = fileInput.files[0];
-  if (!file) return;
-  sendBinary(file, "file");
+  const files = Array.from(fileInput.files || []);
   fileInput.value = "";
+  sendFiles(files, "file");
 };
 
 /* ══════════════════════════════════════════════
@@ -5400,9 +5413,11 @@ document.addEventListener("keydown", e => {
 const dropHint = document.getElementById("dropHint");
 let dragDepth = 0;                   // dragenter/leave fire for every child crossed
 
-/** Sends files one after another, each finished before the next begins. */
-async function sendFiles(files) {
-  for (const file of files) await sendBinary(file, G.droppedKind(file.type));
+/** Sends files one after another, each finished before the next begins: as
+    `kind` when the person said which (the photo or the file button), else
+    each as what it is. */
+async function sendFiles(files, kind) {
+  for (const file of files) await sendBinary(file, kind || G.droppedKind(file.type));
 }
 
 function carriesFiles(e) {

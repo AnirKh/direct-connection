@@ -646,6 +646,33 @@ function secretMatches(expected, supplied) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/** A page's key for one create: random, its own, and only ever sent with
+    that create (see create-session). Anything else is taken as none. */
+function isCreateKey(key) {
+  return typeof key === "string" && /^[A-Za-z0-9_-]{22,64}$/.test(key);
+}
+
+/** A create sent again for a room this server already made for it: the same
+    room, answered as the first create would have been — and a guest who
+    arrived while the host was away introduced now, as when a host takes its
+    room back (reclaim-session). */
+function adoptRoom(ws, sessionId, session) {
+  if (session.host !== ws) cleanupClient(ws);    // one room per socket
+  session.host = ws;
+  session.hostAwaySince = 0;
+  clearTimeout(session.hostAwayTimer);
+  session.waitingSince = Date.now();
+  const { pin, token, hostKey, open, kind } = session;
+  ws.send(JSON.stringify({ type: "session-created", sessionId, pin, token, hostKey, open, kind }));
+  if (session.guest?.readyState === WebSocket.OPEN) {
+    session.guest.send(JSON.stringify({ type: "host-back", sessionId }));
+    ws.send(JSON.stringify({ type: "guest-joined", sessionId }));
+    session.paired = true;
+  }
+  broadcastSessionList();
+  console.log(`Session ${sessionLogId(sessionId)} create sent again: the same room`);
+}
+
 function broadcastSessionList() {
   const list = publicSessions();
 
@@ -801,7 +828,23 @@ wss.on("connection", (ws, req) => {
           ws.send(JSON.stringify({ type: "error", code: "invalid-name", message: "Invalid session name" }));
           break;
         }
-        if (sessions.has(data.sessionId)) {
+        /* The same create again — sent once more because the link dropped
+           before the answer came back, after this server had made the room.
+           That used to be refused as "name taken": the page's own room, kept
+           for a host whose link dropped (HOST_AWAY_MS), blocked its name, and
+           the page had no host key to take it back with. A create carries a
+           key of its own (createKey); the same key gets the same room, and
+           its answer, again. Not counted as a new room. */
+        {
+          const found = sessions.get(data.sessionId);
+          if (found && hostAwayExpired(found)) dropSession(data.sessionId, found);
+        }
+        const existing = sessions.get(data.sessionId);
+        if (existing) {
+          if (isCreateKey(data.createKey) && existing.paired !== true && secretMatches(existing.createKey, data.createKey)) {
+            adoptRoom(ws, data.sessionId, existing);
+            break;
+          }
           ws.send(JSON.stringify({ type: "error", code: "name-taken", message: "Session name is already in use" }));
           break;
         }
@@ -830,6 +873,7 @@ wss.on("connection", (ws, req) => {
         sessions.set(data.sessionId, {
           host: ws, guest: null, offer: null,
           kind, open, pin, token, hostKey, createdAt: Date.now(), hostAwaySince: 0,
+          createKey: isCreateKey(data.createKey) ? data.createKey : null,   // the same create, if sent again
           joinLockedUntil: 0,
           failedJoinWindowStart: 0,
           failedJoinCount: 0

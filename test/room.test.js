@@ -81,6 +81,7 @@ function lobby({ linkUp = true, tab = "create", hosting = { sessionId: "bat-room
      let isHost = Boolean(start.hosting), isConnecting = false, roomSecret = "s";
      let pakeCode = start.word, activeLobbyTab = start.tab, _lastSessionList = [];
      let pendingCreate = null, hostKey = "host-key", reclaimPending = true;
+     ${fn("makeCreateKey")}
      ${fn("sendPendingCreate")}
      ${fn("createRoom")}
      ${fn("loseWaitingRoom")}
@@ -94,6 +95,24 @@ function lobby({ linkUp = true, tab = "create", hosting = { sessionId: "bat-room
   const button = () => createInfo.children.find(c => c.tag === "button");
   return { ...api, log, ws, createInfo, input, button, linkUp: () => { ws.readyState = 1; api.sendPendingCreate(); } };
 }
+
+/** A create as sent, without its key — checked on its own below. */
+const withoutKey = ({ createKey, ...rest }) => {
+  assert.match(String(createKey), /^[A-Za-z0-9_-]{24}$/, "every create carries a key of its own");
+  return rest;
+};
+
+test("each create has its own key; the same create keeps it however often it is sent", () => {
+  const l = lobby({ linkUp: true, hosting: null });
+  l.input.value = "one-room";
+  l.createRoom("pin");
+  l.sendPendingCreate();
+  assert.equal(l.log.sent[0].createKey, l.log.sent[1].createKey);
+  const other = lobby({ linkUp: true, hosting: null });
+  other.input.value = "one-room";
+  other.createRoom("pin");
+  assert.notEqual(other.log.sent[0].createKey, l.log.sent[0].createKey, "another page's create is another create");
+});
 
 test("a waiting room lost with the link: the host is told, and can make it again", () => {
   const l = lobby();
@@ -123,7 +142,7 @@ test("Create again makes the same room — same name, same kind", () => {
     const l = lobby({ hosting: { sessionId: "bat-room", kind } });
     l.loseWaitingRoom();
     l.button().onclick();
-    assert.deepEqual(l.log.sent, [{ type: "create-session", sessionId: "bat-room", open: kind === "open", code: false }]);
+    assert.deepEqual(l.log.sent.map(withoutKey), [{ type: "create-session", sessionId: "bat-room", open: kind === "open", code: false }]);
   }
 });
 
@@ -132,7 +151,7 @@ test("a code room is made again with the same word, without asking for it, and t
   l.loseWaitingRoom();
   l.button().onclick();
   assert.equal(l.log.chooseWord, 0, "the guest already has the word; it is kept");
-  assert.deepEqual(l.log.sent, [{ type: "create-session", sessionId: "bat-room", open: false, code: true }]);
+  assert.deepEqual(l.log.sent.map(withoutKey), [{ type: "create-session", sessionId: "bat-room", open: false, code: true }]);
   assert.ok(!JSON.stringify(l.log.sent).includes("correct horse"));
 });
 
@@ -143,7 +162,7 @@ test("Create pressed while the link is down goes when the link is back", () => {
   assert.deepEqual(l.log.sent, [], "dropped by wsSend, as before — but kept this time");
   assert.equal(l.state().isConnecting, true);
   l.linkUp();
-  assert.deepEqual(l.log.sent, [{ type: "create-session", sessionId: "new-room", open: true, code: false }]);
+  assert.deepEqual(l.log.sent.map(withoutKey), [{ type: "create-session", sessionId: "new-room", open: true, code: false }]);
 });
 
 test("a create that was sent but not answered before the link dropped is sent again", () => {
@@ -153,7 +172,9 @@ test("a create that was sent but not answered before the link dropped is sent ag
   assert.equal(l.log.sent.length, 1);
   l.ws.readyState = 3;                       // the link drops before the answer
   l.linkUp();
-  assert.equal(l.log.sent.length, 2, "the server dropped whatever it made with the old socket");
+  assert.equal(l.log.sent.length, 2);
+  assert.equal(l.log.sent[1].createKey, l.log.sent[0].createKey,
+    "the same create, with the same key: the server answers it with the room it already made, not \"name taken\"");
 });
 
 test("a create made while the link is down is kept, and sent once it is up", () => {

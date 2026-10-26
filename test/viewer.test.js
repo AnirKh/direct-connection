@@ -194,6 +194,31 @@ test("what a pasted or dropped file is sent as", () => {
   assert.equal(G.droppedKind(undefined), "file");
 });
 
+test("several photos, or files, can be chosen at once — the pickers took one", () => {
+  assert.match(html, /<input type="file" id="imageInput" accept="image\/\*" multiple class="hidden">/);
+  assert.match(html, /<input type="file" id="fileInput" multiple class="hidden">/);
+});
+
+test("every one chosen is sent, as the button said, and the picker is emptied for the same ones again", () => {
+  for (const [picker, kind] of [["imageInput", "image"], ["fileInput", "file"]]) {
+    const handler = between(`${picker}.onchange = () => {`, "\n};") + "\n};";
+    const calls = [];
+    const input = { files: [file("a.png", "image/png"), file("b.jpg", "image/jpeg"), file("c.pdf", "application/pdf")], value: "C:\\fakepath\\a.png" };
+    const seenAtSend = [];
+    new Function(picker, "sendFiles", `${handler}\n${picker}.onchange();`)(input, (files, k) => { calls.push({ names: files.map(f => f.name), k }); seenAtSend.push(input.value); });
+    assert.deepEqual(calls, [{ names: ["a.png", "b.jpg", "c.pdf"], k: kind }], picker);
+    assert.deepEqual(seenAtSend, [""], `${picker}: emptied, so picking the same ones again is a change`);
+  }
+});
+
+test("the photo and file buttons decide what each is sent as; a drop decides by the file", async () => {
+  const p = page();
+  const sending = p.sendFiles([file("a.png", "image/png")], "file");
+  p.finishSend();
+  await sending;
+  assert.deepEqual(p.log.sent, [{ name: "a.png", kind: "file" }], "a picture sent with the file button stays a file");
+});
+
 test("a picture pasted into the message box is sent; text pastes as text", async () => {
   const p = page();
   const shot = p.event({ clipboardData: { files: [file("Screenshot.png", "image/png")] } });
