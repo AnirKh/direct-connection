@@ -115,6 +115,77 @@ test("once locked, the note says so", () => {
   assert.equal(h.failures(), 0, "the lock itself is not another failure");
 });
 
+test("a guest turned away from a locked room is told so through the server, and for how long", () => {
+  const h = codeHost({ locked: true });          // locked for another minute
+  h.pakeFailClosed(true);
+  assert.equal(h.log.sent.length, 1);
+  const [sent] = h.log.sent;
+  assert.equal(sent.type, "release-guest");
+  assert.equal(sent.reason, "locked");
+  assert.ok(sent.retryIn > 55 && sent.retryIn <= 60, `retryIn ${sent.retryIn}`);
+});
+
+test("how long a lock has left, and the minutes a guest is told", () => {
+  assert.equal(G.codeLockSecondsLeft(0, 1000), 0, "no lock");
+  assert.equal(G.codeLockSecondsLeft(1000, 1000), 0, "over");
+  assert.equal(G.codeLockSecondsLeft(61_001, 1000), 61);
+  assert.equal(G.codeLockSecondsLeft(1e12, 0), 3600, "never more than an hour");
+  assert.equal(G.codeLockSecondsLeft(NaN, 0), 0);
+  assert.equal(G.lockMinutes(240), 4);
+  assert.equal(G.lockMinutes(241), 5, "rounded up: never told to come back too soon");
+  assert.equal(G.lockMinutes(10), 1, "at least one — not \"0 minutes\"");
+  assert.equal(G.lockMinutes(0), 1, "a lock with nothing left is still said as a minute");
+  assert.equal(G.lockMinutes(undefined), 5, "an older page said nothing: the lock's own length");
+  assert.equal(G.lockMinutes(-3), 5);
+});
+
+/* The guest's side: the server's notice, with or without the lock. */
+const PEER_GONE = between('    case "peer-disconnected":', '    case "seat-taken":');
+const I18N_ = new Function("localStorage", `${fs.readFileSync(path.join(__dirname, "..", "i18n.js"), "utf8")}; return I18N;`)({ getItem: () => null });
+
+function guestTold(data, { isHost = false, roomKind = "code", e2eReady = false } = {}) {
+  const log = { toasts: [], sys: [], left: 0, status: [], timers: [], closed: 0 };
+  const dataChannel = { readyState: "open", onclose: () => log.sys.push("closed-handler") };
+  new Function("G", "t", "I18N", "LANG", "roomEventIsOurs", "showToast", "appendSys", "endCall", "closePeerConnection",
+    "showReconnectButton", "setTimeout", "leaveBtn", "lobbyStatus", "document", "start", `
+    let isHost = start.isHost, roomKind = start.roomKind, e2eReady = start.e2eReady, serverRoomGone = false;
+    let currentSession = { sessionId: "word-room" };
+    const dataChannel = start.dataChannel, pc = { iceConnectionState: "connected" };
+    ${fn("turnedAwayLocked")}
+    function deliver(data) { switch (data.type) {\n${PEER_GONE}\n} }
+    deliver(start.data);`
+  )(G, k => I18N_.mn[k], I18N_, "mn", () => true, m => log.toasts.push(m), k => log.sys.push(k), () => {},
+    () => log.closed++, () => {}, (f, ms) => log.timers.push({ f, ms }), { click: () => log.left++ },
+    { replaceChildren: el => log.status.push(el.textContent) }, { createElement: () => ({ style: {}, textContent: "" }) },
+    { isHost, roomKind, e2eReady, data, dataChannel });
+  return Object.assign(log, { dataChannel });      // the live log: the timer still writes to it
+}
+
+test("turned away from a locked room: told why and how long, then back to the lobby, where it is said again", () => {
+  const g = guestTold({ type: "peer-disconnected", sessionId: "word-room", reason: "code-locked", retryIn: 240 });
+  const words = I18N_.mn.codeLockedGuest(4);
+  assert.deepEqual(g.toasts, [words]);
+  assert.deepEqual(g.sys, [words], "not \"the other side left\"");
+  assert.equal(g.dataChannel.onclose, null, "the channel closing after says nothing more");
+  assert.deepEqual(g.timers.map(t => t.ms), [1200]);
+  g.timers[0].f();
+  assert.equal(g.left, 1);
+  assert.deepEqual(g.status, [`🔒 ${words}`]);
+});
+
+test("without the lock, or after a chat began, or not in a code room, the notice is the old one", () => {
+  for (const [data, opts] of [
+    [{ type: "peer-disconnected", sessionId: "word-room" }, {}],
+    [{ type: "peer-disconnected", sessionId: "word-room", reason: "code-locked" }, { e2eReady: true }],
+    [{ type: "peer-disconnected", sessionId: "word-room", reason: "code-locked" }, { roomKind: "pin" }],
+    [{ type: "peer-disconnected", sessionId: "word-room", reason: "code-locked" }, { isHost: true }]
+  ]) {
+    const g = guestTold(data, opts);
+    assert.deepEqual(g.toasts, [], JSON.stringify(opts));
+    assert.notEqual(g.dataChannel.onclose, null, "the chat's own handling is left alone");
+  }
+});
+
 /* pakeBegin and pakeFailClosed together, on a stand-in clock: the host's count
    of wrong words through a whole lock. */
 function lockingHost() {

@@ -327,10 +327,10 @@ function pictureBubble() {
     createElement: tag => ({ tag, replaceWith(x) { bubble.child = x; } })
   };
   const run = new Function(
-    "document", "window", "findTransferRow", "t", "now", "scrollBottom",
+    "document", "window", "openImageViewer", "findTransferRow", "t", "now", "scrollBottom",
     `${fn("resolveImagePlaceholder")}\nreturn resolveImagePlaceholder;`
-  )(document, { open: (url, target) => opened.push({ url, target }) },
-    () => row, key => key, () => "12:00", () => {});
+  )(document, { open: (url, target) => opened.push({ url, target, newTab: true }) },
+    (url, name) => opened.push({ url, name }), () => row, key => key, () => "12:00", () => {});
   run("id-1", "blob:b/1", "cat.png");
   return { img: bubble.child, bubble, opened };
 }
@@ -342,7 +342,7 @@ test("a received picture can be opened full size only once it has drawn as a pic
 
   img.onload();
   img.onclick();
-  assert.deepEqual(opened, [{ url: "blob:b/1", target: "_blank" }]);
+  assert.deepEqual(opened, [{ url: "blob:b/1", name: "cat.png" }], "in the chat's own viewer — not a new tab, which left the chat");
 });
 
 test("a received picture that will not draw becomes a download, not a broken image to open", () => {

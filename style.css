@@ -940,6 +940,55 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .call-overlay.mini.voice-only .call-mini-bar { position: static; }
 
+/* ── PICTURE VIEWER ────────────────────────── */
+/* A picture from the chat, over it — see "PICTURE VIEWER" in app.js. Above
+   the call (200) and the dropped-file hint, under the dialogs (999), so an
+   incoming call's question still comes first. */
+.image-viewer {
+  position: fixed; inset: 0; z-index: 900;
+  height: var(--app-height);
+  background: rgba(0,0,0,0.94);
+  display: flex; flex-direction: column;
+}
+.image-viewer-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: calc(8px + var(--safe-top)) calc(12px + var(--safe-right)) 8px calc(12px + var(--safe-left));
+  color: #fff;
+}
+.image-viewer-name {
+  flex: 1; min-width: 0; font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.image-viewer-btn {
+  width: 44px; height: 44px; min-height: unset; margin: 0; padding: 0; flex-shrink: 0;
+  border-radius: 50%; font-size: 20px; text-decoration: none;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.14); color: #fff;
+}
+.image-viewer-stage {
+  flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch;
+  display: flex; align-items: center; justify-content: center;
+  padding-bottom: var(--safe-bottom);
+}
+.image-viewer-stage img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  cursor: zoom-in; user-select: none; -webkit-user-select: none;
+}
+/* Zoomed: the picture at its new width, the stage scrolled to look round it. */
+.image-viewer.zoomed .image-viewer-stage { display: block; }
+.image-viewer.zoomed .image-viewer-stage img { max-width: none; max-height: none; display: block; margin: 0 auto; cursor: zoom-out; }
+
+/* ── A FILE DRAGGED OVER THE CHAT ──────────── */
+.drop-hint {
+  position: absolute; inset: 10px; z-index: 250;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  border: 2px dashed var(--accent); border-radius: 16px;
+  background: rgba(21,21,26,0.88); color: var(--text);
+  font-size: 17px; font-weight: 600;
+  pointer-events: none;                 /* the drop lands on the chat, not on this */
+}
+.drop-hint i { font-size: 28px; color: var(--accent); }
+
 /* ── PIN MODAL ─────────────────────────────── */
 #pinInput {
   text-align: center; font-size: 24px; letter-spacing: 8px;

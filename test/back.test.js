@@ -91,9 +91,12 @@ function phone({ touched = true, activationApi = true } = {}) {
   };
   const navigator = activationApi ? { userActivation: { get hasBeenActive() { return touched; } } } : {};
   const document = { getElementById: id => els[id], addEventListener: (t, f) => { docListeners[t] = f; } };
+  const viewer = { open: false, closed: 0 };
   const api = new Function("G", "history", "window", "navigator", "document", "chatScreen", "chatMessages", "leaveBtn",
+    "viewingImage", "closeImageViewer",
     `${BLOCK}\nreturn { armBackGuard, disarmBackGuard, warnBeforeUnload, armed: () => backGuardArmed };`
-  )(G, history, window, navigator, document, chatScreen, chatMessages, leaveBtn);
+  )(G, history, window, navigator, document, chatScreen, chatMessages, leaveBtn,
+    () => viewer.open, () => { viewer.open = false; viewer.closed++; });
   /* The browser's Back: move one entry back, and if it is still this page, tell it. */
   function pressBack() {
     if (index === 0) return;
@@ -102,7 +105,7 @@ function phone({ touched = true, activationApi = true } = {}) {
     winListeners.popstate && winListeners.popstate();
   }
   const enterChat = () => { api.armBackGuard(); window.addEventListener("beforeunload", api.warnBeforeUnload); };
-  return { ...api, log, pressBack, enterChat, els, chatScreen, ended, winListeners, docListeners,
+  return { ...api, log, pressBack, enterChat, els, chatScreen, ended, winListeners, docListeners, viewer,
            asking: () => !els.leaveChatOverlay.classList.contains("hidden"), entries, index: () => index,
            touch: () => { touched = true; docListeners.pointerdown(); } };
 }
@@ -114,6 +117,23 @@ test("Back during a chat stays on the page and asks", () => {
   assert.equal(p.log.leftPage, false, "the page — and the chat — are still there");
   assert.equal(p.asking(), true);
   assert.equal(p.armed(), true, "held again, for the next Back");
+});
+
+test("Back with a picture open closes the picture — the chat stays, and the next Back is held too", () => {
+  assert.equal(G.backPress({ chatOpen: true, chatEnded: false, asking: false, viewing: true }), "close");
+  assert.equal(G.backPress({ chatOpen: true, chatEnded: true, asking: false, viewing: true }), "close", "even in an ended chat");
+  assert.equal(G.backPress({ chatOpen: true, viewing: "yes" }), "ask", "only a real yes");
+  const p = phone();
+  p.enterChat();
+  p.viewer.open = true;
+  p.pressBack();
+  assert.equal(p.viewer.closed, 1, "the picture closed");
+  assert.equal(p.asking(), false, "not asked to leave the chat");
+  assert.equal(p.log.leftPage, false);
+  assert.equal(p.log.left, 0);
+  assert.equal(p.armed(), true, "held again");
+  p.pressBack();
+  assert.equal(p.asking(), true, "the next Back asks, as before");
 });
 
 test("Back again answers the question: stay", () => {

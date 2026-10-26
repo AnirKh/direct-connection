@@ -272,7 +272,7 @@ function asyncRoute(handler) {
 /** Non-simple header forces CORS preflight; simple cross-site forms cannot set it. */
 function requireClientHeader(req, res, next) {
   if ((req.headers[API_CLIENT_HEADER] || "") !== API_CLIENT_VALUE) {
-    return res.status(403).json({ error: "Forbidden" });
+    return res.status(403).json({ error: "Forbidden", code: "forbidden" });
   }
   next();
 }
@@ -290,7 +290,7 @@ let uploadsInFlight = 0;
 function limitConcurrentUploads(req, res, next) {
   if (uploadsInFlight >= UPLOADS_AT_ONCE) {
     res.setHeader("Retry-After", "10");
-    return res.status(503).json({ error: "The server is busy — try again in a moment." });
+    return res.status(503).json({ error: "The server is busy — try again in a moment.", code: "busy" });
   }
   uploadsInFlight++;
   let released = false;
@@ -303,7 +303,7 @@ function limitConcurrentUploads(req, res, next) {
 function enforceEmailRateLimit(req, res, next) {
   const limit = checkEmailRateLimit(getClientIp(req));
   if (!limit.allowed) {
-    return res.status(429).json({ error: `Too many messages. Try again in ${limit.remaining}s.` });
+    return res.status(429).json({ error: `Too many messages. Try again in ${limit.remaining}s.`, code: "rate-limited", remaining: limit.remaining });
   }
   next();
 }
@@ -322,18 +322,18 @@ app.post("/api/send-message",
   const { message, name } = req.body || {};
 
   if (typeof message !== "string" || message.trim() === "") {
-    return res.status(400).json({ error: "Message is required" });
+    return res.status(400).json({ error: "Message is required", code: "message-required" });
   }
   const trimmedMessage = message.trim();
   if (trimmedMessage.length > MESSAGE_MAX) {
-    return res.status(400).json({ error: `Message must be ${MESSAGE_MAX} characters or fewer` });
+    return res.status(400).json({ error: `Message must be ${MESSAGE_MAX} characters or fewer`, code: "message-too-long", max: MESSAGE_MAX });
   }
   if (!process.env.MAIL_TO) {
-    return res.status(500).json({ error: "Server email not configured" });
+    return res.status(500).json({ error: "Server email not configured", code: "not-configured" });
   }
   const resendClient = getResendClient();
   if (!resendClient) {
-    return res.status(500).json({ error: "Server email not configured" });
+    return res.status(500).json({ error: "Server email not configured", code: "not-configured" });
   }
 
   const rawName = typeof name === "string" ? name : "";
@@ -378,7 +378,10 @@ app.post("/api/send-message",
     res.json({ ok: true });
   } catch (err) {
     console.error("Resend error:", err.message);
-    res.status(500).json({ error: "Failed to send email", detail: err.message });
+    /* The mail service's own words stay in the log. They went to the page as
+       `detail`, which showed whatever the service said, in English, to whoever
+       sent the message. */
+    res.status(500).json({ error: "Failed to send email", code: "send-failed" });
   }
 }));
 
@@ -386,16 +389,16 @@ app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {
       const mb = Math.round(LEAVE_MESSAGE_MAX_FILE_BYTES / 1024 / 1024);
-      return res.status(413).json({ error: `File is too large (max about ${mb} MB).` });
+      return res.status(413).json({ error: `File is too large (max about ${mb} MB).`, code: "file-too-large", maxMb: mb });
     }
-    return res.status(400).json({ error: err.message });
+    return res.status(400).json({ error: "Upload failed", code: "upload-failed" });
   }
   /* Anything reaching here is a bug in a handler. Answer generically rather
      than calling next(err): Express's default handler replies with the stack
      trace unless NODE_ENV is production, which is not guaranteed to be set. */
   console.error("Unhandled request error:", (err && err.stack) || err);
   if (res.headersSent) return next(err);
-  res.status(500).json({ error: "Server error" });
+  res.status(500).json({ error: "Server error", code: "server-error" });
 });
 
 /* ── HTML escape helper ─────────────────────── */
@@ -795,15 +798,15 @@ wss.on("connection", (ws, req) => {
       /* ── Create session ─────────────────────── */
       case "create-session": {
         if (!isValidSessionId(data.sessionId)) {
-          ws.send(JSON.stringify({ type: "error", message: "Invalid session name" }));
+          ws.send(JSON.stringify({ type: "error", code: "invalid-name", message: "Invalid session name" }));
           break;
         }
         if (sessions.has(data.sessionId)) {
-          ws.send(JSON.stringify({ type: "error", message: "Session name is already in use" }));
+          ws.send(JSON.stringify({ type: "error", code: "name-taken", message: "Session name is already in use" }));
           break;
         }
         if (!slidingAllow(createSessionHits, clientIp, CREATE_SESSION_MAX, CREATE_SESSION_WINDOW_MS)) {
-          ws.send(JSON.stringify({ type: "error", message: "Too many rooms created from this network. Try again later." }));
+          ws.send(JSON.stringify({ type: "error", code: "too-many-rooms", message: "Too many rooms created from this network. Try again later." }));
           break;
         }
         /* One room per socket. A browser that opened a room and then opened
@@ -1099,13 +1102,21 @@ wss.on("connection", (ws, req) => {
       /* The host of a code room turning away a guest whose word did not match,
          so the seat is free for the next attempt — or the right one. Only the
          host, only a code room, and only a seat that is taken. The guest is
-         told the way any guest is told its host has gone. */
+         told the way any guest is told its host has gone — and, when the host
+         says the room is locked after too many wrong words, told that, and
+         for how long. It used to hear only "the other side left", and the
+         right word arriving during the lock had no way to know to wait. */
       case "release-guest": {
         const session = sessions.get(data.sessionId);
         if (!session || session.host !== ws || session.kind !== "code" || !session.guest) break;
         const guest = session.guest;
         if (guest.readyState === WebSocket.OPEN) {
-          guest.send(JSON.stringify({ type: "peer-disconnected", sessionId: data.sessionId }));
+          const told = { type: "peer-disconnected", sessionId: data.sessionId };
+          if (data.reason === "locked") {
+            told.reason = "code-locked";
+            if (Number.isInteger(data.retryIn) && data.retryIn >= 0 && data.retryIn <= 3600) told.retryIn = data.retryIn;
+          }
+          guest.send(JSON.stringify(told));
         }
         session.guest = null;
         session.paired = false;

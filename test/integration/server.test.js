@@ -99,7 +99,9 @@ test("a duplicate room name is refused", async () => {
 
   const b = await client();
   b.send_({ type: "create-session", sessionId: "room-dup" });
-  assert.ok(await waitFor(b, "error"), "duplicate name should be refused");
+  const refused = await waitFor(b, "error");
+  assert.ok(refused, "duplicate name should be refused");
+  assert.equal(refused.code, "name-taken", "said with a code, so the page can say it in its own language");
 });
 
 test("invalid room names are refused", async () => {
@@ -107,8 +109,23 @@ test("invalid room names are refused", async () => {
   for (const bad of ["", "  padded  ", "x".repeat(81), "bad<>name"]) {
     ws.inbox.length = 0;
     ws.send_({ type: "create-session", sessionId: bad });
-    assert.ok(await waitFor(ws, "error", 1500), `should reject: ${JSON.stringify(bad)}`);
+    const refused = await waitFor(ws, "error", 1500);
+    assert.ok(refused, `should reject: ${JSON.stringify(bad)}`);
+    assert.equal(refused.code, "invalid-name");
   }
+});
+
+test("too many rooms from one address is said with a code too", async () => {
+  const ws = await client();
+  let refused = null;
+  for (let i = 0; i < 12 && !refused; i++) {
+    ws.inbox.length = 0;
+    ws.send_({ type: "create-session", sessionId: `many-${i}` });
+    await sleep(60);
+    refused = ws.inbox.find(m => m.type === "error");
+  }
+  assert.ok(refused, "the create limit should be reached");
+  assert.equal(refused.code, "too-many-rooms");
 });
 
 test("the correct PIN admits a guest and notifies the host", async () => {
@@ -289,6 +306,34 @@ test("a form-encoded body does not take the server down", async () => {
 test("a request without the client header is refused before any parsing", async () => {
   const res = await post('{"message":"hi"}', { "Content-Type": "application/json" });
   assert.equal(res.status, 403, "drive-by posts must be refused");
+});
+
+/** A message as the page sends it: a multipart form with a message field. */
+function messageForm(message, ip) {
+  const B = "----dcWords";
+  const body = `--${B}\r\nContent-Disposition: form-data; name="message"\r\n\r\n${message}\r\n--${B}--\r\n`;
+  return post(body, { "Content-Type": `multipart/form-data; boundary=${B}`, "X-DC-Client": "1", "x-forwarded-for": ip || freshIp() });
+}
+
+test("every refusal of a message says why with a code, and passes on nothing from the mail service", async () => {
+  const codeOf = res => { try { return JSON.parse(res.body); } catch (_) { return {}; } };
+  const none = codeOf(await post('{"message":"hi"}', { "Content-Type": "application/json", "X-DC-Client": "1" }));
+  assert.equal(none.code, "message-required");
+  const long = codeOf(await messageForm("x".repeat(5001)));
+  assert.equal(long.code, "message-too-long");
+  assert.equal(long.max, 5000, "with the limit, for the page to say");
+  /* No mail service is set up for the tests, which is its own refusal. */
+  const unset = codeOf(await messageForm("hello"));
+  assert.equal(unset.code, "not-configured");
+  for (const answer of [none, long, unset]) assert.ok(!("detail" in answer), "nothing passed on");
+  const ip = freshIp();
+  let limited = null;
+  for (let i = 0; i < 7 && !limited; i++) {
+    const answer = codeOf(await messageForm("hello", ip));
+    if (answer.code === "rate-limited") limited = answer;
+  }
+  assert.ok(limited, "five a minute, then refused");
+  assert.ok(Number.isInteger(limited.remaining) && limited.remaining > 0, "with how long to wait");
 });
 
 /* The status code is the evidence of ordering here. multer buffers the whole
@@ -832,6 +877,30 @@ test("the host of a code room can turn its guest away, and the seat is free agai
   guest.send_({ type: "leave-session" });
   await sleep(300);
   assert.ok((await listedNames()).includes("code-release"));
+  assert.ok(!("reason" in told), "a wrong word is not a lock");
+});
+
+test("turned away from a locked code room, the guest is told so, and for how long", async () => {
+  const { host, guest } = await codeRoomWithGuest("code-locked");
+  host.send_({ type: "release-guest", sessionId: "code-locked", reason: "locked", retryIn: 240 });
+  const told = await waitFor(guest, "peer-disconnected");
+  assert.equal(told && told.reason, "code-locked");
+  assert.equal(told.retryIn, 240);
+
+  /* Only the one reason, and only a sensible wait, are passed on. */
+  for (const [extra, expect] of [
+    [{ reason: "locked", retryIn: 99999 }, { reason: "code-locked", retryIn: undefined }],
+    [{ reason: "locked", retryIn: "soon" }, { reason: "code-locked", retryIn: undefined }],
+    [{ reason: "<b>go away</b>", retryIn: 5 }, { reason: undefined, retryIn: undefined }]
+  ]) {
+    const next = await client();
+    next.send_({ type: "join-session", sessionId: "code-locked" });
+    assert.ok(await waitFor(next, "session-joined"), "the seat is free for the next try");
+    host.send_({ type: "release-guest", sessionId: "code-locked", ...extra });
+    const heard = await waitFor(next, "peer-disconnected");
+    assert.equal(heard.reason, expect.reason, JSON.stringify(extra));
+    assert.equal(heard.retryIn, expect.retryIn, JSON.stringify(extra));
+  }
 });
 
 test("only the host can turn a guest away, and only in a code room", async () => {

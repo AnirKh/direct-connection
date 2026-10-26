@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260213-78f40b42";
+const APP_BUILD = "202610260231-d23586e4";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -819,14 +819,40 @@ function pakeFailClosed(locked) {
        and go back to waiting, for the next attempt or the right one. This
        used to stay on a dead chat screen while the guest's leaving deleted
        the room, so "try again" could only ever find "not found". */
-    if (currentSession) wsSend({ type: "release-guest", sessionId: currentSession.sessionId });
-    returnToWaitingRoom(codeLockedUntil > Date.now() ? "codeLocked" : "codeWrongHost");
+    /* Locked: the guest is told so, and for how long — it used to hear only
+       that we had gone, and the right word arriving now could not know to wait. */
+    const lockedFor = G.codeLockSecondsLeft(codeLockedUntil, Date.now());
+    if (currentSession) wsSend({ type: "release-guest", sessionId: currentSession.sessionId,
+                                 ...(lockedFor ? { reason: "locked", retryIn: lockedFor } : {}) });
+    returnToWaitingRoom(lockedFor ? "codeLocked" : "codeWrongHost");
   } else {
-    /* Guest: back to the lobby, where the room is listed again. */
+    /* Guest: back to the lobby, where the room is listed again — unless the
+       host's "locked" already took us there (turnedAwayLocked). */
     showToast(t("codeWrong"), "error");
     appendSys(t("codeWrong"));
-    setTimeout(() => { if (!e2eReady) leaveBtn.click(); }, 1200);
+    setTimeout(() => { if (!e2eReady && currentSession) leaveBtn.click(); }, 1200);
   }
+}
+
+/**
+ * A code room's host turned us away because the room is locked, after too
+ * many wrong words. Said — with how long to wait — instead of "the other side
+ * left", then back to the lobby, where it is said again: the right word,
+ * arriving during the lock, used to have no way to know it should wait.
+ */
+function turnedAwayLocked(retryIn) {
+  const text = I18N[LANG].codeLockedGuest(G.lockMinutes(retryIn));
+  if (dataChannel) dataChannel.onclose = null;     // its closing is not news now
+  showToast(text, "error");
+  appendSys(text);
+  setTimeout(() => {
+    if (e2eReady) return;
+    if (currentSession) leaveBtn.click();
+    const note = document.createElement("span");
+    note.style.color = "var(--orange)";
+    note.textContent = `🔒 ${text}`;
+    lobbyStatus.replaceChildren(note);
+  }, 1200);
 }
 
 /**
@@ -2474,6 +2500,13 @@ async function handleSignaling(data) {
          and a room this browser had moved on from could still end the chat in
          the room it was actually in. */
       if (!roomEventIsOurs(data)) break;
+      /* A code room locked after too many wrong words, turning us away: said
+         so, with how long to wait. Only before any chat — a host cannot use it
+         to end one. */
+      if (data.reason === "code-locked" && !isHost && roomKind === "code" && !e2eReady) {
+        turnedAwayLocked(data.retryIn);
+        break;
+      }
       /* What a locked screen looks like from here: the other side's page is
          paused and its link to the server cut. If the link between the two
          phones is still up, the chat goes on — see G.serverLeaveEndsChat. */
@@ -2566,25 +2599,30 @@ async function handleSignaling(data) {
       break;
     }
 
-    case "error":
+    case "error": {
       autoJoinSettled();
       console.error("[Server error]", data.message);
+      /* Said in the user's language where the server named why — its own
+         message is English, and was shown as it came. */
+      const key = G.serverErrorKey(data.code);
+      const said = key ? t(key) : data.message;
       if (_isAutoJoin && isConnecting) {
         const msg = document.createElement("span");
         msg.style.color = "var(--danger-text)";
-        msg.textContent = `❌ ${data.message}`;
+        msg.textContent = `❌ ${said}`;
         lobbyStatus.replaceChildren(msg);
         setLobbyButtons(false);
         isConnecting = false;
       } else {
         pendingCreate = null;
-        showToast(data.message, "error");
+        showToast(said, "error");
         createInfo.textContent = "";
         setCreateButtons(false);
         settlePinJoin();
         isConnecting = false;
       }
       break;
+    }
 
     case "pin-error": {
       autoJoinSettled();
@@ -2746,10 +2784,12 @@ window.addEventListener("popstate", () => {
   const action = G.backPress({
     chatOpen: !chatScreen.classList.contains("hidden"),
     chatEnded: Boolean(chatMessages.querySelector(".reconnect-sys-wrap")),
-    asking: !leaveChatOverlay.classList.contains("hidden")
+    asking: !leaveChatOverlay.classList.contains("hidden"),
+    viewing: viewingImage()
   });
   if (action === "ignore") return;
   backGuardArmed = false;                  // Back has just used our entry
+  if (action === "close") { closeImageViewer(); armBackGuard(); return; }
   if (action === "lobby") { leaveBtn.click(); return; }
   armBackGuard();                          // still in the chat: hold the next Back too
   leaveChatOverlay.classList.toggle("hidden", action === "stay");
@@ -2808,6 +2848,7 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
 }
 
 leaveBtn.onclick = () => {
+  closeImageViewer();               // its picture is about to be let go of
   keepScreenOn(false);
   clearConnectWatch();
   forgetHostRoom();
@@ -5266,6 +5307,146 @@ attachBtn.onclick = e => { e.stopPropagation(); attachMenu.classList.toggle("hid
 document.addEventListener("click", () => attachMenu.classList.add("hidden"));
 
 /* ══════════════════════════════════════════════
+   PICTURE VIEWER
+   ─────────────────────────────────────────────
+   A picture in the chat opened in a new browser tab. On a phone that took
+   the person out of the chat — the page behind it could be paused, the way
+   the Back button used to lose a chat — and getting back meant finding the
+   tab. It now opens here, over the chat, fitted to the screen: a tap zooms
+   in where it lands, a finger (or the wheel) looks round, a tap fits it
+   again. Save keeps it; ✕, Esc, a tap on the dark round it, or the phone's
+   Back closes it (G.backPress "close"). Nothing leaves the page.
+══════════════════════════════════════════════ */
+const imageViewer      = document.getElementById("imageViewer");
+const imageViewerStage = document.getElementById("imageViewerStage");
+const imageViewerImg   = document.getElementById("imageViewerImg");
+const imageViewerName  = document.getElementById("imageViewerName");
+const imageViewerSave  = document.getElementById("imageViewerSave");
+const imageViewerClose = document.getElementById("imageViewerClose");
+const VIEWER_ZOOM = 2.5;             // times the fitted size
+let viewerOpener = null;             // what had the focus, to give it back
+
+function openImageViewer(url, name) {
+  viewerOpener = document.activeElement;
+  imageViewerImg.src = url;
+  imageViewerImg.alt = name || t("image");
+  imageViewerName.textContent = name || "";
+  imageViewerSave.href = url;
+  imageViewerSave.download = name || "image";
+  zoomViewer(false);
+  imageViewer.classList.remove("hidden");
+  imageViewerClose.focus();
+}
+
+function viewingImage() {
+  return !imageViewer.classList.contains("hidden");
+}
+
+function closeImageViewer() {
+  if (!viewingImage()) return;
+  imageViewer.classList.add("hidden");
+  zoomViewer(false);
+  imageViewerImg.removeAttribute("src");
+  if (viewerOpener && typeof viewerOpener.focus === "function") viewerOpener.focus();
+  viewerOpener = null;
+}
+
+/** In, to VIEWER_ZOOM times the fitted size with the point tapped kept under
+    the finger; or back to fitted. */
+function zoomViewer(on, at) {
+  if (!on) {
+    imageViewer.classList.remove("zoomed");
+    imageViewerImg.style.width = "";
+    return;
+  }
+  const fitted = imageViewerImg.getBoundingClientRect();
+  if (!(fitted.width > 0)) return;              // not drawn yet
+  const fx = at ? (at.x - fitted.left) / fitted.width : 0.5;
+  const fy = at ? (at.y - fitted.top) / fitted.height : 0.5;
+  imageViewerImg.style.width = `${Math.round(fitted.width * VIEWER_ZOOM)}px`;
+  imageViewer.classList.add("zoomed");
+  const stage = imageViewerStage.getBoundingClientRect();
+  const px = at ? at.x - stage.left : stage.width / 2;
+  const py = at ? at.y - stage.top : stage.height / 2;
+  imageViewerStage.scrollLeft = fx * imageViewerImg.offsetWidth - px;
+  imageViewerStage.scrollTop  = fy * imageViewerImg.offsetHeight - py;
+}
+
+imageViewerImg.addEventListener("click", e => {
+  e.stopPropagation();
+  zoomViewer(!imageViewer.classList.contains("zoomed"), { x: e.clientX, y: e.clientY });
+});
+/* The dark round the picture: out of a zoom, or — fitted — closed. */
+imageViewerStage.addEventListener("click", e => {
+  if (e.target !== imageViewerStage) return;
+  if (imageViewer.classList.contains("zoomed")) zoomViewer(false);
+  else closeImageViewer();
+});
+imageViewerClose.onclick = closeImageViewer;
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && viewingImage()) closeImageViewer();
+});
+
+/* ══════════════════════════════════════════════
+   PASTE OR DROP A FILE
+   ─────────────────────────────────────────────
+   On a computer a file reached the chat only through the paperclip menu. A
+   picture pasted into the message box — a screenshot, Ctrl+V — is now sent
+   as a picture, and files dropped on the chat are sent one after another,
+   each as what it is (G.droppedKind). Text pastes as text, as always. And a
+   file dropped anywhere else on the page no longer opens in the tab in place
+   of the page, which ended the chat.
+══════════════════════════════════════════════ */
+const dropHint = document.getElementById("dropHint");
+let dragDepth = 0;                   // dragenter/leave fire for every child crossed
+
+/** Sends files one after another, each finished before the next begins. */
+async function sendFiles(files) {
+  for (const file of files) await sendBinary(file, G.droppedKind(file.type));
+}
+
+function carriesFiles(e) {
+  return Boolean(e.dataTransfer) && Array.from(e.dataTransfer.types || []).includes("Files");
+}
+
+function hideDropHint() {
+  dragDepth = 0;
+  dropHint.classList.add("hidden");
+}
+
+messageInput.addEventListener("paste", e => {
+  const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+  if (!files.length) return;          // text: pasted as text
+  e.preventDefault();
+  sendFiles(files);
+});
+
+chatScreen.addEventListener("dragenter", e => {
+  if (!carriesFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropHint.classList.remove("hidden");
+});
+chatScreen.addEventListener("dragover", e => {
+  if (!carriesFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+chatScreen.addEventListener("dragleave", e => {
+  if (!carriesFiles(e)) return;
+  if (--dragDepth <= 0) hideDropHint();
+});
+chatScreen.addEventListener("drop", e => {
+  if (!carriesFiles(e)) return;
+  e.preventDefault();
+  hideDropHint();
+  sendFiles(Array.from(e.dataTransfer.files || []));
+});
+/* Anywhere else, a dropped file would open in the tab in place of the page. */
+window.addEventListener("dragover", e => { if (carriesFiles(e)) e.preventDefault(); });
+window.addEventListener("drop", e => { if (carriesFiles(e)) e.preventDefault(); });
+
+/* ══════════════════════════════════════════════
    BUBBLE RENDERERS
 ══════════════════════════════════════════════ */
 
@@ -5293,7 +5474,7 @@ function resolveImageNow(who, url, name) {
   bubble.className = "bubble";
   const img = document.createElement("img");
   img.src = url; img.alt = name;
-  img.onclick = () => window.open(url, "_blank");
+  img.onclick = () => openImageViewer(url, name);
   bubble.appendChild(img);
   row.appendChild(bubble);
   const meta = document.createElement("div");
@@ -5367,7 +5548,7 @@ function resolveImagePlaceholder(id, url, name) {
   /* Opening it full size is offered only once it has drawn as a picture. One
      that will not draw — a HEIC photo outside Safari, or bytes that are no
      picture at all — is offered as a download instead of a broken image. */
-  img.onload  = () => { img.onclick = () => window.open(url, "_blank"); };
+  img.onload  = () => { img.onclick = () => openImageViewer(url, name); };
   img.onerror = () => {
     const link = document.createElement("a");
     link.href = url;
@@ -5568,7 +5749,7 @@ leaveSendBtn.onclick = async () => {
       const span = leaveFileBtn.querySelector("span[data-i18n]");
       if (span) span.textContent = t("attachFile");
     } else {
-      setLeaveStatus((json.error || "Failed") + (json.detail ? ": " + json.detail : ""), "err");
+      setLeaveStatus(leaveErrorText(json), "err");
     }
   } catch (_) {
     setLeaveStatus(t("networkErr"), "err");
@@ -5576,6 +5757,18 @@ leaveSendBtn.onclick = async () => {
     leaveSendBtn.disabled = false;
   }
 };
+
+/** Why a message was not sent, in the user's language. The server's words
+    were English, and one of them passed on whatever the mail service said. */
+function leaveErrorText(json) {
+  const code = json && json.code;
+  if (code === "rate-limited")     return I18N[LANG].emailRateLimited(Number(json.remaining) || 60);
+  if (code === "message-too-long") return I18N[LANG].emailTooLong(Number(json.max) || 5000);
+  if (code === "file-too-large")   return I18N[LANG].leaveFileTooBig(Number(json.maxMb) || leaveAttachMaxMbRounded());
+  if (code === "message-required") return t("writeFirst");
+  if (code === "not-configured")   return t("emailUnavailable");
+  return t("emailFailed");
+}
 
 function setLeaveStatus(text, type) {
   leaveStatus.textContent = text;

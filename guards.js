@@ -405,6 +405,21 @@
     return { locked: false, until: 0, failures };
   }
 
+  /** Seconds a code room's lock has left at `now`: 0 for none, or one that is
+      over. The host tells a guest it turns away this, so it knows to wait. */
+  function codeLockSecondsLeft(until, now) {
+    if (!Number.isFinite(until) || !Number.isFinite(now) || until <= now) return 0;
+    return Math.min(3600, Math.ceil((until - now) / 1000));
+  }
+
+  /** Whole minutes to tell a guest turned away from a locked room: at least
+      one — "0 minutes" would mean now — and the lock's own length when the
+      host did not say (an older page). */
+  function lockMinutes(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return Math.round(CODE_LOCK_MS / 60000);
+    return Math.max(1, Math.ceil(seconds / 60));
+  }
+
   /* ══════════════════════════════════════════
      Received files
   ══════════════════════════════════════════ */
@@ -444,6 +459,12 @@
    *
    * @returns {{kind: "file"|"image"|"voice", blobType: string}}
    */
+  /** What a pasted or dropped file is sent as: a picture if it says it is
+      one — presentAs still decides whether it is drawn as one — else a file. */
+  function droppedKind(type) {
+    return /^image\//.test(baseType(type)) ? "image" : "file";
+  }
+
   function presentAs(kind, mimeType) {
     const type = baseType(mimeType);
     if (kind === "image" && SHOWABLE_IMAGE_TYPES.includes(type)) return { kind: "image", blobType: type };
@@ -581,6 +602,8 @@
    * What does it do?
    *
    *   "ignore"  no chat on screen: it was ordinary navigation
+   *   "close"   a picture is open over the chat: Back closes it, as it closes
+   *             a picture in any app — the chat, ended or not, stays
    *   "lobby"   the chat has ended already: just go back to the lobby
    *   "stay"    the "Leave the chat?" question is up: Back answers it — stay
    *   "ask"     a chat that is on: ask before ending it
@@ -588,10 +611,11 @@
    * To a phone, Back means "leave this page", so it used to close the page and
    * the chat with it — for both people, in the middle of a sentence.
    *
-   * @param {{chatOpen: boolean, chatEnded: boolean, asking: boolean}} o
+   * @param {{chatOpen: boolean, chatEnded: boolean, asking: boolean, viewing: boolean}} o
    */
   function backPress(o) {
     if (!o || o.chatOpen !== true) return "ignore";
+    if (o.viewing === true) return "close";
     if (o.chatEnded === true) return "lobby";
     if (o.asking === true) return "stay";
     return "ask";
@@ -1057,6 +1081,28 @@
   }
 
   /* ══════════════════════════════════════════
+     The server's refusals, in the user's language
+  ══════════════════════════════════════════ */
+
+  /** Why the server would not make a room, as it says it, to the words for it. */
+  const SERVER_ERROR_KEYS = Object.freeze({
+    "invalid-name": "roomNameInvalid",
+    "name-taken": "roomNameTaken",
+    "too-many-rooms": "tooManyRooms"
+  });
+
+  /**
+   * The words for a refusal the server named with a code. Its message is
+   * English, and used to be shown as it came — to Mongolian readers too. A
+   * code this page does not know (a newer server) has none: the caller falls
+   * back to that message.
+   */
+  function serverErrorKey(code) {
+    return typeof code === "string" && Object.prototype.hasOwnProperty.call(SERVER_ERROR_KEYS, code)
+      ? SERVER_ERROR_KEYS[code] : null;
+  }
+
+  /* ══════════════════════════════════════════
      Room events from the server
   ══════════════════════════════════════════ */
 
@@ -1130,8 +1176,8 @@
     isNewerBuild, updateAction,
     mayCaptureForCall, consentedVideo, CALL_RING_MS, callUnanswered,
     mayAcceptPeerKey, shieldState,
-    CODE_MAX_ATTEMPTS, CODE_LOCK_MS, codeAttemptState,
-    SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, incomingTransfer, withinDeclaredSize,
+    CODE_MAX_ATTEMPTS, CODE_LOCK_MS, codeAttemptState, codeLockSecondsLeft, lockMinutes,
+    SHOWABLE_IMAGE_TYPES, INCOMING_MAX_AT_ONCE, presentAs, droppedKind, incomingTransfer, withinDeclaredSize,
     MAX_MESSAGE_CHARS, messageFits, draftState,
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
@@ -1145,6 +1191,6 @@
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
     VOICE_FORMATS, pickVoiceFormat, voiceType, voiceFileName, MIN_VOICE_MS, voiceLongEnough,
     shouldRetryAutoJoin, joinRefusalTarget,
-    mayApplyRoomEvent
+    mayApplyRoomEvent, SERVER_ERROR_KEYS, serverErrorKey
   };
 });
