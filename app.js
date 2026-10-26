@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260159-58dc89f4";
+const APP_BUILD = "202610260213-78f40b42";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -4555,11 +4555,85 @@ function noteCallChat() {
   showCallChrome();
 }
 
-/* Each stops there: the call's own "click" below would make it big again. */
-callChatBtn.onclick = e => { e.stopPropagation(); setCallMini(true); };
-document.getElementById("callExpandBtn").onclick = e => { e.stopPropagation(); setCallMini(false); };
-document.getElementById("callMiniEndBtn").onclick = e => { e.stopPropagation(); endCall(true); };
-callOverlay.addEventListener("click", () => { if (callMini) setCallMini(false); });
+callChatBtn.onclick = () => setCallMini(true);
+document.getElementById("callExpandBtn").onclick = () => setCallMini(false);
+document.getElementById("callMiniEndBtn").onclick = () => endCall(true);
+/* ── The small call can be moved ────────────
+   Wherever it sat it covered a corner of the chat, and that corner might be
+   the one being read. It can be dragged anywhere in the chat, by finger or
+   mouse, and stays where it is put — for the rest of the call and the next,
+   kept inside as the chat changes size (a keyboard opening, a phone turned
+   on its side) — until moved again. Its two buttons are for pressing, not
+   for dragging by. The same sum keeps it inside as keeps the self-view
+   inside the call: selfViewPosition.
+
+   A press that ends where it began is a tap, and brings the call back; one
+   that moved does not. That is decided when the finger lifts, not by
+   "click": a finger held for dragging is sent no click at all, so a tap on
+   the small call did nothing on a phone. The call comes back under the
+   finger, so for a moment its buttons take nothing — a click that does
+   follow cannot press the one that is now there, End call perhaps.      */
+const MINI_MARGIN = 8;
+const MINI_DRAG_SLOP = 6;          // px a finger may wander and still be a tap
+let miniDrag = null;               // { id, dx, dy, x0, y0, moved } while held
+let miniAt   = null;               // where it was put, once moved
+
+/** Puts the small call at (x, y) in the chat, or as near as fits. */
+function placeMini(x, y) {
+  const at = selfViewPosition({
+    x, y,
+    w: callOverlay.offsetWidth, h: callOverlay.offsetHeight,
+    areaW: chatScreen.clientWidth, areaH: chatScreen.clientHeight,
+    margin: MINI_MARGIN
+  });
+  if (!at) return;
+  miniAt = at;
+  callOverlay.style.setProperty("--mini-x", `${at.x}px`);
+  callOverlay.style.setProperty("--mini-y", `${at.y}px`);
+  callOverlay.classList.add("moved");
+}
+
+callOverlay.addEventListener("pointerdown", e => {
+  if (!callMini || e.button !== 0 || e.target.closest(".call-mini-btn")) return;
+  const box = callOverlay.getBoundingClientRect();
+  miniDrag = { id: e.pointerId, dx: e.clientX - box.left, dy: e.clientY - box.top,
+               x0: e.clientX, y0: e.clientY, moved: false };
+  callOverlay.setPointerCapture(e.pointerId);
+});
+
+callOverlay.addEventListener("pointermove", e => {
+  if (!miniDrag || e.pointerId !== miniDrag.id) return;
+  if (!miniDrag.moved && Math.hypot(e.clientX - miniDrag.x0, e.clientY - miniDrag.y0) < MINI_DRAG_SLOP) return;
+  miniDrag.moved = true;
+  callOverlay.classList.add("dragging");
+  const area = chatScreen.getBoundingClientRect();
+  placeMini(e.clientX - area.left - miniDrag.dx, e.clientY - area.top - miniDrag.dy);
+});
+
+function endMiniDrag(e) {
+  if (!miniDrag || e.pointerId !== miniDrag.id) return;
+  const tapped = e.type === "pointerup" && !miniDrag.moved;     // not a cancelled press
+  miniDrag = null;
+  callOverlay.classList.remove("dragging");
+  if (!tapped) return;
+  setCallMini(false);
+  callOverlay.classList.add("chrome-waking");
+  setTimeout(() => callOverlay.classList.remove("chrome-waking"), 350);
+}
+callOverlay.addEventListener("pointerup", endMiniDrag);
+callOverlay.addEventListener("pointercancel", endMiniDrag);
+callOverlay.addEventListener("lostpointercapture", endMiniDrag);
+
+/** Never moved: CSS has it, in its corner. Moved: held where it was put, as
+    far as the chat's new size — or the call's, video or voice — allows. */
+function keepMiniInside() {
+  if (callMini && miniAt) placeMini(miniAt.x, miniAt.y);
+}
+if (window.ResizeObserver) {
+  const miniSizes = new ResizeObserver(keepMiniInside);
+  miniSizes.observe(chatScreen);
+  miniSizes.observe(callOverlay);
+}
 
 function tablerIcon(name, size, color) {
   const icon = document.createElement("i");

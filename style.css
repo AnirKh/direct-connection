@@ -896,9 +896,18 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border-radius: 12px; overflow: hidden;
   border: 1px solid rgba(255,255,255,0.2);
   box-shadow: 0 6px 24px rgba(0,0,0,0.55);
-  cursor: pointer;
+  /* Draggable — see placeMini() in app.js. Without touch-action a finger
+     drag scrolls the chat underneath instead of moving the call. */
+  cursor: grab;
+  touch-action: none;
+  user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 @media (min-width: 769px) { .call-overlay.mini { aspect-ratio: 4 / 3; } }
+/* Once moved, where it was put. Only while small: the full call fills the
+   screen as it always did. */
+.call-overlay.mini.moved { left: var(--mini-x); top: var(--mini-y); right: auto; }
+.call-overlay.mini.dragging { cursor: grabbing; }
 .call-overlay.mini #localVideo,
 .call-overlay.mini .call-status-label,
 .call-overlay.mini .call-stats,

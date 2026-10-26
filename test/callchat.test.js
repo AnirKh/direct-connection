@@ -46,35 +46,59 @@ function classes(initial = []) {
            toggle: (c, on) => (on ? set.add(c) : set.delete(c)) };
 }
 
+/* The chat is 390 × 800; the small call 120 × 160, in its corner at (260, 84). */
 function call({ onScreen = true } = {}) {
-  const log = { chromeShown: 0, chromeStopped: 0, ended: [] };
+  const log = { chromeShown: 0, chromeStopped: 0, ended: [], captured: [] };
   const listeners = {};
-  const callOverlay = { classList: classes(onScreen ? [] : ["hidden"]),
-                        addEventListener: (type, f) => { listeners[type] = f; } };
+  const vars = {};
+  const timers = [];
+  let resized = null;
+  const callOverlay = {
+    classList: classes(onScreen ? [] : ["hidden"]),
+    addEventListener: (type, f) => { listeners[type] = f; },
+    style: { setProperty: (k, v) => { vars[k] = v; } },
+    offsetWidth: 120, offsetHeight: 160,
+    getBoundingClientRect: () => (vars["--mini-x"] && callOverlay.classList.contains("moved")
+      ? { left: parseFloat(vars["--mini-x"]), top: parseFloat(vars["--mini-y"]) } : { left: 260, top: 84 }),
+    setPointerCapture: id => log.captured.push(id)
+  };
+  const chatScreen = { clientWidth: 390, clientHeight: 800, getBoundingClientRect: () => ({ left: 0, top: 0 }) };
   const els = {
     callChatBtn: { onclick: null }, callChatCount: { textContent: "", classList: classes(["hidden"]) },
     callExpandBtn: { onclick: null }, callMiniEndBtn: { onclick: null }
   };
-  const api = new Function("document", "callOverlay", "showCallChrome", "stopCallChrome", "endCall", `
+  const window = { ResizeObserver: class { constructor(f) { resized = f; } observe() {} } };
+  const api = new Function("document", "callOverlay", "chatScreen", "window", "ResizeObserver", "setTimeout",
+    "showCallChrome", "stopCallChrome", "endCall", `
+    ${fn("selfViewPosition")}
     ${BLOCK}
     return { setCallMini, resetCallMini, noteCallChat, mini: () => callMini };`
-  )({ getElementById: id => els[id] }, callOverlay,
+  )({ getElementById: id => els[id] }, callOverlay, chatScreen, window, window.ResizeObserver, (f, ms) => timers.push({ f, ms }),
     () => { log.chromeShown++; }, () => { log.chromeStopped++; }, notify => log.ended.push(notify));
-  /* A click as the browser makes one: on the button, then up to the call. */
-  const click = target => {
-    let stopped = false;
-    const e = { stopPropagation: () => { stopped = true; } };
-    if (target) els[target].onclick(e);
-    if (!stopped && listeners.click) listeners.click(e);
+  /* A button pressed. */
+  const click = id => els[id].onclick({});
+  const button = { closest: s => (s === ".call-mini-btn" ? {} : null) }, picture = { closest: () => null };
+  const pointer = (type, x, y, target = picture) =>
+    listeners[type] && listeners[type]({ type, pointerId: 1, button: 0, clientX: x, clientY: y, target });
+  /* A finger put down at (x, y), moved by (mx, my) in steps, and lifted —
+     or, with `cancel`, taken over by the browser (a scroll, a system gesture). */
+  const drag = (x, y, mx, my, { target = picture, cancel = false } = {}) => {
+    pointer("pointerdown", x, y, target);
+    for (let i = 1; i <= 4; i++) pointer("pointermove", x + mx * i / 4, y + my * i / 4, target);
+    pointer(cancel ? "pointercancel" : "pointerup", x + mx, y + my, target);
+    pointer("lostpointercapture", x + mx, y + my, target);
   };
+  const tap = (x, y) => drag(x, y, 0, 0);
+  const at = () => (callOverlay.classList.contains("moved") ? { x: parseFloat(vars["--mini-x"]), y: parseFloat(vars["--mini-y"]) } : null);
   const count = () => (els.callChatCount.classList.contains("hidden") ? null : els.callChatCount.textContent);
-  return { ...api, log, click, count, small: () => callOverlay.classList.contains("mini"), callOverlay };
+  return { ...api, log, click, drag, tap, at, count, timers, small: () => callOverlay.classList.contains("mini"),
+           callOverlay, chatScreen, listeners, resize: () => resized && resized() };
 }
 
 test("the chat button makes the call small, with the chat usable underneath", () => {
   const c = call();
   c.click("callChatBtn");
-  assert.equal(c.small(), true, "and stays small — its click does not reach the call and make it big again");
+  assert.equal(c.small(), true);
   assert.equal(c.mini(), true);
   assert.equal(c.log.chromeStopped, 1, "nothing to fade in the small call");
 });
@@ -82,7 +106,7 @@ test("the chat button makes the call small, with the chat usable underneath", ()
 test("a tap on the small call, or its expand button, brings it back", () => {
   const c = call();
   c.click("callChatBtn");
-  c.click(null);                        // the picture itself
+  c.tap(300, 150);                      // the picture itself
   assert.equal(c.small(), false);
   assert.equal(c.log.chromeShown, 1, "with its controls showing");
   c.click("callChatBtn");
@@ -90,11 +114,30 @@ test("a tap on the small call, or its expand button, brings it back", () => {
   assert.equal(c.small(), false);
 });
 
+test("a tap is told by the finger lifting, not by a click — a finger held for dragging is sent none", () => {
+  const c = call();
+  assert.equal(c.listeners.click, undefined, "nothing waits for the call's own click");
+  c.click("callChatBtn");
+  c.tap(300, 150);
+  assert.equal(c.small(), false, "brought back with no click at all");
+});
+
+test("brought back under the finger, its buttons take nothing for a moment — not End call by accident", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.tap(300, 150);
+  assert.equal(c.callOverlay.classList.contains("chrome-waking"), true);
+  assert.deepEqual(c.timers.map(t => t.ms), [350]);
+  c.timers[0].f();
+  assert.equal(c.callOverlay.classList.contains("chrome-waking"), false, "and then they do");
+});
+
 test("a tap on the call at full size does nothing of the kind", () => {
   const c = call();
-  c.click(null);
+  c.tap(200, 400);
   assert.equal(c.small(), false);
   assert.equal(c.log.chromeShown, 0);
+  assert.equal(c.callOverlay.classList.contains("chrome-waking"), false);
 });
 
 test("the small call's red button hangs up, telling the other side — and does not make it big first", () => {
@@ -121,7 +164,7 @@ test("opening the chat clears the count; while it is open, nothing is counted", 
   assert.equal(c.count(), null);
   c.noteCallChat();
   assert.equal(c.count(), null, "it is in view");
-  c.click(null);
+  c.tap(300, 150);
   c.noteCallChat();
   assert.equal(c.count(), "1", "full size again: counting again");
 });
@@ -141,6 +184,68 @@ test("the next call starts full size, with nothing counted", () => {
   assert.equal(c.small(), false);
   assert.equal(c.mini(), false);
   assert.equal(c.count(), null);
+});
+
+/* ══════════════════════════════════════════
+   Moving the small call
+══════════════════════════════════════════ */
+
+test("the small call can be dragged, and stays where it is put", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.drag(300, 150, -200, 400);          // a finger on the picture, moved down and left
+  assert.deepEqual(c.at(), { x: 60, y: 484 }, "the picture went with the finger");
+  assert.equal(c.small(), true, "a drag is not a tap: it stays small");
+  assert.deepEqual(c.log.captured, [1], "the finger is held, so a fast drag cannot slip off it");
+});
+
+test("it cannot be dragged out of the chat", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.drag(300, 150, 500, 900);
+  assert.deepEqual(c.at(), { x: 390 - 120 - 8, y: 800 - 160 - 8 }, "held 8px inside the far corner");
+  c.drag(300, 700, -900, -900);
+  assert.deepEqual(c.at(), { x: 8, y: 8 });
+});
+
+test("a finger that wobbles but does not travel is still a tap", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.drag(300, 150, 3, 2);               // inside the slop
+  assert.equal(c.at(), null, "not moved");
+  assert.equal(c.small(), false, "brought back");
+});
+
+test("a press the browser takes over is neither a drag's end nor a tap", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.drag(300, 150, 0, 0, { cancel: true });
+  assert.equal(c.small(), true);
+  c.tap(300, 150);
+  assert.equal(c.small(), false, "and the next tap works");
+});
+
+test("its buttons are for pressing, not dragging by; the full call is not dragged", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.drag(300, 220, -100, 100, { target: { closest: s => (s === ".call-mini-btn" ? {} : null) } });
+  assert.equal(c.at(), null, "a finger that starts on a button does not move the call");
+  assert.equal(c.small(), true, "nor does lifting it there count as a tap on the call");
+  c.click("callExpandBtn");
+  c.drag(200, 400, -100, 100);
+  assert.equal(c.at(), null, "nor does one on the call at full size");
+});
+
+test("where it was put is kept: back to full size and small again, and inside as the chat gets smaller", () => {
+  const c = call();
+  c.click("callChatBtn");
+  c.drag(300, 150, -200, 400);
+  c.click("callExpandBtn");
+  c.click("callChatBtn");
+  assert.deepEqual(c.at(), { x: 60, y: 484 }, "small again, where it was");
+  c.chatScreen.clientHeight = 420;      // a keyboard opened
+  c.resize();
+  assert.deepEqual(c.at(), { x: 60, y: 420 - 160 - 8 }, "kept in view");
 });
 
 /* ══════════════════════════════════════════
@@ -187,6 +292,12 @@ test("small, the call is a picture in the corner under the header, not the whole
   const top = mini.match(/top:\s*calc\((\d+)px \+ var\(--safe-top\)\)/);
   assert.ok(top && Number(top[1]) >= 80, "below the header and the figures under it, so their buttons stay usable");
   assert.match(mini, /width:\s*clamp\(/);
+});
+
+test("once moved it sits where it was put — only while small — and a finger drags it rather than scrolling the chat", () => {
+  assert.match(rule(".call-overlay.mini.moved"), /left:\s*var\(--mini-x\);\s*top:\s*var\(--mini-y\);\s*right:\s*auto;/);
+  assert.match(rule(".call-overlay.mini"), /touch-action:\s*none;/);
+  assert.match(rule(".call-overlay.mini"), /cursor:\s*grab;/);
 });
 
 test("small, only the picture (or who it is) and the two buttons show", () => {
