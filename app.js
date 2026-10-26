@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260145-22316c27";
+const APP_BUILD = "202610260159-58dc89f4";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -464,6 +464,7 @@ function drawTitle() {
 
 /** A message, a file or a missed call has arrived from the other side. */
 function noticeArrival() {
+  noteCallChat();                     // the call may be covering the chat
   if (lookedAt()) return;
   unread++;
   drawTitle();
@@ -4428,6 +4429,7 @@ function stopCallMedia(clearOverlay = true) {
     remoteVideo.classList.remove("hidden");
     localVideo.classList.remove("hidden");
     stopCallChrome();
+    resetCallMini();
   }
 }
 
@@ -4478,6 +4480,7 @@ function showCallChrome() {
 function hideCallChrome() {
   callChromeTimer = null;
   if (callOverlay.classList.contains("hidden")) return;     // no call on screen
+  if (callMini) return;                                     // the small call has no controls to fade
   const mayHide = G.callChromeMayHide({
     inCall,
     connected: callPc?.connectionState === "connected",
@@ -4501,6 +4504,62 @@ for (const type of ["pointermove", "pointerdown", "focusin"]) {
   callOverlay.addEventListener(type, () => { if (!callOverlay.classList.contains("hidden")) showCallChrome(); });
 }
 document.addEventListener("keydown", () => { if (!callOverlay.classList.contains("hidden")) showCallChrome(); });
+
+/* ── The call made small, to use the chat ───
+   A call covered the whole chat: nothing could be read, typed or sent, nor a
+   file looked at, until it ended. The chat button among the call's controls
+   makes it small — the other side's picture in the corner under the header
+   for a video call, a strip there for a voice call — with the chat usable
+   underneath. A tap on it, or its expand button, brings the call back; its
+   red button hangs up. The picture and the sound go on throughout: the same
+   elements, only smaller.
+
+   While the call fills the screen, whatever arrives in the chat is counted on
+   the chat button, and the controls come back to show it (noteCallChat).  */
+const callChatBtn   = document.getElementById("callChatBtn");
+const callChatCount = document.getElementById("callChatCount");
+let callMini       = false;
+let callChatUnread = 0;
+
+function setCallMini(on) {
+  callMini = on;
+  callOverlay.classList.toggle("mini", on);
+  if (on) {
+    stopCallChrome();                 // nothing fades in the small call
+    callChatUnread = 0;               // the chat is in view: all of it seen
+    drawCallChatCount();
+  } else {
+    showCallChrome();
+  }
+}
+
+/** The call is over: the next one starts full size, with nothing counted. */
+function resetCallMini() {
+  callMini = false;
+  callOverlay.classList.remove("mini");
+  callChatUnread = 0;
+  drawCallChatCount();
+}
+
+function drawCallChatCount() {
+  callChatCount.textContent = callChatUnread > 9 ? "9+" : String(callChatUnread);
+  callChatCount.classList.toggle("hidden", !callChatUnread);
+}
+
+/** Something arrived in the chat. While the call fills the screen, count it
+    on the chat button — and bring the controls back, so the count is seen. */
+function noteCallChat() {
+  if (callMini || callOverlay.classList.contains("hidden")) return;
+  callChatUnread++;
+  drawCallChatCount();
+  showCallChrome();
+}
+
+/* Each stops there: the call's own "click" below would make it big again. */
+callChatBtn.onclick = e => { e.stopPropagation(); setCallMini(true); };
+document.getElementById("callExpandBtn").onclick = e => { e.stopPropagation(); setCallMini(false); };
+document.getElementById("callMiniEndBtn").onclick = e => { e.stopPropagation(); endCall(true); };
+callOverlay.addEventListener("click", () => { if (callMini) setCallMini(false); });
 
 function tablerIcon(name, size, color) {
   const icon = document.createElement("i");

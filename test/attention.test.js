@@ -67,7 +67,7 @@ function classes(initial = []) {
 }
 
 function page({ visible = false, focused = false, ctxState = "running", resumeWorks = true } = {}) {
-  const log = { buzz: [], badge: [], sys: [], ended: 0 };
+  const log = { buzz: [], badge: [], sys: [], ended: 0, callChat: 0 };
   const listeners = {};
   const timers = new Map();
   let nextTimer = 0, releaseResume = null;
@@ -108,6 +108,7 @@ function page({ visible = false, focused = false, ctxState = "running", resumeWo
     "G", "t", "document", "window", "navigator", "Date", "setTimeout", "clearTimeout", "callRequestModal", "appendSys", "log", `
     ${BLOCK}
     function endCall() { log.ended++; stopIncomingRing(); callRequestModal.classList.add("hidden"); }
+    function noteCallChat() { log.callChat++; }
     return { noticeArrival, startIncomingRing, stopIncomingRing,
              ringing: () => ringing, RING_BUZZ, INCOMING_RING_MS };`
   )(G, k => k, document, window, navigator, { now: () => clock.now },
@@ -163,6 +164,7 @@ test("while it is looked at, a message makes no sound and no count", () => {
   assert.equal(p.document.title, "Шууд холбоос");
   assert.equal(p.heard().chimes, 0);
   assert.deepEqual(p.log.buzz, []);
+  assert.equal(p.log.callChat, 1, "but a call covering the chat is still told — see callchat");
 });
 
 test("on screen but behind another window counts as not looked at", () => {

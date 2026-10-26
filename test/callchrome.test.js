@@ -60,7 +60,7 @@ function classes(initial = []) {
            contains: c => set.has(c), toggle: (c, on) => (on ? set.add(c) : set.delete(c)) };
 }
 
-function stage({ connected = true, voice = false, hover = false, realPointer = true, keyboard = false, inCall = true } = {}) {
+function stage({ connected = true, voice = false, hover = false, realPointer = true, keyboard = false, inCall = true, mini = false } = {}) {
   const timers = [];
   const clock = {
     setTimeout: (f, ms) => { const t = { f, ms, live: true }; timers.push(t); return t; },
@@ -69,9 +69,9 @@ function stage({ connected = true, voice = false, hover = false, realPointer = t
   const callOverlay = { classList: classes(voice ? ["voice-only"] : []) };
   const callControls = { matches: q => q === ":hover" && hover, querySelector: q => (q === ":focus-visible" && keyboard ? {} : null) };
   const window = { matchMedia: q => ({ matches: q === "(hover: hover)" && realPointer }) };
-  const api = new Function("G", "callOverlay", "callControls", "window", "setTimeout", "clearTimeout", "inCall", "callPc",
+  const api = new Function("G", "callOverlay", "callControls", "window", "setTimeout", "clearTimeout", "inCall", "callPc", "callMini",
     `let callChromeTimer = null;\n${SOURCE}\nreturn { showCallChrome, hideCallChrome, stopCallChrome, timer: () => callChromeTimer };`
-  )(G, callOverlay, callControls, window, clock.setTimeout, clock.clearTimeout, inCall, { connectionState: connected ? "connected" : "connecting" });
+  )(G, callOverlay, callControls, window, clock.setTimeout, clock.clearTimeout, inCall, { connectionState: connected ? "connected" : "connecting" }, mini);
   /** Runs whatever is due: the one live idle timer, or every live timer of a given length. */
   const run = ms => timers.filter(t => t.live && t.ms === ms).forEach(t => { t.live = false; t.f(); });
   return { ...api, overlay: callOverlay.classList, timers, run };
@@ -129,6 +129,13 @@ test("on a phone, a button's leftover :hover after a tap does not keep them up",
   s.showCallChrome();
   s.run(4000);
   assert.equal(s.overlay.contains("chrome-hidden"), true);
+});
+
+test("the call made small, to use the chat, has nothing to fade", () => {
+  const s = stage({ mini: true });
+  s.showCallChrome();
+  s.run(4000);
+  assert.equal(s.overlay.contains("chrome-hidden"), false);
 });
 
 test("ending the call clears it all for the next", () => {
