@@ -606,6 +606,60 @@
   }
 
   /* ══════════════════════════════════════════
+     Reactions
+  ══════════════════════════════════════════ */
+
+  /** The reactions on offer, in the order the bar shows them. */
+  const REACTIONS = Object.freeze(["👍", "❤️", "😂", "😮", "😢", "🙏"]);
+
+  /** A message both sides can name: a text by its sender's number for it, a
+      file, picture or voice note by its transfer id. */
+  const REACTION_KEY = /^(?:t:\d{1,15}|f:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
+
+  /**
+   * The name both sides use for a message, or null for one that cannot be
+   * named — then it cannot be reacted to. A text's number comes from its
+   * sender, the other side's app included, so it is checked like anything
+   * else that arrives.
+   *
+   * @param {"text"|"file"} kind
+   */
+  function reactionKey(kind, id) {
+    const key = kind === "text" && Number.isSafeInteger(id) ? `t:${id}`
+              : kind === "file" && typeof id === "string" ? `f:${id}` : null;
+    return key && REACTION_KEY.test(key) ? key : null;
+  }
+
+  /**
+   * May a reaction from the other side be shown? Only on a message both of
+   * you can name, saying whose message it is (`mine`: the reactor's own), and
+   * only one of the six — or none, taking one back. Anything else is not
+   * drawn: a reaction is an emoji, never a way to put other words on screen.
+   */
+  function reactionValid(o) {
+    return Boolean(o) && typeof o.key === "string" && REACTION_KEY.test(o.key) &&
+           typeof o.mine === "boolean" && (o.emoji === "" || REACTIONS.includes(o.emoji));
+  }
+
+  /** Picking the reaction you already gave takes it back; any other replaces it. */
+  function nextReaction(current, picked) {
+    return current === picked ? "" : picked;
+  }
+
+  /** What a message's badge shows: each emoji given, theirs first, and "2"
+      when you both gave the same one. */
+  function reactionBadge(mine, theirs) {
+    const shown = [];
+    for (const emoji of [theirs, mine]) {
+      if (!emoji) continue;
+      const same = shown.find(s => s.emoji === emoji);
+      if (same) same.count++;
+      else shown.push({ emoji, count: 1 });
+    }
+    return shown;
+  }
+
+  /* ══════════════════════════════════════════
      Links in a message
   ══════════════════════════════════════════ */
 
@@ -1259,6 +1313,7 @@
     mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery,
     CHAT_REPAIR, chatRepair, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, splitLinks,
+    REACTIONS, reactionKey, reactionValid, nextReaction, reactionBadge,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,

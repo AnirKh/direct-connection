@@ -129,12 +129,12 @@ test("with nothing to measure against, there is no answer", () => {
    moveSelfView / keepSelfViewInside against stand-in elements
 ══════════════════════════════════════════ */
 
-function stage({ left = "", top = "", w = 156, h = 88, areaW = 800, areaH = 600 } = {}) {
+function stage({ left = "", top = "", w = 156, h = 88, areaW = 800, areaH = 600, mini = false } = {}) {
   const localVideo  = { offsetWidth: w, offsetHeight: h, style: { left, top, right: "", bottom: "" } };
   const callOverlay = { clientWidth: areaW, clientHeight: areaH };
-  const fns = new Function("localVideo", "callOverlay", "SELF_VIEW_MARGIN",
+  const fns = new Function("localVideo", "callOverlay", "SELF_VIEW_MARGIN", "callMini",
     `${positionSrc}\n${moveSrc}\n${keepSrc}\nreturn { moveSelfView, keepSelfViewInside };`
-  )(localVideo, callOverlay, 8);
+  )(localVideo, callOverlay, 8, mini);
   return { localVideo, callOverlay, ...fns };
 }
 
@@ -167,6 +167,18 @@ test("hiding the call does not lose where it was put", () => {
   s.moveSelfView(400, 300);
   s.callOverlay.clientWidth = 0;
   s.callOverlay.clientHeight = 0;
+  s.keepSelfViewInside();
+  assert.equal(s.localVideo.style.left, "400px");
+  assert.equal(s.localVideo.style.top, "300px");
+});
+
+test("making the call small, to use the chat, does not lose where it was put either", () => {
+  /* Small, the self-view sits in the small call's corner (style.css), and the
+     small call measures a fraction of the full one: held to that, it would
+     come back somewhere else. */
+  const s = stage({ mini: true, left: "400px", top: "300px" });
+  s.callOverlay.clientWidth = 117;
+  s.callOverlay.clientHeight = 156;
   s.keepSelfViewInside();
   assert.equal(s.localVideo.style.left, "400px");
   assert.equal(s.localVideo.style.top, "300px");

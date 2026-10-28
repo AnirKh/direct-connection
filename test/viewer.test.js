@@ -37,7 +37,7 @@ const fn = name => {
 };
 
 const BLOCK = between("/* ══════════════════════════════════════════════\n   PICTURE VIEWER",
-                      "/* ══════════════════════════════════════════════\n   BUBBLE RENDERERS");
+                      "/* ══════════════════════════════════════════════\n   REACTIONS");
 
 function classes(initial = []) {
   const set = new Set(initial);

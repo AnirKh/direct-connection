@@ -639,6 +639,50 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
    pushing the bubble off the screen. */
 .bubble > a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 
+/* ── REACTIONS ─────────────────────────────── */
+/* See "REACTIONS" in app.js. The badge sits just under its message, on the
+   message's side; your own reaction rings it. */
+.bubble-row { position: relative; }
+.reactions {
+  width: auto; min-height: 0; margin: -6px 8px 2px; padding: 1px 8px;
+  border-radius: 12px; border: 1px solid var(--border);
+  background: var(--card); color: var(--text);
+  font-size: 13px; line-height: 20px; z-index: 1;
+}
+.reactions.mine { border-color: var(--accent); }
+/* The small button beside a message, for a mouse: shown on hover or when the
+   keyboard reaches it. A finger holds the message instead. */
+.react-open {
+  position: absolute; top: 2px;
+  width: 30px; height: 30px; min-height: unset; margin: 0; padding: 0;
+  border-radius: 50%; background: transparent; color: var(--muted); font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+}
+.bubble-row.me   .react-open { right: 100%; margin-right: 2px; }
+.bubble-row.peer .react-open { left: 100%;  margin-left: 2px; }
+.bubble-row:hover .react-open, .react-open:focus-visible { opacity: 1; }
+@media (hover: none) {
+  .react-open { display: none; }
+  /* Held, a message opens the bar — not the phone's own text selection or
+     menu, which would take the same hold. The bar copies a text instead. */
+  .bubble-row[data-react-key] .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+.reaction-bar {
+  position: absolute; z-index: 60;
+  display: flex; gap: 2px; padding: 4px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 24px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+}
+.reaction-bar button {
+  width: 40px; height: 40px; min-height: unset; margin: 0; padding: 0;
+  border-radius: 50%; background: transparent; color: var(--text);
+  font-size: 22px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.reaction-bar button.chosen { background: rgba(127,168,212,0.28); }
+.reaction-bar .reaction-copy { font-size: 19px; color: var(--muted); }
+
 /* Something arrived while older messages were being read — see scrollBottom()
    in app.js. Over the message box, under the call and the dialogs. */
 .new-messages-btn {
@@ -928,11 +972,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
    screen as it always did. */
 .call-overlay.mini.moved { left: var(--mini-x); top: var(--mini-y); right: auto; }
 .call-overlay.mini.dragging { cursor: grabbing; }
-.call-overlay.mini #localVideo,
 .call-overlay.mini .call-status-label,
 .call-overlay.mini .call-stats,
 .call-overlay.mini .call-pause-note,
 .call-overlay.mini .call-controls { display: none; }
+/* You, in the small call's corner — the same picture as the full call's
+   self-view, so mirrored the same way; only with your camera on (a voice call
+   hides it already). Where it was dragged to in the full call is kept for it
+   there: !important over that inline left/top, and keepSelfViewInside leaves
+   it alone while the call is small. It takes no touches — the small call
+   drags as one piece. */
+.call-overlay.mini #localVideo {
+  top: 6px !important; right: 6px !important; left: auto !important; bottom: auto !important;
+  width: 36%; min-width: 0; max-height: 45%;
+  border-width: 1px; border-radius: 6px;
+  pointer-events: none;
+}
+.call-overlay.mini #localVideo.cam-off { display: none; }
 .call-overlay.mini .call-mini-bar {
   display: flex; gap: 8px; z-index: 11;
   position: absolute; left: 0; right: 0; bottom: 6px; justify-content: center;

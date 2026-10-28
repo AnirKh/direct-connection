@@ -65,7 +65,7 @@ function element(tag = "div") {
 
 /** One side's chat, with the real functions and stand-in surroundings. */
 function chat({ sendThrows = false, lang = "en" } = {}) {
-  const log = { sent: [], bubbles: [], sys: [], toasts: [], acks: [], noticed: 0 };
+  const log = { sent: [], bubbles: [], sys: [], toasts: [], acks: [], noticed: 0, reactable: [] };
   const messageInput   = element("textarea");
   const messageCounter = element();
   const srAnnouncer    = element();
@@ -83,7 +83,8 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
     dcSend: obj => { if (obj.type === "ack") log.acks.push(obj.msgId); },
     showToast: msg => log.toasts.push(msg),
     addAckTick() {}, pendingAcks: {}, now: () => "12:00", scrollBottom() {},
-    noticeArrival: () => { log.noticed++; }
+    noticeArrival: () => { log.noticed++; },
+    markReactable: (row, key) => { log.reactable.push({ who: row.className, key }); }
   };
   const names = Object.keys(env);
   const api = new Function(...names, `

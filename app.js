@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610260831-25928b3b";
+const APP_BUILD = "202610280605-372e1709";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -2857,6 +2857,7 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
   chatSessionLabel.textContent = sessionId;
   setQuality(`⬤ ${t("connecting")}`, "");
   if (!keepMessages) {
+    closeReactionBar();
     chatMessages.replaceChildren();
     _stickToBottom = true;                 // a new chat starts at its newest
     newMessagesBtn.classList.add("hidden");
@@ -2868,6 +2869,7 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
 
 leaveBtn.onclick = () => {
   closeImageViewer();               // its picture is about to be let go of
+  closeReactionBar();
   keepScreenOn(false);
   clearConnectWatch();
   forgetHostRoom();
@@ -3069,6 +3071,7 @@ async function sendTextMessage() {
   const row = appendBubble("me", text);
   addAckTick(row, msgId);
   pendingAcks[msgId] = row;
+  markReactable(row, G.reactionKey("text", msgId));
   messageInput.value = "";
   messageInput.style.height = "auto";
   updateMessageCounter();
@@ -3120,7 +3123,7 @@ function handleTextMessage(data, sealed = false) {
             appendSys(t("messageTooLongArrived"));
             return;
           }
-          appendBubble("peer", plain);
+          markReactable(appendBubble("peer", plain), G.reactionKey("text", data.msgId));
           dcSend({ type: "ack", msgId: data.msgId });
         })
         .catch(err => {
@@ -3176,6 +3179,10 @@ function handleTextMessage(data, sealed = false) {
     case "typing-stop":
       peerTyping = false;
       typingIndicator.classList.add("hidden");
+      break;
+
+    case "reaction":
+      receiveReaction(data);
       break;
 
     case "peer-info":
@@ -3302,6 +3309,7 @@ async function sendBinary(file, kind) {
   if (kind === "image") resolveImageNow("me", localUrl, file.name);
   if (kind === "voice") resolveVoiceNow("me", localUrl, file.name);
   attachSendProgress(id);
+  markReactable(findTransferRow(id), G.reactionKey("file", id));
 
   const idBytes = new TextEncoder().encode(id);
   let lastPct = -1;
@@ -3384,6 +3392,7 @@ function handleTransferMeta(data) {
   if (info.kind === "file")  appendFileBubble("peer", null, data.name, data.size, data.id);
   if (info.kind === "image") appendImagePlaceholder("peer", data.id, data.name);
   if (info.kind === "voice") appendVoicePlaceholder("peer", data.id);
+  markReactable(findTransferRow(data.id), G.reactionKey("file", data.id));
   announce(info.kind === "voice" ? t("srNewVoice")
          : `${t(info.kind === "image" ? "srNewImage" : "srNewFile")}: ${data.name || ""}`);
   noticeArrival();
@@ -4079,6 +4088,9 @@ localVideo.addEventListener("lostpointercapture", endSelfViewDrag);
    was put, as far as the new size allows. */
 function keepSelfViewInside() {
   if (!localVideo.style.left) return;
+  /* The call made small shows the self-view in its own corner (style.css);
+     measured against the small call, this would lose the place it was put. */
+  if (callMini) return;
   moveSelfView(parseFloat(localVideo.style.left), parseFloat(localVideo.style.top));
 }
 if (window.ResizeObserver) {
@@ -4483,6 +4495,7 @@ function stopCallMedia(clearOverlay = true) {
   remoteVideo.srcObject = null;
   isMuted = false;
   isCamOff = false;
+  localVideo.classList.remove("cam-off");
   toggleMuteBtn.replaceChildren(tablerIcon("microphone"));
   toggleCamBtn.replaceChildren(tablerIcon("camera"));
   flipCamBtn.classList.add("hidden");
@@ -4727,6 +4740,7 @@ toggleCamBtn.onclick = () => {
   isCamOff = !isCamOff;
   localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
   toggleCamBtn.replaceChildren(tablerIcon(isCamOff ? "camera-off" : "camera"));
+  localVideo.classList.toggle("cam-off", isCamOff);   // the small call shows no black square for you
 };
 
 /* ── Flipping the camera ─────────────────────
@@ -5477,6 +5491,204 @@ chatScreen.addEventListener("drop", e => {
 /* Anywhere else, a dropped file would open in the tab in place of the page. */
 window.addEventListener("dragover", e => { if (carriesFiles(e)) e.preventDefault(); });
 window.addEventListener("drop", e => { if (carriesFiles(e)) e.preventDefault(); });
+
+/* ══════════════════════════════════════════════
+   REACTIONS
+   ─────────────────────────────────────────────
+   A message could only be answered with another message. Now any message —
+   text, picture, voice note or file, either side's — takes an emoji: hold it
+   with a finger, or right-click it or use the small button beside it with a
+   mouse, and a bar of six opens (G.REACTIONS). The one picked shows under
+   the message on both screens; picked again, it is taken back; another
+   replaces it. One each per message.
+
+   A reaction goes sealed, like everything else said (dcSendE2e) — "reaction"
+   is not one of the types accepted in the clear — and arrives as a message
+   both sides can name (G.reactionKey) with one of the six, or it is not
+   drawn (G.reactionValid). Holding a message on a phone no longer selects
+   its text, so the bar copies a text message too.
+══════════════════════════════════════════════ */
+const reactionBar  = document.getElementById("reactionBar");
+const LONG_PRESS_MS = 450;
+let reactingTo   = null;     // the message the bar is open for
+let pressTimer   = null;     // a finger held on a message
+let pressStart   = null;     // where it went down
+let swallowClick = null;     // the message whose next click the hold has used
+
+for (const emoji of G.REACTIONS) {
+  const choice = document.createElement("button");
+  choice.type = "button";
+  choice.className = "reaction-choice";
+  choice.dataset.emoji = emoji;
+  choice.textContent = emoji;
+  choice.setAttribute("aria-label", emoji);
+  reactionBar.appendChild(choice);
+}
+const reactionCopy = document.createElement("button");
+reactionCopy.type = "button";
+reactionCopy.className = "reaction-copy";
+reactionCopy.dataset.i18nAria = "copyBtn";
+reactionCopy.setAttribute("aria-label", t("copyBtn"));
+reactionCopy.appendChild(tablerIcon("copy"));
+reactionBar.appendChild(reactionCopy);
+
+/** Lets a message be reacted to, named by `key` (G.reactionKey). A message
+    with no name both sides share is left as it was. */
+function markReactable(row, key) {
+  if (!row || !key) return;
+  row.dataset.reactKey = key;
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "react-open";
+  open.dataset.i18nAria = "react";
+  open.setAttribute("aria-label", t("react"));
+  open.appendChild(tablerIcon("mood-smile"));
+  open.onclick = e => { e.stopPropagation(); openReactionBar(row); };
+  row.appendChild(open);
+}
+
+/** The newest message of `who`'s with this name. (A guest who opens the same
+    invite again starts counting afresh; the newest is the one meant.) */
+function findReactRow(who, key) {
+  const rows = chatMessages.querySelectorAll(`.bubble-row.${who}[data-react-key="${CSS.escape(key)}"]`);
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+/** A text message's words, for Copy; nothing for a picture or a file. */
+function reactRowText(row) {
+  const bubble = row.querySelector(".bubble");
+  return String(row.dataset.reactKey || "").startsWith("t:") && bubble ? bubble.textContent : "";
+}
+
+/** The badge under a message: theirs and yours (G.reactionBadge). */
+function drawReactions(row) {
+  const shown = G.reactionBadge(row.dataset.reactMine || "", row.dataset.reactTheirs || "");
+  let badge = row.querySelector(".reactions");
+  if (!shown.length) { if (badge) badge.remove(); return; }
+  if (!badge) {
+    badge = document.createElement("button");
+    badge.type = "button";
+    badge.className = "reactions";
+    badge.onclick = e => { e.stopPropagation(); openReactionBar(row); };
+    row.querySelector(".bubble").after(badge);
+  }
+  badge.textContent = shown.map(s => (s.count > 1 ? `${s.emoji} ${s.count}` : s.emoji)).join(" ");
+  badge.classList.toggle("mine", Boolean(row.dataset.reactMine));
+}
+
+function openReactionBar(row) {
+  reactingTo = row;
+  const mine = row.dataset.reactMine || "";
+  for (const choice of reactionBar.querySelectorAll(".reaction-choice")) {
+    choice.classList.toggle("chosen", choice.dataset.emoji === mine);
+  }
+  reactionCopy.classList.toggle("hidden", !reactRowText(row));
+  reactionBar.classList.remove("hidden");
+  /* Over the message, or under it if there is no room above; inside the chat. */
+  const area = chatScreen.getBoundingClientRect();
+  const box  = (row.querySelector(".bubble") || row).getBoundingClientRect();
+  const w = reactionBar.offsetWidth, h = reactionBar.offsetHeight;
+  let top = box.top - area.top - h - 6;
+  if (top < 70) top = box.bottom - area.top + 6;
+  const left = (row.classList.contains("me") ? box.right - w : box.left) - area.left;
+  reactionBar.style.left = `${Math.max(8, Math.min(left, area.width - w - 8))}px`;
+  reactionBar.style.top  = `${top}px`;
+}
+
+function closeReactionBar() {
+  if (!reactingTo) return;
+  reactingTo = null;
+  reactionBar.classList.add("hidden");
+}
+
+/** Gives a reaction — or, picked again, takes it back — and tells the other side. */
+async function react(row, picked) {
+  if (!dcReady() || !e2eReady) { showToast(t("messageNotSent"), "warn"); return; }
+  const emoji = G.nextReaction(row.dataset.reactMine || "", picked);
+  const sent = await dcSendE2e({ type: "reaction", key: row.dataset.reactKey, mine: row.classList.contains("me"), emoji })
+    .catch(() => false);
+  if (!sent) { showToast(t("messageNotSent"), "warn"); return; }
+  row.dataset.reactMine = emoji;
+  drawReactions(row);
+}
+
+/** The other side's reaction arrived — on its message or yours. */
+function receiveReaction(data) {
+  if (!G.reactionValid(data)) return;
+  const row = findReactRow(data.mine ? "peer" : "me", data.key);
+  if (!row) return;
+  row.dataset.reactTheirs = data.emoji;
+  drawReactions(row);
+  if (data.emoji && !data.mine) {
+    announce(I18N[LANG].srReaction(data.emoji));
+    noticeArrival();
+  }
+}
+
+function copyMessage(row) {
+  const text = reactRowText(row);
+  if (!text) return;
+  const done = () => showToast(t("copiedBtn"), "info");
+  navigator.clipboard.writeText(text).then(done).catch(() => {
+    const field = document.createElement("textarea");
+    field.value = text;
+    document.body.appendChild(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
+    done();
+  });
+}
+
+reactionBar.addEventListener("click", e => {
+  const button = e.target.closest("button");
+  const row = reactingTo;
+  if (!button || !row) return;
+  closeReactionBar();
+  if (button === reactionCopy) copyMessage(row);
+  else react(row, button.dataset.emoji);
+});
+
+/* A mouse: right-click a message — the bar, in place of the browser's menu. */
+chatMessages.addEventListener("contextmenu", e => {
+  const row = e.target.closest(".bubble-row[data-react-key]");
+  if (!row) return;
+  e.preventDefault();
+  if (reactingTo !== row) openReactionBar(row);
+});
+
+/* A finger: held still on a message. */
+function cancelPress() {
+  clearTimeout(pressTimer);
+  pressTimer = null;
+}
+chatMessages.addEventListener("pointerdown", e => {
+  if (e.pointerType === "mouse") return;
+  const row = e.target.closest(".bubble-row[data-react-key]");
+  if (!row || e.target.closest(".react-open, .reactions")) return;
+  cancelPress();
+  pressStart = { x: e.clientX, y: e.clientY };
+  pressTimer = setTimeout(() => { pressTimer = null; swallowClick = row; openReactionBar(row); }, LONG_PRESS_MS);
+});
+chatMessages.addEventListener("pointermove", e => {
+  if (pressTimer && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) cancelPress();
+});
+chatMessages.addEventListener("pointerup", cancelPress);
+chatMessages.addEventListener("pointercancel", cancelPress);
+/* The finger lifting after a hold is not a tap: it does not open the picture
+   or follow the link it was held on. Caught on the way down, before them. */
+chatMessages.addEventListener("click", e => {
+  const used = swallowClick;
+  swallowClick = null;
+  if (used && e.target.closest(".bubble-row") === used) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+
+/* Closed by a touch anywhere else, Esc, or the chat moving under it. */
+document.addEventListener("pointerdown", e => {
+  if (reactingTo && !reactionBar.contains(e.target)) closeReactionBar();
+}, true);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeReactionBar(); });
+chatMessages.addEventListener("scroll", closeReactionBar);
 
 /* ══════════════════════════════════════════════
    BUBBLE RENDERERS

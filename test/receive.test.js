@@ -65,7 +65,7 @@ const LIMIT = 150 * 1024 * 1024;
 
 /** One side of a chat: the real transfer code, with the screen and network stood in. */
 function side(name) {
-  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [], noticed: 0 };
+  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [], noticed: 0, reactable: [] };
   let peer = null;
   const later = f => setImmediate(() => peer && f(peer));
   const env = {
@@ -85,6 +85,8 @@ function side(name) {
     reportTransferProgress() {}, setTransferProgress() {}, attachSendProgress() {}, clearSendProgress() {},
     showToast() {}, announce: text => log.heard.push(text), I18N: { en: { fileTooLargeP2P: () => "" } }, LANG: "en",
     noticeArrival: () => { log.noticed++; },
+    findTransferRow: id => ({ tid: id }),
+    markReactable: (row, key) => { log.reactable.push(key); },
     dcReady: () => true, e2eReady: true,
     makeTransferId: DC.makeTransferId,
     trackBlobUrl: url => url,

@@ -300,15 +300,30 @@ test("once moved it sits where it was put — only while small — and a finger 
   assert.match(rule(".call-overlay.mini"), /cursor:\s*grab;/);
 });
 
-test("small, only the picture (or who it is) and the two buttons show", () => {
+test("small, only the pictures (or who it is) and the two buttons show", () => {
   const hidden = css.match(/((?:\.call-overlay\.mini [^,{]+,\s*)+\.call-overlay\.mini [^{]+)\{\s*display:\s*none;\s*\}/);
   assert.ok(hidden, "the rule hiding the rest not found");
-  for (const part of ["#localVideo", ".call-status-label", ".call-stats", ".call-pause-note", ".call-controls"]) {
+  for (const part of [".call-status-label", ".call-stats", ".call-pause-note", ".call-controls"]) {
     assert.ok(hidden[1].includes(part), `${part} still shows in the small call`);
   }
   assert.ok(!hidden[1].includes("#remoteVideo"), "the other side's picture stays — and with it the sound");
+  assert.ok(!hidden[1].includes("#localVideo"), "and yours: it used to be hidden, so you could not see yourself");
   assert.match(rule(".call-mini-bar"), /display:\s*none;/, "the two buttons only in the small call");
   assert.match(rule(".call-overlay.mini .call-mini-bar"), /display:\s*flex;/);
+});
+
+test("small, you are in its corner — kept off the full call's place, untouchable, and only with the camera on", () => {
+  const you = rule(".call-overlay.mini #localVideo");
+  for (const edge of ["top: 6px !important", "right: 6px !important", "left: auto !important", "bottom: auto !important"]) {
+    assert.ok(you.includes(edge), `${edge}: over the inline place it was dragged to in the full call`);
+  }
+  assert.match(you, /width:\s*36%;/);
+  assert.match(you, /min-width:\s*0;/, "not the full self-view's minimum, which would fill the small call");
+  assert.match(you, /pointer-events:\s*none;/, "the small call drags as one piece");
+  assert.match(rule(".call-overlay.mini #localVideo.cam-off"), /display:\s*none;/, "no black square with the camera off");
+  assert.match(fn("keepSelfViewInside"), /if \(callMini\) return;/, "its full-call place is kept while small");
+  assert.match(between("toggleCamBtn.onclick = () => {", "\n};"), /localVideo\.classList\.toggle\("cam-off", isCamOff\);/);
+  assert.match(fn("stopCallMedia"), /isCamOff = false;\s*\n\s*localVideo\.classList\.remove\("cam-off"\);/, "and the next call starts with it on");
 });
 
 test("six call buttons fit across a phone", () => {
