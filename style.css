@@ -946,17 +946,19 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── THE CALL, MADE SMALL ──────────────────── */
 /* So the chat can be read, typed in and sent from while the call goes on —
-   see setCallMini() in app.js. A video call keeps the other side's picture
-   in the corner under the header; a voice call becomes a strip there. The
-   picture and the sound are the same elements, only smaller: nothing is
-   stopped or restarted. */
+   see setCallMini() in app.js. A video call keeps the two pictures in the
+   corner under the header, theirs and yours side by side; a voice call
+   becomes a strip there. The pictures and the sound are the same elements,
+   only smaller: nothing is stopped or restarted. */
 .call-mini-bar { display: none; }
 .call-overlay.mini {
   inset: auto;
   top: calc(84px + var(--safe-top));
   right: calc(10px + var(--safe-right));
-  width: clamp(112px, 30vw, 220px);
-  aspect-ratio: 3 / 4;
+  /* As wide as its pictures: one tile each, the same size and shape. */
+  --mini-tile: clamp(84px, 25vw, 140px);
+  --mini-shape: 3 / 4;
+  gap: 4px; padding: 4px;
   border-radius: 12px; overflow: hidden;
   border: 1px solid rgba(255,255,255,0.2);
   box-shadow: 0 6px 24px rgba(0,0,0,0.55);
@@ -967,7 +969,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   user-select: none; -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-@media (min-width: 769px) { .call-overlay.mini { aspect-ratio: 4 / 3; } }
+@media (min-width: 769px) { .call-overlay.mini { --mini-tile: 176px; --mini-shape: 4 / 3; } }
 /* Once moved, where it was put. Only while small: the full call fills the
    screen as it always did. */
 .call-overlay.mini.moved { left: var(--mini-x); top: var(--mini-y); right: auto; }
@@ -976,16 +978,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .call-overlay.mini .call-stats,
 .call-overlay.mini .call-pause-note,
 .call-overlay.mini .call-controls { display: none; }
-/* You, in the small call's corner — the same picture as the full call's
-   self-view, so mirrored the same way; only with your camera on (a voice call
-   hides it already). Where it was dragged to in the full call is kept for it
-   there: !important over that inline left/top, and keepSelfViewInside leaves
-   it alone while the call is small. It takes no touches — the small call
-   drags as one piece. */
-.call-overlay.mini #localVideo {
-  top: 6px !important; right: 6px !important; left: auto !important; bottom: auto !important;
-  width: 36%; min-width: 0; max-height: 45%;
-  border-width: 1px; border-radius: 6px;
+/* Theirs, then you beside it — not over it — each filling its tile, trimmed
+   at the edges rather than shrunk inside black bars. Yours is the same
+   picture as the full call's self-view, so mirrored the same way; only with
+   your camera on (a voice call hides it already), the small call then just
+   theirs. Laid out in the row, the place you were dragged to in the full
+   call does not move you here, and is kept for it: keepSelfViewInside
+   leaves it alone while the call is small. They take no touches — the small
+   call drags as one piece. Not in a voice call, whose picture is kept 1px
+   for the sound. */
+.call-overlay.mini:not(.voice-only) #remoteVideo,
+.call-overlay.mini:not(.voice-only) #localVideo {
+  position: static; flex: none;
+  width: var(--mini-tile); height: auto; min-width: 0; max-height: none;
+  aspect-ratio: var(--mini-shape);
+  object-fit: cover;
+  border: 0; border-radius: 8px;
+  background: #111;
   pointer-events: none;
 }
 .call-overlay.mini #localVideo.cam-off { display: none; }

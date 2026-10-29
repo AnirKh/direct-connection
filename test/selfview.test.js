@@ -173,7 +173,7 @@ test("hiding the call does not lose where it was put", () => {
 });
 
 test("making the call small, to use the chat, does not lose where it was put either", () => {
-  /* Small, the self-view sits in the small call's corner (style.css), and the
+  /* Small, the self-view sits beside theirs in the small call (style.css), and the
      small call measures a fraction of the full one: held to that, it would
      come back somewhere else. */
   const s = stage({ mini: true, left: "400px", top: "300px" });

@@ -291,7 +291,7 @@ test("small, the call is a picture in the corner under the header, not the whole
   assert.match(mini, /inset:\s*auto;/);
   const top = mini.match(/top:\s*calc\((\d+)px \+ var\(--safe-top\)\)/);
   assert.ok(top && Number(top[1]) >= 80, "below the header and the figures under it, so their buttons stay usable");
-  assert.match(mini, /width:\s*clamp\(/);
+  assert.doesNotMatch(mini, /(?:^|[\s;])width:|aspect-ratio:/, "as wide as its pictures, not a set box");
 });
 
 test("once moved it sits where it was put — only while small — and a finger drags it rather than scrolling the chat", () => {
@@ -312,18 +312,41 @@ test("small, only the pictures (or who it is) and the two buttons show", () => {
   assert.match(rule(".call-overlay.mini .call-mini-bar"), /display:\s*flex;/);
 });
 
-test("small, you are in its corner — kept off the full call's place, untouchable, and only with the camera on", () => {
-  const you = rule(".call-overlay.mini #localVideo");
-  for (const edge of ["top: 6px !important", "right: 6px !important", "left: auto !important", "bottom: auto !important"]) {
-    assert.ok(you.includes(edge), `${edge}: over the inline place it was dragged to in the full call`);
-  }
-  assert.match(you, /width:\s*36%;/);
-  assert.match(you, /min-width:\s*0;/, "not the full self-view's minimum, which would fill the small call");
-  assert.match(you, /pointer-events:\s*none;/, "the small call drags as one piece");
+test("small, you are beside them, not over their picture — a tile each, untouchable, and only with the camera on", () => {
+  assert.doesNotMatch(css, /\.call-overlay\.mini #localVideo\s*\{/, "the old rule putting you inside their picture is gone");
+  /* One rule for both, so the two tiles cannot drift apart in size or shape;
+     never in a voice call, whose picture is kept 1px for the sound. */
+  const tile = rule(".call-overlay.mini:not(.voice-only) #remoteVideo,\n.call-overlay.mini:not(.voice-only) #localVideo");
+  assert.match(tile, /position:\s*static;/, "in the row — and the inline place you were dragged to in the full call moves nothing");
+  assert.match(tile, /flex:\s*none;/);
+  assert.match(tile, /width:\s*var\(--mini-tile\);/);
+  assert.match(tile, /aspect-ratio:\s*var\(--mini-shape\);/);
+  assert.match(tile, /min-width:\s*0;/, "not the full self-view's minimum");
+  assert.match(tile, /max-height:\s*none;/, "nor its maximum, which would make yours shorter than theirs");
+  assert.match(tile, /object-fit:\s*cover;/, "each fills its tile");
+  assert.match(tile, /pointer-events:\s*none;/, "the small call drags as one piece");
+  assert.doesNotMatch(tile, /transform/, "yours stays mirrored, theirs never is");
+  const mini = rule(".call-overlay.mini");
+  assert.match(mini, /--mini-shape:\s*3 \/ 4;/, "a phone's camera is upright");
+  assert.match(css, /@media \(min-width: 769px\) \{ \.call-overlay\.mini \{ --mini-tile: \d+px; --mini-shape: 4 \/ 3; \} \}/, "a computer's lies on its side");
   assert.match(rule(".call-overlay.mini #localVideo.cam-off"), /display:\s*none;/, "no black square with the camera off");
   assert.match(fn("keepSelfViewInside"), /if \(callMini\) return;/, "its full-call place is kept while small");
   assert.match(between("toggleCamBtn.onclick = () => {", "\n};"), /localVideo\.classList\.toggle\("cam-off", isCamOff\);/);
   assert.match(fn("stopCallMedia"), /isCamOff = false;\s*\n\s*localVideo\.classList\.remove\("cam-off"\);/, "and the next call starts with it on");
+});
+
+test("side by side, the two pictures still leave most of a phone's chat in view", () => {
+  const mini = rule(".call-overlay.mini");
+  const [, min, vw, max] = mini.match(/--mini-tile:\s*clamp\((\d+)px, (\d+)vw, (\d+)px\);/).map(Number);
+  const gap = Number(mini.match(/gap:\s*(\d+)px;/)[1]);
+  const pad = Number(mini.match(/padding:\s*(\d+)px;/)[1]);
+  assert.ok(min >= 80, "however narrow the screen, each big enough to make out a face");
+  for (const screen of [320, 375, 430]) {
+    const tile = Math.min(max, Math.max(min, screen * vw / 100));
+    const wide = 2 * tile + gap + 2 * pad + 2;            // and its 1px border
+    assert.ok(wide <= screen * 0.6, `${wide}px of a ${screen}px screen`);
+    assert.ok(tile >= 80, "each still big enough to make out a face");
+  }
 });
 
 test("six call buttons fit across a phone", () => {

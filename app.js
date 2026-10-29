@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610280605-372e1709";
+const APP_BUILD = "202610290223-14dae2f9";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -4592,8 +4592,8 @@ document.addEventListener("keydown", () => { if (!callOverlay.classList.contains
 /* ── The call made small, to use the chat ───
    A call covered the whole chat: nothing could be read, typed or sent, nor a
    file looked at, until it ended. The chat button among the call's controls
-   makes it small — the other side's picture in the corner under the header
-   for a video call, a strip there for a voice call — with the chat usable
+   makes it small — their picture and yours side by side in the corner under
+   the header for a video call, a strip there for a voice call — with the chat usable
    underneath. A tap on it, or its expand button, brings the call back; its
    red button hangs up. The picture and the sound go on throughout: the same
    elements, only smaller.
