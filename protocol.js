@@ -217,6 +217,66 @@
     return { iv: body.slice(0, E2E_BIN_IV_LEN), ct: body.slice(E2E_BIN_IV_LEN) };
   }
 
+  /* ══════════════════════════════════════════
+     What each sealed message is bound to
+     ──────────────────────────────────────────
+     Found in a security assessment: both sides sealed with the one key and
+     nothing said who sealed what, or in what order. Whoever could stand
+     between the two — a signaling server that also swapped the transport's
+     keys — could not read or change a message, but could hand one back to
+     the side that sent it, where it opened as if the other had written it,
+     or deliver one again later as new. Now every message is sealed with
+     "additional data" that AES-GCM checks but does not send: who sealed it
+     (h, the host; g, the guest), and its place — a number for a message,
+     the transfer and its count for a file's chunk. A message opened as the
+     other side's, or anywhere but its own place, does not open at all; a
+     number seen before is turned away (takeSeal).
+  ══════════════════════════════════════════ */
+
+  const SEAL_ROLES = Object.freeze(["h", "g"]);
+
+  function sealData(parts) {
+    return utf8.encode(JSON.stringify(parts));
+  }
+
+  /** A sealed message: who sealed it, its number, its type — and for a text,
+      the id its tick and reactions are found by. */
+  function messageAad(role, n, type, msgId = null) {
+    return sealData(["dc-msg-1", role, n, type, msgId]);
+  }
+
+  /** A file's chunk: who sealed it, the transfer, and which chunk it is. */
+  function chunkAad(role, transferId, index) {
+    return sealData(["dc-chunk-1", role, transferId, index]);
+  }
+
+  /** The key confirmation: who sealed it, so one cannot be handed back. */
+  function confirmAad(role) {
+    return sealData(["dc-confirm-1", role]);
+  }
+
+  /** How far behind the highest number a late message may still be taken.
+      The channel keeps order, but sealing is asynchronous, so two sealed at
+      once may leave in either order. */
+  const SEAL_WINDOW = 1024;
+
+  function sealWindow() {
+    return { top: 0, seen: new Set() };
+  }
+
+  /** Takes message number `n` if it is new — marking it seen — or says no:
+      not a counter, seen already, or too far behind to tell. */
+  function takeSeal(win, n) {
+    if (!Number.isSafeInteger(n) || n < 1) return false;
+    if (n <= win.top - SEAL_WINDOW || win.seen.has(n)) return false;
+    win.seen.add(n);
+    if (n > win.top) {
+      win.top = n;
+      for (const k of win.seen) if (k <= win.top - SEAL_WINDOW) win.seen.delete(k);
+    }
+    return true;
+  }
+
   /** UUID v4 shape, used as the transfer id. */
   function makeTransferId() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
@@ -231,6 +291,7 @@
     buildInviteHash, parseInviteHash, payloadLeaksSecret,
     deriveSharedKey,
     compareBytes, makeSharedVerificationCode, normalizeVerifyCode,
-    packChunk, unpackChunk, splitChunkBody, makeTransferId
+    packChunk, unpackChunk, splitChunkBody, makeTransferId,
+    SEAL_ROLES, SEAL_WINDOW, messageAad, chunkAad, confirmAad, sealWindow, takeSeal
   };
 });

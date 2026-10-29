@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610291342-09eaa606";
+const APP_BUILD = "202610291358-5dcd57f8";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -637,6 +637,18 @@ let e2eSecureMode    = false;  // true = room secret authenticated this exchange
 let e2ePendingConfirm = null;  // confirm that landed before derivation finished
 let e2ePeerKeySeen   = false;  // a peer public key has arrived on this channel
 let e2eConfirmTimer  = null;
+let e2eSendSeq       = 0;                 // the number our last sealed message carried
+let e2eRecvSeen      = DC.sealWindow();   // the other side's numbers already taken (DC.takeSeal)
+
+/** Who seals what: this side and the other, bound into every seal so a
+    message cannot be handed back to the side that sent it (DC.messageAad). */
+function myRole() {
+  return isHost ? "h" : "g";
+}
+
+function peerRole() {
+  return isHost ? "g" : "h";
+}
 
 /* ── Code rooms (SPAKE2) ──────────────────────
    A code room agrees its key from a secret word with SPAKE2 (see pake.js)
@@ -701,7 +713,7 @@ function deriveKeyWith(peerPub, secret) {
 async function sealConfirm(key) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const pt = new TextEncoder().encode(JSON.stringify({ v: "confirm-1", code: e2eVerifyCode }));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, pt);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: DC.confirmAad(myRole()) }, key, pt);
   return {
     type: "e2e-confirm",
     ct: btoa(String.fromCharCode(...new Uint8Array(ct))),
@@ -713,7 +725,7 @@ async function opensConfirm(key, ctB64, ivB64) {
   try {
     const from64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
     const pt = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: from64(ivB64) }, key, from64(ctB64));
+      { name: "AES-GCM", iv: from64(ivB64), additionalData: DC.confirmAad(peerRole()) }, key, from64(ctB64));
     const obj = JSON.parse(new TextDecoder().decode(pt));
     return Boolean(obj) && obj.v === "confirm-1" && obj.code === e2eVerifyCode;
   } catch (_) { return false; }
@@ -730,6 +742,8 @@ function e2eActivate(key, secure) {
   clearConnectWatch();
   keepScreenOn(true);    // a late connection after the give-up note let the screen go
   e2eKey        = key;
+  e2eSendSeq    = 0;                 // a new key counts its messages afresh
+  e2eRecvSeen   = DC.sealWindow();
   e2eReady      = true;
   e2eSecureMode = secure;
   e2eVerified   = secure;   // the link secret already proves there is no middleman
@@ -1022,43 +1036,47 @@ async function handleE2eConfirm(data) {
   }
 }
 
-async function e2eEncrypt(plaintext) {
+/* `aad`: who sealed it and its place (DC.messageAad, DC.chunkAad) — checked
+   on opening, never sent. */
+async function e2eEncrypt(plaintext, aad) {
   const iv      = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
-  const ct      = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, e2eKey, encoded);
+  const ct      = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad }, e2eKey, encoded);
   const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
   return { ct: b64(ct), iv: b64(iv) };
 }
 
-async function e2eDecrypt(ctB64, ivB64) {
+async function e2eDecrypt(ctB64, ivB64, aad) {
   const from64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const plain  = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: from64(ivB64) },
+    { name: "AES-GCM", iv: from64(ivB64), additionalData: aad },
     e2eKey,
     from64(ctB64)
   );
   return new TextDecoder().decode(plain);
 }
 
-async function e2eEncryptBytes(data) {
+async function e2eEncryptBytes(data, aad) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const input = data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, e2eKey, input);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad }, e2eKey, input);
   return { iv, ct: new Uint8Array(ct) };
 }
 
-async function e2eDecryptBytes(ct, iv) {
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, e2eKey, ct);
+async function e2eDecryptBytes(ct, iv, aad) {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: aad }, e2eKey, ct);
   return new Uint8Array(plain);
 }
 
 const E2E_BIN_IV_LEN = DC.E2E_BIN_IV_LEN;
 
-/** Send JSON over the data channel inside the same E2E envelope as text. */
+/** Send JSON over the data channel inside the same E2E envelope as text —
+    numbered, and sealed as ours (DC.messageAad). */
 async function dcSendE2e(obj) {
   if (!dcReady() || !e2eReady) return false;
-  const { ct, iv } = await e2eEncrypt(JSON.stringify(obj));
-  dataChannel.send(JSON.stringify({ type: "e2e-dc", ct, iv }));
+  const n = ++e2eSendSeq;
+  const { ct, iv } = await e2eEncrypt(JSON.stringify(obj), DC.messageAad(myRole(), n, "e2e-dc"));
+  dataChannel.send(JSON.stringify({ type: "e2e-dc", ct, iv, n }));
   return true;
 }
 
@@ -3866,8 +3884,9 @@ async function sendTextMessage() {
   /* Whatever else fails here — the channel closing as Send is pressed — says
      so too, and the text stays in the box rather than vanishing. */
   try {
-    const { ct, iv } = await e2eEncrypt(text);
-    dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId }));
+    const n = ++e2eSendSeq;
+    const { ct, iv } = await e2eEncrypt(text, DC.messageAad(myRole(), n, "text", msgId));
+    dataChannel.send(JSON.stringify({ type: "text", ct, iv, msgId, n }));
   } catch (err) {
     console.error("Message not sent:", err);
     showToast(t("messageNotSent"), "warn");
@@ -3905,8 +3924,13 @@ function handleTextMessage(data, sealed = false) {
 
     case "e2e-dc":
       if (!e2eReady) break;
-      e2eDecrypt(data.ct, data.iv)
-        .then(json => handleTextMessage(JSON.parse(json), true))
+      /* Opens only as the other side's, at the number it carries — and a
+         number already taken is a copy, delivered again. */
+      e2eDecrypt(data.ct, data.iv, DC.messageAad(peerRole(), data.n, "e2e-dc"))
+        .then(json => {
+          if (!DC.takeSeal(e2eRecvSeen, data.n)) { console.warn(`Dropping envelope ${data.n} — delivered before`); return; }
+          handleTextMessage(JSON.parse(json), true);
+        })
         .catch(err => console.error("E2E envelope decrypt failed:", err));
       break;
 
@@ -3920,8 +3944,9 @@ function handleTextMessage(data, sealed = false) {
         console.warn("Dropping a text message that was not end-to-end encrypted");
         break;
       }
-      e2eDecrypt(data.ct, data.iv)
+      e2eDecrypt(data.ct, data.iv, DC.messageAad(peerRole(), data.n, "text", data.msgId))
         .then(plain => {
+          if (!DC.takeSeal(e2eRecvSeen, data.n)) { console.warn(`Dropping message ${data.n} — delivered before`); return; }
           /* The same limit the sending app keeps — held here too, since the
              other side can run a changed one. */
           if (!G.messageFits(plain)) {
@@ -4149,7 +4174,7 @@ async function sendBinary(file, kind) {
        into the JS heap — 150 MB of it in the worst case — when only 64 KB is
        needed; the File itself stays backed by disk. */
     const chunk = await file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE).arrayBuffer();
-    const { iv, ct } = await e2eEncryptBytes(chunk);
+    const { iv, ct } = await e2eEncryptBytes(chunk, DC.chunkAad(myRole(), id, i));
     const packet = DC.packChunk(idBytes, iv, ct);
     await drainBuffer();
     dataChannel.send(packet.buffer);
@@ -4253,6 +4278,11 @@ function refuseTransfer(id, reason, info = null) {
 
 /** Decrypt on arrival rather than hoarding ciphertext until transfer-done. */
 function acceptChunk(info, id, packet) {
+  /* The channel keeps order, so the count so far is this chunk's place. It
+     opens only there, and only as the other side's (DC.chunkAad): a chunk
+     delivered twice, out of place or handed back fails the transfer rather
+     than quietly corrupting the file. */
+  const index = info.received;
   info.received++;
   info.chain = info.chain
     .then(async () => {
@@ -4261,7 +4291,7 @@ function acceptChunk(info, id, packet) {
          instead of skipping bytes and delivering a damaged file. */
       const split = DC.splitChunkBody(packet);
       if (!split) throw new Error(`chunk shorter than IV (${packet.byteLength}B)`);
-      const plain = await e2eDecryptBytes(split.ct, split.iv);
+      const plain = await e2eDecryptBytes(split.ct, split.iv, DC.chunkAad(peerRole(), id, index));
       if (info.failed) return;   // refused while this chunk was decrypting
       info.bytes += plain.byteLength;
       /* The announced size is the most this transfer may hold. One byte past

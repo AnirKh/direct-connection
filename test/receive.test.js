@@ -63,9 +63,29 @@ const SOURCE = [
 
 const LIMIT = 150 * 1024 * 1024;
 
-/** One side of a chat: the real transfer code, with the screen and network stood in. */
-function side(name) {
-  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [], noticed: 0, reactable: [] };
+const aadText = aad => new TextDecoder().decode(aad);
+/** A stand-in seal that, like AES-GCM, opens only with the additional data it
+    was sealed with — and, like it, adds a 16-byte tag and sends nothing of
+    that data: the bytes, then a tag made from the data. */
+const tagOf = aad => require("node:crypto").createHash("sha256").update(new Uint8Array(aad)).digest().subarray(0, 16);
+function bindSeal(aad, buf) {
+  const out = new Uint8Array(buf.byteLength + 16);
+  out.set(new Uint8Array(buf), 0);
+  out.set(tagOf(aad), buf.byteLength);
+  return out;
+}
+function bindOpen(aad, ct) {
+  const body = ct.slice(0, ct.byteLength - 16), tag = ct.slice(ct.byteLength - 16);
+  if (!Buffer.from(tag).equals(Buffer.from(tagOf(aad)))) throw new Error("does not open here");
+  return body;
+}
+
+/** One side of a chat: the real transfer code, with the screen and network
+    stood in. `role`: h (host) or g (guest). `binding`: the stand-in seal
+    checks what each chunk is bound to, as the real one does. */
+function side(name, { role = "h", binding = false } = {}) {
+  const log = { sys: [], failed: [], shown: [], delivered: [], sent: [], chunksSent: 0, blobs: [], heard: [], noticed: 0, reactable: [],
+                sealedAs: [], openedAs: [], wire: [] };
   let peer = null;
   const later = f => setImmediate(() => peer && f(peer));
   const env = {
@@ -91,19 +111,26 @@ function side(name) {
     makeTransferId: DC.makeTransferId,
     trackBlobUrl: url => url,
     URL: { createObjectURL: blob => { log.blobs.push(blob); return `blob:${name}/${log.blobs.length}`; } },
-    e2eEncryptBytes: async buf => ({ iv: new Uint8Array(DC.E2E_BIN_IV_LEN), ct: new Uint8Array(buf) }),
-    e2eDecryptBytes: async ct => ct,
+    myRole: () => role, peerRole: () => (role === "h" ? "g" : "h"),
+    e2eEncryptBytes: async (buf, aad) => {
+      log.sealedAs.push(JSON.parse(aadText(aad)));
+      return { iv: new Uint8Array(DC.E2E_BIN_IV_LEN), ct: binding ? bindSeal(aad, buf) : new Uint8Array(buf) };
+    },
+    e2eDecryptBytes: async (ct, iv, aad) => {
+      log.openedAs.push(JSON.parse(aadText(aad)));
+      return binding ? bindOpen(aad, ct) : ct;
+    },
     drainBuffer: () => new Promise(r => setImmediate(r)),
     dcSendE2e: async msg => { log.sent.push(msg); later(p => p.deliver(msg)); },
-    dataChannel: { send: buf => { log.chunksSent++; later(p => p.chunk(buf)); } }
+    dataChannel: { send: buf => { log.chunksSent++; log.wire.push(buf); later(p => p.chunk(buf)); } }
   };
   const names = Object.keys(env);
   const api = new Function(...names, SOURCE)(...names.map(n => env[n]));
   return { ...api, log, connect: other => { peer = other; } };
 }
 
-function pair() {
-  const a = side("a"), b = side("b");
+function pair({ binding = false } = {}) {
+  const a = side("a", { role: "h", binding }), b = side("b", { role: "g", binding });
   a.connect(b); b.connect(a);
   return { a, b };
 }
@@ -208,6 +235,88 @@ test("a file announced over the limit is turned away before a byte is stored", a
   b.deliver({ ...m, size: 10 });
   await settle();
   assert.deepEqual(b.log.shown, []);
+});
+
+/* ── Each chunk in its place ──
+   Found in a security assessment: a chunk said nothing of who sealed it or
+   where it went, so whoever stood between the two could deliver one twice,
+   out of order, or back to its sender, and the file came out quietly wrong. */
+
+test("each chunk is sealed as the sender's, bound to its transfer and its place — and opened only there", async () => {
+  const { a, b } = pair({ binding: true });
+  const content = bytes(200_000);   // several chunks
+  await a.sendBinary(new File([content], "x.bin", { type: "application/octet-stream" }), "file");
+  await settle();
+  const { id, totalChunks } = a.log.sent[0];
+  assert.ok(totalChunks > 1);
+  const places = role => Array.from({ length: totalChunks }, (_, i) => ["dc-chunk-1", role, id, i]);
+  assert.deepEqual(a.log.sealedAs, places("h"));
+  assert.deepEqual(b.log.openedAs, places("h"), "opened as the host's, at each chunk's own place");
+  await sameBytes(b.log.blobs[0], content);
+  assert.deepEqual(b.log.failed, []);
+});
+
+/** A chunk as the other side would seal it: `role`, for transfer `id`, at `index`. */
+const sealedChunk = (role, id, index, body) => packet(id, bindSeal(DC.chunkAad(role, id, index), body));
+
+test("the same chunks, each sealed for its own place, arrive whole", async () => {
+  const b = side("b", { role: "g", binding: true });
+  const m = meta({ size: 120, totalChunks: 2 });
+  b.deliver(m);
+  b.chunk(sealedChunk("h", m.id, 0, bytes(60)));
+  b.chunk(sealedChunk("h", m.id, 1, bytes(60)));
+  b.deliver({ type: "transfer-done", id: m.id });
+  await settle();
+  assert.deepEqual(b.log.failed, []);
+  assert.equal(b.log.delivered.length, 1, "the control: what the tests below break, honestly sent");
+});
+
+test("a chunk delivered twice fails the transfer, rather than a file with a piece in twice", async () => {
+  const b = side("b", { role: "g", binding: true });
+  const m = meta({ size: 120, totalChunks: 2 });
+  b.deliver(m);
+  const first = sealedChunk("h", m.id, 0, bytes(60));
+  b.chunk(first);
+  b.chunk(first);                                       // the copy, where the second belongs
+  b.chunk(sealedChunk("h", m.id, 1, bytes(60)));
+  b.deliver({ type: "transfer-done", id: m.id });
+  await settle();
+  assert.deepEqual(b.log.delivered, []);
+  assert.deepEqual(b.log.failed, [{ id: m.id, key: "transferFailed" }], "failed because a chunk did not open — not refused for its size");
+});
+
+test("chunks swapped round fail the transfer", async () => {
+  const b = side("b", { role: "g", binding: true });
+  const m = meta({ size: 120, totalChunks: 2 });
+  b.deliver(m);
+  b.chunk(sealedChunk("h", m.id, 1, bytes(60)));
+  b.chunk(sealedChunk("h", m.id, 0, bytes(60)));
+  b.deliver({ type: "transfer-done", id: m.id });
+  await settle();
+  assert.deepEqual(b.log.delivered, []);
+  assert.deepEqual(b.log.failed, [{ id: m.id, key: "transferFailed" }], "failed because a chunk did not open — not refused for its size");
+});
+
+test("a chunk sealed by this side, handed back, does not open as the other's", async () => {
+  const b = side("b", { role: "g", binding: true });
+  const m = meta({ size: 60, totalChunks: 1 });
+  b.deliver(m);
+  b.chunk(sealedChunk("g", m.id, 0, bytes(60)));       // ours, not theirs
+  b.deliver({ type: "transfer-done", id: m.id });
+  await settle();
+  assert.deepEqual(b.log.delivered, []);
+  assert.deepEqual(b.log.failed, [{ id: m.id, key: "transferFailed" }], "failed because a chunk did not open — not refused for its size");
+});
+
+test("a chunk moved from one transfer into another does not open there", async () => {
+  const b = side("b", { role: "g", binding: true });
+  const m = meta({ size: 60, totalChunks: 1 }), other = DC.makeTransferId();
+  b.deliver(m);
+  b.chunk(packet(m.id, bindSeal(DC.chunkAad("h", other, 0), bytes(60))));
+  b.deliver({ type: "transfer-done", id: m.id });
+  await settle();
+  assert.deepEqual(b.log.delivered, []);
+  assert.deepEqual(b.log.failed, [{ id: m.id, key: "transferFailed" }], "failed because a chunk did not open — not refused for its size");
 });
 
 test("a sender that sends more than it announced is cut off at the first extra byte", async () => {

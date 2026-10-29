@@ -25,6 +25,7 @@ const assert = require("node:assert/strict");
 const fs     = require("node:fs");
 const path   = require("node:path");
 const G      = require("../guards.js");
+const DC     = require("../protocol.js");
 
 const read = f => fs.readFileSync(path.join(__dirname, "..", f), "utf8").replace(/\r\n/g, "\n");
 const app  = read("app.js");
@@ -65,7 +66,8 @@ function element(tag = "div") {
 
 /** One side's chat, with the real functions and stand-in surroundings. */
 function chat({ sendThrows = false, lang = "en" } = {}) {
-  const log = { sent: [], bubbles: [], sys: [], toasts: [], acks: [], noticed: 0, reactable: [] };
+  const log = { sent: [], bubbles: [], sys: [], toasts: [], acks: [], noticed: 0, reactable: [], sealedAs: [], openedAs: [] };
+  const aadOf = aad => JSON.parse(new TextDecoder().decode(aad));
   const messageInput   = element("textarea");
   const messageCounter = element();
   const srAnnouncer    = element();
@@ -77,8 +79,9 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
     document: { createElement: element, createTextNode: text => ({ text, textContent: text }) },
     messageInput, messageCounter, srAnnouncer, chatMessages,
     dcReady: () => true, e2eReady: true,
-    e2eEncrypt: async text => ({ ct: `sealed(${text.length})`, iv: "iv" }),
-    e2eDecrypt: async ct => ct,           // the "ciphertext" is the text itself here
+    DC, myRole: () => "g", peerRole: () => "h",
+    e2eEncrypt: async (text, aad) => { log.sealedAs.push(aadOf(aad)); return { ct: `sealed(${text.length})`, iv: "iv" }; },
+    e2eDecrypt: async (ct, iv, aad) => { log.openedAs.push(aadOf(aad)); return ct; },   // the "ciphertext" is the text itself here
     dataChannel: { send: json => { if (sendThrows) throw new Error("channel closed"); log.sent.push(JSON.parse(json)); } },
     dcSend: obj => { if (obj.type === "ack") log.acks.push(obj.msgId); },
     showToast: msg => log.toasts.push(msg),
@@ -88,9 +91,10 @@ function chat({ sendThrows = false, lang = "en" } = {}) {
   };
   const names = Object.keys(env);
   const api = new Function(...names, `
-    let msgIdCounter = 0;
+    let msgIdCounter = 0, e2eSendSeq = 0, e2eRecvSeen = DC.sealWindow(), autoN = 0;
     ${["announce", "fillMessage", "appendBubble", "appendSys", "updateMessageCounter", "sendTextMessage"].map(fn).join("\n")}
-    function deliver(data) { switch (data.type) {\n${textCase}\n} }
+    /* A frame without a number is given the next one, as the other side would. */
+    function deliver(data) { if (data.n === undefined) data = { ...data, n: ++autoN }; switch (data.type) {\n${textCase}\n} }
     return { sendTextMessage, updateMessageCounter, announce, appendBubble, appendSys, deliver };
   `)(...names.map(n => env[n]));
 
@@ -213,6 +217,45 @@ test("a message at the limit is shown and acknowledged", async () => {
   await settle();
   assert.equal(c.bubbles("peer").length, 1);
   assert.deepEqual(c.log.acks, [7]);
+});
+
+/* ── Whose it is, and where it goes ──
+   Found in a security assessment: nothing said who sealed a message or in
+   what order, so whoever stood between the two could hand one back to the
+   side that sent it, or deliver it again later as new. */
+
+test("a message sent is sealed as ours, numbered, with its id — and the number goes with it", async () => {
+  const c = chat();
+  c.type("one");
+  await c.sendTextMessage();
+  c.type("two");
+  await c.sendTextMessage();
+  assert.deepEqual(c.log.sealedAs, [["dc-msg-1", "g", 1, "text", 1], ["dc-msg-1", "g", 2, "text", 2]]);
+  assert.deepEqual(c.log.sent.map(f => [f.msgId, f.n]), [[1, 1], [2, 2]]);
+});
+
+test("a message received is opened only as the other side's, at the number and id it came with", async () => {
+  const c = chat();
+  c.deliver({ type: "text", ct: "hi", iv: "iv", msgId: 4, n: 9 });
+  await settle();
+  assert.deepEqual(c.log.openedAs, [["dc-msg-1", "h", 9, "text", 4]],
+    "one of ours handed back would be opened as theirs — and so does not open");
+});
+
+test("a message delivered again is shown once and acknowledged once", async () => {
+  const c = chat();
+  c.deliver({ type: "text", ct: "I'm outside", iv: "iv", msgId: 1, n: 1 });
+  c.deliver({ type: "text", ct: "I'm outside", iv: "iv", msgId: 1, n: 1 });
+  await settle();
+  assert.deepEqual(c.bubbles("peer"), ["I'm outside"]);
+  assert.deepEqual(c.log.acks, [1]);
+});
+
+test("a message with no proper number is not shown", async () => {
+  const c = chat();
+  for (const n of [0, -1, 1.5, "1", null]) c.deliver({ type: "text", ct: "x", iv: "iv", msgId: 1, n });
+  await settle();
+  assert.deepEqual(c.bubbles("peer"), []);
 });
 
 test("a message over the limit from a changed app is not shown, and says so", async () => {

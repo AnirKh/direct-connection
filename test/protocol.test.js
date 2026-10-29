@@ -302,3 +302,93 @@ test("an empty-ciphertext chunk is still well formed", () => {
   const split   = DC.splitChunkBody(DC.unpackChunk(packet.buffer).body);
   assert.equal(split.ct.length, 0);
 });
+
+/* ══════════════════════════════════════════
+   What each sealed message is bound to
+   ──────────────────────────────────────────
+   Found in a security assessment: both sides sealed with one key and nothing
+   said who sealed what, or in what order. Whoever stood between the two could
+   hand a message back to its sender — where it opened as the other side's —
+   or deliver it again later as new. These run the real AES-GCM.
+══════════════════════════════════════════ */
+
+const subtle = globalThis.crypto.subtle;
+
+async function sharedKey() {
+  const alice = await makePair(), bob = await makePair();
+  return DC.deriveSharedKey(alice.privateKey, bob.publicKey, null);
+}
+async function seal(key, aad, text) {
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const ct = await subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad }, key, new TextEncoder().encode(text));
+  return { iv, ct };
+}
+async function opens(key, aad, { iv, ct }) {
+  try { await subtle.decrypt({ name: "AES-GCM", iv, additionalData: aad }, key, ct); return true; }
+  catch (_) { return false; }
+}
+
+test("a message opens only as sealed: the same side, number and type — and for a text, the same id", async () => {
+  const key = await sharedKey();
+  const sealed = await seal(key, DC.messageAad("h", 7, "text", 3), "I'm outside");
+  assert.equal(await opens(key, DC.messageAad("h", 7, "text", 3), sealed), true);
+  assert.equal(await opens(key, DC.messageAad("g", 7, "text", 3), sealed), false, "handed back to its sender: does not open as the other's");
+  assert.equal(await opens(key, DC.messageAad("h", 8, "text", 3), sealed), false, "under another number");
+  assert.equal(await opens(key, DC.messageAad("h", 7, "e2e-dc"), sealed), false, "moved into an envelope");
+  assert.equal(await opens(key, DC.messageAad("h", 7, "text", 4), sealed), false, "given another message's id");
+});
+
+test("a chunk opens only for its own transfer, at its own place, as its sender's", async () => {
+  const key = await sharedKey();
+  const id = DC.makeTransferId();
+  const sealed = await seal(key, DC.chunkAad("g", id, 2), "bytes");
+  assert.equal(await opens(key, DC.chunkAad("g", id, 2), sealed), true);
+  assert.equal(await opens(key, DC.chunkAad("h", id, 2), sealed), false);
+  assert.equal(await opens(key, DC.chunkAad("g", id, 3), sealed), false);
+  assert.equal(await opens(key, DC.chunkAad("g", DC.makeTransferId(), 2), sealed), false);
+});
+
+test("a key confirmation cannot be handed back to the side that sent it", async () => {
+  const key = await sharedKey();
+  const guests = await seal(key, DC.confirmAad("g"), "confirm");
+  assert.equal(await opens(key, DC.confirmAad("g"), guests), true, "the host opens it as the guest's");
+  assert.equal(await opens(key, DC.confirmAad("h"), guests), false, "the guest, expecting the host's, does not");
+});
+
+test("the three kinds of seal never stand in for one another", () => {
+  const all = [DC.messageAad("h", 1, "text", 1), DC.chunkAad("h", "x", 1), DC.confirmAad("h")].map(a => new TextDecoder().decode(a));
+  assert.equal(new Set(all).size, 3);
+  assert.deepEqual([...DC.SEAL_ROLES], ["h", "g"]);
+});
+
+test("each number is taken once: a copy is turned away", () => {
+  const win = DC.sealWindow();
+  assert.equal(DC.takeSeal(win, 1), true);
+  assert.equal(DC.takeSeal(win, 2), true);
+  assert.equal(DC.takeSeal(win, 1), false, "delivered again");
+  assert.equal(DC.takeSeal(win, 2), false);
+});
+
+test("a little out of order is taken — sealing is asynchronous — but only once", () => {
+  const win = DC.sealWindow();
+  assert.equal(DC.takeSeal(win, 2), true);
+  assert.equal(DC.takeSeal(win, 1), true, "sealed first, sent second");
+  assert.equal(DC.takeSeal(win, 1), false);
+});
+
+test("a number too far behind to tell is turned away; the window keeps no more than it must", () => {
+  const win = DC.sealWindow();
+  assert.equal(DC.takeSeal(win, 5000), true);
+  assert.equal(DC.takeSeal(win, 5000 - DC.SEAL_WINDOW), false, "at the edge: could be a copy from long ago");
+  assert.equal(DC.takeSeal(win, 5000 - DC.SEAL_WINDOW + 1), true);
+  for (let n = 5001; n < 8000; n++) DC.takeSeal(win, n);
+  assert.ok(win.seen.size <= DC.SEAL_WINDOW, `kept ${win.seen.size}`);
+});
+
+test("anything but a counting number is not a number to take", () => {
+  const win = DC.sealWindow();
+  for (const n of [0, -1, 1.5, NaN, Infinity, "1", null, undefined, {}, 2 ** 53]) {
+    assert.equal(DC.takeSeal(win, n), false, String(n));
+  }
+  assert.equal(win.seen.size, 0);
+});

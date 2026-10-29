@@ -263,8 +263,11 @@ test("only what came out of the envelope is ever marked sealed", () => {
 
   const sealedCalls = Array.from(src.matchAll(/handleTextMessage\([^\n]*,\s*true\s*\)/g));
   assert.equal(sealedCalls.length, 1, `expected one sealed call site, found ${sealedCalls.length}`);
-  const leadUp = src.slice(Math.max(0, sealedCalls[0].index - 160), sealedCalls[0].index);
+  const leadUp = src.slice(Math.max(0, sealedCalls[0].index - 400), sealedCalls[0].index);
   assert.ok(/e2eDecrypt\(/.test(leadUp), "the sealed call must be the one the envelope's decryption feeds");
+  /* And only once its number is taken: a copy delivered again is not handled. */
+  assert.ok(/DC\.takeSeal\(e2eRecvSeen, data\.n\)[^\n]*return;/.test(leadUp.slice(leadUp.lastIndexOf("e2eDecrypt("))),
+    "the envelope must pass the replay check before it is handled");
 
   const onmessage = src.match(/dataChannel\.onmessage\s*=[\s\S]*?\n  \};/);
   assert.ok(onmessage, "dataChannel.onmessage not found");
