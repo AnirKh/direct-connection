@@ -15,7 +15,9 @@
   - So does a chat, either side's link: the host takes its seat back with its
     host key, the guest with its guest key (rejoin-session); the other side
     hears peer-away / peer-back, and repair-request passes between them
-  - At most UPLOADS_AT_ONCE leave-a-message uploads read at a time
+  - At most UPLOADS_AT_ONCE leave-a-message uploads read at a time, each
+    holding no more than the page's own fields and one file
+  - At most WS_PER_IP_MAX open WebSocket links per address
   - Session cleanup on disconnect
   - WebSocket heartbeat (30s ping/pong) drops clients that vanished silently
   - Stale session pruner (10 min)
@@ -155,11 +157,21 @@ function isAllowedWebSocketOrigin(req) {
   return isLoopbackIp(ip);
 }
 
+/* At most this many open links from one address. Found in a security
+   assessment: nothing bounded them, so one machine could open thousands and
+   exhaust the process's memory. Generous on purpose — a mobile network can
+   put many phones behind one address, and each open page holds one link —
+   but far below what it takes to hurt. */
+const WS_PER_IP_MAX = 50;
+const wsOpenByIp = new Map();
+
 const wss = new WebSocket.Server({
   server,
   maxPayload: 1024 * 1024,
   verifyClient: (info, cb) => {
-    cb(isAllowedWebSocketOrigin(info.req));
+    if (!isAllowedWebSocketOrigin(info.req)) return cb(false);
+    if ((wsOpenByIp.get(getClientIp(info.req)) || 0) >= WS_PER_IP_MAX) return cb(false, 429, "Too many connections");
+    cb(true);
   }
 });
 
@@ -181,10 +193,27 @@ const LEAVE_MESSAGE_MAX_FILE_BYTES = (() => {
   return def;
 })();
 
-/* ── Multer — store file in memory ── */
+/* ── Multer — store file in memory ──
+   Found in a security assessment: only the file was capped. multer's own
+   defaults allow any number of text fields of up to 1 MB each, all held in
+   memory, so one request of 150 such fields took the process from 63 MB to
+   227 MB — refused, but only after reading them all. Two at once would pass
+   a small instance's memory and restart it, dropping every room. The page
+   sends two fields (message, name) and at most one file, so that is all a
+   form may hold; a field is capped well above the longest message
+   (MESSAGE_MAX characters, four bytes each at most), which still gets its
+   own "too long" answer. */
+const UPLOAD_FIELDS_MAX    = 4;
+const UPLOAD_FIELD_BYTES   = 64 * 1024;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: LEAVE_MESSAGE_MAX_FILE_BYTES }
+  limits: {
+    fileSize:  LEAVE_MESSAGE_MAX_FILE_BYTES,
+    files:     1,
+    fields:    UPLOAD_FIELDS_MAX,
+    fieldSize: UPLOAD_FIELD_BYTES,
+    parts:     UPLOAD_FIELDS_MAX + 1
+  }
 });
 
 app.use((req, res, next) => {
@@ -802,6 +831,12 @@ wss.on("connection", (ws, req) => {
   const clientIp = getClientIp(req);
 
   ws.clientIp = clientIp;
+  wsOpenByIp.set(clientIp, (wsOpenByIp.get(clientIp) || 0) + 1);
+  ws.once("close", () => {
+    const left = (wsOpenByIp.get(clientIp) || 1) - 1;
+    if (left > 0) wsOpenByIp.set(clientIp, left);
+    else wsOpenByIp.delete(clientIp);
+  });
   /* Heartbeat state — reset by every pong; see the sweep below. Browsers answer
      protocol-level pings automatically, so no client-side change is needed. */
   ws.isAlive  = true;

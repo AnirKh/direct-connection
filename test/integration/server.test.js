@@ -475,6 +475,49 @@ test("an oversized upload from an allowed client is still rejected by multer", a
   assert.ok(await stillServing());
 });
 
+/** A form of `fields` text fields of `size` characters each, then a message. */
+function fieldsForm(fields, size) {
+  const B = "----dcFields";
+  let body = "";
+  for (let i = 0; i < fields; i++) body += `--${B}\r\nContent-Disposition: form-data; name="f${i}"\r\n\r\n${"a".repeat(size)}\r\n`;
+  body += `--${B}\r\nContent-Disposition: form-data; name="message"\r\n\r\nhello\r\n--${B}--\r\n`;
+  return post(body, { "Content-Type": `multipart/form-data; boundary=${B}`, "X-DC-Client": "1", "x-forwarded-for": freshIp() });
+}
+
+test("a form holds no more than the page's own fields: more are refused, not read into memory", async () => {
+  /* Found in a security assessment: any number of text fields of up to 1 MB
+     each were held in memory — 150 took the process from 63 MB to 227 MB. */
+  const many = await fieldsForm(10, 10);
+  assert.equal(many.status, 400);
+  assert.equal(JSON.parse(many.body).code, "upload-failed");
+  const huge = await fieldsForm(1, 70 * 1024);
+  assert.equal(huge.status, 400, "a field far longer than any message");
+  /* The page's own form — a message, a name, a file — still goes through to
+     the mail step, which the tests leave unset. */
+  const B = "----dcPage";
+  const page = await post(
+    `--${B}\r\nContent-Disposition: form-data; name="message"\r\n\r\n${"й".repeat(5000)}\r\n` +
+    `--${B}\r\nContent-Disposition: form-data; name="name"\r\n\r\nAnu\r\n` +
+    `--${B}\r\nContent-Disposition: form-data; name="file"; filename="a.txt"\r\nContent-Type: text/plain\r\n\r\nhi\r\n--${B}--\r\n`,
+    { "Content-Type": `multipart/form-data; boundary=${B}`, "X-DC-Client": "1", "x-forwarded-for": freshIp() });
+  assert.equal(JSON.parse(page.body).code, "not-configured", "the longest message the page allows, with a name and a file");
+  assert.ok(await stillServing());
+});
+
+test("at most 50 open links from one address; one closing makes room for another", async () => {
+  /* Found in a security assessment: nothing bounded them. */
+  const ip = freshIp();
+  const links = [];
+  for (let i = 0; i < 50; i++) links.push(await connect(ip));
+  await assert.rejects(connect(ip), /429/, "the 51st is refused");
+  const other = await connect(freshIp());
+  assert.equal(other.readyState, WebSocket.OPEN, "another address is not held to this one's count");
+  links.pop().close();
+  await sleep(200);
+  links.push(await connect(ip));
+  for (const ws of [...links, other]) ws.close();
+});
+
 /* ══════════════════════════════════════════
    Privacy
 ══════════════════════════════════════════ */
