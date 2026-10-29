@@ -1024,6 +1024,64 @@ test("in a saved person's chat, each side says where to knock for it — once a 
   assert.deepEqual(normal.log.sealed, [], "not in any other room");
 });
 
+test("forgotten with alerts on: the address made afresh and the old one ended, so they can no longer knock", async () => {
+  /* Found in a security assessment: forgetting took them off this device and
+     nothing more — they still held where to knock for it. */
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  await p.api.knocksOn();
+  const old = p.api.get().knockSub.endpoint;
+  p.log.toasts.length = 0;
+  p.api.askForget(anu);
+  p.rows()[0].children.find(c => c.textContent === I18N.mn.forgetYes).click();
+  await timers();
+  assert.equal(p.log.unsubscribed, 1, "the address they hold is ended: the push service now calls it gone");
+  assert.equal(p.log.subscribed.length, 2, "and a new one made, for the same server key");
+  assert.equal(p.log.subscribed[1].key, SERVER_KNOCK_KEY);
+  assert.notEqual(p.api.get().knockSub.endpoint, old);
+  assert.equal(p.els.knockBtn.dataset.state, "on", "alerts stay on");
+  assert.deepEqual(p.log.toasts, [I18N.mn.forgetRenewed("Anu")], "said, with what it costs the others");
+  assert.deepEqual(p.idb.get("people").names, [[bat.room, "Bat"]], "and the worker no longer names them");
+});
+
+test("forgotten, the others still saved learn the new address the next time they connect", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat], kind: "saved", inChat: true });
+  await p.api.knocksOn();
+  p.api.forgetPerson(anu);
+  await timers();
+  const fresh = p.api.get().knockSub.endpoint;
+  p.api.set({ meeting: p.api.get().people[0] });
+  p.api.shareKnockAddress();
+  await settle();
+  assert.equal(p.log.sealed.at(-1).endpoint, fresh);
+});
+
+test("forgotten with alerts off: nothing to take back, nothing made, nothing said", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  p.api.forgetPerson(anu);
+  await timers();
+  assert.equal(p.log.unsubscribed, 0);
+  assert.deepEqual(p.log.subscribed, []);
+  assert.deepEqual(p.log.toasts, []);
+});
+
+test("the new address cannot be made: the old one is still ended, and alerts are said to be off", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  await p.api.knocksOn();
+  const reg = await p.push.navigator.serviceWorker.ready;
+  reg.pushManager.subscribe = async () => { throw new Error("offline"); };
+  p.log.toasts.length = 0;
+  p.api.forgetPerson(anu);
+  await timers();
+  assert.equal(p.log.unsubscribed, 1, "what they hold is ended regardless");
+  assert.equal(p.api.get().knockSub, null);
+  assert.equal(p.els.knockBtn.dataset.state, "off", "so the switch can turn them on again");
+  assert.deepEqual(p.log.toasts, [I18N.mn.knockFailed]);
+});
+
 test("turned on or off mid-chat with a saved person: they are told at once", async () => {
   const anu = await person("Anu");
   const p = page({ saved: [anu], kind: "saved", inChat: true });

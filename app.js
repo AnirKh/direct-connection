@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610290818-a0d5165f";
+const APP_BUILD = "202610291342-09eaa606";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -2265,6 +2265,33 @@ function forgetPerson(p) {
   if (!storePeople(next)) { showToast(t("savedNoStorage"), "error"); drawPeople(); return; }
   people = next;
   drawPeople();
+  renewKnockAddress(p);
+}
+
+/* Found in a security assessment: forgetting someone took them off this
+   device and nothing more. They still held where to knock for it, and could
+   go on making it say "Someone you saved wants to talk". A browser gives a
+   device one address for all of them, so the only way to take it back from
+   one is to give it up: with alerts on, the address is made afresh and the
+   old one ended — the push service then calls it gone, and a knock to it
+   goes nowhere. Everyone still saved gets the new one the next time they
+   connect, as after alerts are turned on (shareKnockAddress); until then a
+   knock from them finds the old one gone, so the toast says so. */
+async function renewKnockAddress(forgotten) {
+  if (!knockSub || knockStateNow() !== "on") return;
+  const old = knockSub;
+  knockSub = null;                         // one renewal at a time; a second forget is covered by it
+  try {
+    await old.unsubscribe();
+    const reg = await navigator.serviceWorker.ready;
+    knockSub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: knockKeyBytes() });
+    showToast(I18N[LANG].forgetRenewed(forgotten.name), "info");
+  } catch (err) {
+    console.warn("Alerts could not be made afresh:", err);
+    knockSub = null;
+    showToast(t("knockFailed"), "error");
+  }
+  knocksChanged();
 }
 
 /* ── The name dialog ─────────────────────────
