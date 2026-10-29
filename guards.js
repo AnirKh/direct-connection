@@ -1257,7 +1257,10 @@
       if (seen.has(p.secret) || seen.has(p.room)) continue;
       seen.add(p.secret);
       seen.add(p.room);
-      out.push({ name, secret: p.secret, room: p.room, side: p.side, savedAt: Number.isFinite(p.savedAt) ? p.savedAt : 0 });
+      out.push({ name, secret: p.secret, room: p.room, side: p.side, savedAt: Number.isFinite(p.savedAt) ? p.savedAt : 0,
+                 /* Where to knock for them, if they have alerts on — a bad
+                    one is dropped, not the person. */
+                 ...(knockAddressValid(p.knock) ? { knock: { endpoint: p.knock.endpoint, p256dh: p.knock.p256dh, auth: p.knock.auth } } : {}) });
       if (out.length === SAVED_PEOPLE_MAX) break;
     }
     return out;
@@ -1301,6 +1304,45 @@
    */
   function mayUsePlainKey(roomKind) {
     return roomKind !== "saved";
+  }
+
+  /* ══════════════════════════════════════════
+     Knocks
+  ══════════════════════════════════════════ */
+
+  /**
+   * Where to knock for someone, as their device sent it: the push subscription
+   * that wakes it. Believed only in the shape a browser makes — a web address,
+   * the browser's P-256 public key, its 16-byte secret — since it is kept,
+   * and handed to the server with each knock. Which push services the server
+   * will actually send to is the server's own list (knock.js).
+   */
+  function knockAddressValid(a) {
+    if (!a || typeof a !== "object") return false;
+    const { endpoint, p256dh, auth } = a;
+    return typeof endpoint === "string" && endpoint.length <= 1024 && /^https?:\/\/[^\s/?#@]+\/\S*$/.test(endpoint) &&
+           typeof p256dh === "string" && /^B[A-Za-z0-9_-]{86}$/.test(p256dh) &&
+           typeof auth === "string" && /^[A-Za-z0-9_-]{22}$/.test(auth);
+  }
+
+  /**
+   * What the alerts switch shows, if anything.
+   *
+   *   "hidden"   the server sends no knocks, or this browser cannot get them
+   *   "install"  an iPhone or iPad in Safari: only an app on the Home Screen
+   *              can get them there, so the switch says how
+   *   "blocked"  notifications refused in the browser's settings
+   *   "on"       subscribed, and allowed to show them
+   *   "off"      anything else: a tap asks
+   *
+   * @param {{serverKey: boolean, supported: boolean, appleTouch: boolean, standalone: boolean,
+   *          permission: string, subscribed: boolean}} o
+   */
+  function knockState(o) {
+    if (!o || o.serverKey !== true) return "hidden";
+    if (o.supported !== true) return o.appleTouch === true && o.standalone !== true ? "install" : "hidden";
+    if (o.permission === "denied") return "blocked";
+    return o.permission === "granted" && o.subscribed === true ? "on" : "off";
   }
 
   /* ══════════════════════════════════════════
@@ -1412,6 +1454,7 @@
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     SAVED_SECRET, SAVED_ROOM, PERSON_NAME_MAX, SAVED_PEOPLE_MAX,
     personName, savedPeople, mayOfferSave, saveOfferValid, keepTheirOffer, mayUsePlainKey,
+    knockAddressValid, knockState,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,

@@ -55,8 +55,14 @@ const CLIENT_FILES = [
   /* The icon font's stylesheet. The font itself is not listed: index.html
      does not load it (the stylesheet does, at its own ?v3.31.0), and it
      changes only with the stylesheet, which is. */
-  "vendor/tabler/tabler-icons.min.css"
+  "vendor/tabler/tabler-icons.min.css",
+  /* The knock worker. index.html does not load it — app.js registers it, at
+     sw.js?v=<the build> — so it is hashed but not stamped there. */
+  "sw.js"
 ];
+
+/** Client files that index.html does not load itself. */
+const NOT_IN_PAGE = ["sw.js"];
 
 /* Pictures are hashed as the bytes they are. Read as text, two different
    pictures could hash the same: every byte that is not valid UTF-8 decodes to
@@ -64,7 +70,7 @@ const CLIENT_FILES = [
 const BINARY = /\.png$/;
 
 /** The files index.html loads, which is where the stamp has to appear. */
-const STAMPED_ASSETS = CLIENT_FILES.filter(f => f !== "index.html");
+const STAMPED_ASSETS = CLIENT_FILES.filter(f => f !== "index.html" && !NOT_IN_PAGE.includes(f));
 
 const BUILD_ID = /^\d{12}-[0-9a-f]{8}$/;
 

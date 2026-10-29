@@ -520,6 +520,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   width: auto; margin: 0; padding: 7px 14px; min-height: 36px;
   font-size: 13px; border-radius: 8px; flex-shrink: 0;
 }
+/* The alerts switch, beside "Saved people"; lit while on. */
+.knock-btn { display: inline-flex; align-items: center; gap: 5px; text-transform: none; letter-spacing: 0; }
+.knock-btn i { font-size: 14px; }
+.knock-btn[data-state="on"] { color: var(--accent-text); border-color: rgba(127,168,212,0.45); }
+.knock-btn[data-state="blocked"] { color: var(--orange); }
+/* They will be alerted when this device knocks: a small bell by the name. */
+.person-knock { font-size: 13px; color: var(--accent-text); margin-left: 6px; vertical-align: -1px; }
+
 /* "Forget Anu?", in the row itself. */
 .person-item.asking { padding: 8px 8px 8px 14px; }
 .person-ask { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.4; }

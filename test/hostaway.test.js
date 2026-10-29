@@ -95,7 +95,7 @@ function page({ store = storage(), state = {} } = {}) {
     "G", "t", "sessionStorage", "lobbyStatus", "document", "wsSend", "showLobbyTab", "start",
     `let isHost = start.isHost, currentSession = start.currentSession, hostKey = start.hostKey, roomKind = start.roomKind;
      let roomSecret = start.roomSecret, pakeCode = start.pakeCode, roomReadyInfo = start.roomReadyInfo;
-     let reclaimPending = false, reclaimRedraw = false;
+     let reclaimPending = false, reclaimRedraw = false, meeting = start.meeting || null;
      const _isAutoJoin = start.autoJoin;
      ${BLOCK}
      return { saveHostRoom, forgetHostRoom, awaitReclaim, sendReclaim, restoreHostRoom,
@@ -165,6 +165,15 @@ test("a page opened from an invite link is a guest: it takes up no room", () => 
   guest.restoreHostRoom();
   assert.equal(guest.state().isHost, false);
   assert.deepEqual(guest.log.sent, []);
+});
+
+test("a page opened from a knock is meeting someone: it takes up no room either", () => {
+  const store = storage();
+  page({ store, state: hosting() }).saveHostRoom();
+  const knocked = page({ store, state: { meeting: { name: "Anu", room: `~${"a".repeat(43)}` } } });
+  knocked.restoreHostRoom();
+  assert.equal(knocked.state().isHost, false);
+  assert.deepEqual(knocked.log.sent, []);
 });
 
 test("a stale or broken record is thrown away and nothing is taken up", () => {

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610290756-617ea7c5";
+const APP_BUILD = "202610290818-a0d5165f";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -252,6 +252,9 @@ const saveHint       = document.getElementById("saveHint");
 const saveNameInput  = document.getElementById("saveNameInput");
 const saveCancelBtn  = document.getElementById("saveCancelBtn");
 const saveConfirmBtn = document.getElementById("saveConfirmBtn");
+const knockBtn       = document.getElementById("knockBtn");          // see "KNOCKS"
+const knockIcon      = document.getElementById("knockIcon");
+const knockLabel     = document.getElementById("knockLabel");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
@@ -303,6 +306,22 @@ let saveOffer   = null;
 let saveAsked   = null;
 let saveDialog  = null;
 let forgetting  = null;
+
+/* Knocks — see "KNOCKS" below, declared up here for the same reason.
+
+   knockSupported  this browser can be woken by a push at all
+   knockKey        the server's public key to subscribe with; none, no knocks
+   knockSub        this browser's push subscription, while alerts are on
+   knockSent       the person being waited for was knocked on
+   knockShared     this channel has told the other side where to knock
+   savedInChat     the person saved in this chat, if one was           */
+const knockSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+let knockKey    = null;
+let knockSub    = null;
+let knockSent   = false;
+let knockShared = false;
+let savedInChat = null;
+let knockEarly  = null;   // their address, come before our side finished saving them
 
 /* Last known connection path, so the header badge can be redrawn in the new
    language. Declared here rather than beside renderConnectionPath(): applyI18n()
@@ -735,8 +754,8 @@ function e2eActivate(key, secure) {
      has sent the confirmation that makes the guest ready, and an envelope that
      overtook the confirmation would be dropped on arrival — the guest would
      never learn what it is talking to. The guest only gets here because the
-     host is already listening. */
-  if (!isHost) sendPeerInfo();
+     host is already listening. Where to knock for us goes the same way. */
+  if (!isHost) { sendPeerInfo(); shareKnockAddress(); }
 }
 
 /** Tells the other side which system and browser this is — once per channel,
@@ -1102,6 +1121,8 @@ function wakeServer() {
         maxLeaveAttachBytes = j.maxLeaveAttachBytes;
         applyI18n();
       }
+      /* The server sends knocks: the alerts switch can show. */
+      if (j && typeof j.knockKey === "string" && /^B[A-Za-z0-9_-]{86}$/.test(j.knockKey)) knockKeyArrived(j.knockKey);
     })
     .catch(() => {})
     .finally(() => {
@@ -1782,7 +1803,7 @@ function sendReclaim() {
 function restoreHostRoom() {
   if (hostRoomRestoreTried) return;
   hostRoomRestoreTried = true;
-  if (_isAutoJoin || currentSession) return;
+  if (_isAutoJoin || currentSession || meeting) return;    // meeting: opened from a knock
   let stored = null;
   try { stored = JSON.parse(sessionStorage.getItem(HOST_ROOM_KEY) || "null"); } catch (_) {}
   const room = G.restorableHostRoom(stored, Date.now());
@@ -1935,6 +1956,8 @@ function roomTitle(sessionId) {
 function drawPeople() {
   peopleSection.classList.toggle("hidden", !people.length);
   peopleList.replaceChildren(...people.map(personRow));
+  drawKnockSwitch();
+  mirrorForKnocks();
 }
 
 function personRow(p) {
@@ -1973,10 +1996,20 @@ function personRow(p) {
   const name = document.createElement("span");
   name.className = "person-name";
   name.textContent = p.name;
+  /* They turned alerts on: a tap knocks if they are not there. */
+  if (p.knock) {
+    const bell = tablerIcon("bell");
+    bell.classList.add("person-knock");
+    bell.setAttribute("aria-hidden", "false");
+    bell.setAttribute("role", "img");
+    bell.setAttribute("aria-label", t("personAlerted"));
+    bell.title = t("personAlerted");
+    name.appendChild(bell);
+  }
   const sub = document.createElement("span");
   sub.className = "person-sub";
-  /* Tapped: the room is being made, or made and waited in. */
-  sub.textContent = t(!here ? "personTap" : currentSession ? "personWaiting" : "personConnecting");
+  /* Tapped: the room is being made, or made and waited in — and knocked on. */
+  sub.textContent = t(!here ? "personTap" : !currentSession ? "personConnecting" : knockSent ? "personKnocked" : "personWaiting");
   text.append(name, sub);
   open.append(avatar, text);
   open.onclick = () => meetPerson(p);
@@ -2012,6 +2045,7 @@ function meetPerson(p) {
   /* A room of our own still waiting for its guest is given up for this. */
   if (currentSession) leaveBtn.click();
   meeting = p;
+  knockSent = false;
   isConnecting = true;
   roomKind = "saved"; pakeCode = null;
   pendingRoomSecret = p.secret;       // mixed into the key; never sent
@@ -2041,6 +2075,7 @@ function meetWaiting(data) {
   isConnecting = false;
   keepScreenOn(true);                 // a lock now would take the room with it
   drawPeople();
+  knockFor(meeting);                  // they get alerts: tell them we are here
 }
 
 /** The wait for them is over without a chat — expired, lost, or refused. */
@@ -2056,6 +2091,7 @@ function endMeeting() {
   roomKind = "pin";
   meeting = null;
   pendingMeet = null;
+  knockSent = false;
   lobbyStatus.replaceChildren();
   drawPeople();
 }
@@ -2169,6 +2205,7 @@ async function acceptSaveOffer(secret, name) {
   dcSendE2e({ type: "save-accept" }).catch(() => {});
   drawSaveLine("done", person.name);
   showToast(I18N[LANG].savedDone(person.name), "info");
+  savedInChatNow(person);
 }
 
 /** They said yes to ours: saved here too. */
@@ -2180,6 +2217,7 @@ async function receiveSaveAccept() {
   if (!person) return;
   drawSaveLine("done", person.name);
   showToast(I18N[LANG].savedDone(person.name), "info");
+  savedInChatNow(person);
 }
 
 /** They said no, or could not. Their reason picks one of our sentences. */
@@ -2284,6 +2322,253 @@ people = loadPeople();
 drawPeople();
 
 /* ══════════════════════════════════════════════
+   KNOCKS
+   ─────────────────────────────────────────────
+   Saving someone made meeting them one tap — if they opened the app too. Now
+   the first to tap knocks: the other's device shows "Anu wants to talk", even
+   with the app closed, and a tap on that opens the app and meets them.
+
+   A device that wants knocks turns alerts on, with the switch by "Saved
+   people": the browser asks, the worker (sw.js) is registered, and the
+   browser's push service gives an address for this server's key. That
+   address goes to each saved person sealed, over the chat — when they are
+   saved, and each time they connect — and to the server only with a knock,
+   from whoever is first in the room (see knock.js). An address the push
+   service says is gone is forgotten.
+
+   What it costs, said plainly: the push service (Google's, Apple's,
+   Microsoft's or Mozilla's — whichever the browser uses) carries each knock.
+   It cannot read it, but it sees that one came, and when. Nobody is knocked
+   on who has not turned alerts on.                                         */
+
+function knockStateNow() {
+  return G.knockState({
+    serverKey: Boolean(knockKey), supported: knockSupported,
+    appleTouch: G.isAppleTouchDevice(navigator.userAgent, navigator.maxTouchPoints), standalone: runningInstalled(),
+    permission: knockSupported ? Notification.permission : "default", subscribed: Boolean(knockSub)
+  });
+}
+
+function drawKnockSwitch() {
+  const state = knockStateNow();
+  knockBtn.classList.toggle("hidden", state === "hidden");
+  knockBtn.dataset.state = state;
+  if (state === "hidden") return;
+  const [icon, label] = {
+    off: ["bell", "knockOff"], on: ["bell-ringing", "knockOn"],
+    blocked: ["bell-off", "knockBlocked"], install: ["bell", "knockInstall"]
+  }[state];
+  knockIcon.className = `ti ti-${icon}`;
+  knockLabel.textContent = t(label);
+  knockBtn.title = t("knockHint");
+  knockBtn.setAttribute("aria-pressed", String(state === "on"));
+}
+
+function knockKeyBytes() {
+  return Uint8Array.from(atob(knockKey.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+}
+
+/** The subscription is for the key this server signs with now. */
+function subscribedToKey(sub) {
+  const key = sub.options && sub.options.applicationServerKey;
+  if (!key) return true;                 // a browser that does not say: believed
+  return btoa(String.fromCharCode(...new Uint8Array(key))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") === knockKey;
+}
+
+/** The worker, at this build's address — registering it again updates it. */
+function knockWorker() {
+  return navigator.serviceWorker.register(`sw.js?v=${APP_BUILD}`, { updateViaCache: "none" })
+    .then(() => navigator.serviceWorker.ready);
+}
+
+/** The server sends knocks. Where alerts were on, they are taken up again:
+    the worker brought to this build, and the subscription made afresh if the
+    server's key has changed since. */
+async function knockKeyArrived(key) {
+  knockKey = key;
+  if (knockSupported) {
+    try {
+      if (await navigator.serviceWorker.getRegistration()) {
+        const reg = await knockWorker();
+        let sub = await reg.pushManager.getSubscription();
+        if (sub && !subscribedToKey(sub)) {
+          await sub.unsubscribe();
+          sub = Notification.permission === "granted"
+            ? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: knockKeyBytes() })
+            : null;
+        }
+        knockSub = Notification.permission === "granted" ? sub : null;
+      }
+    } catch (err) {
+      console.warn("Alerts could not be taken up:", err);
+    }
+  }
+  drawPeople();
+}
+
+async function knocksOn() {
+  /* Asked first, inside the tap: only then does a browser show its question. */
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    drawKnockSwitch();
+    if (permission === "denied") showToast(t("knockBlockedHint"), "warn");
+    return;
+  }
+  try {
+    const reg = await knockWorker();
+    knockSub = await reg.pushManager.getSubscription() ||
+               await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: knockKeyBytes() });
+    showToast(t("knockOnDone"), "info");
+  } catch (err) {
+    console.warn("Alerts could not be turned on:", err);
+    knockSub = null;
+    showToast(t("knockFailed"), "error");
+  }
+  knocksChanged();
+}
+
+async function knocksOff() {
+  const sub = knockSub;
+  knockSub = null;
+  try { if (sub) await sub.unsubscribe(); } catch (_) { /* gone already */ }
+  showToast(t("knockOffDone"), "info");
+  knocksChanged();
+}
+
+/** On or off: the switch, and the person in this chat told at once. */
+function knocksChanged() {
+  drawPeople();
+  if (knockPeer()) sendKnockAddress();
+}
+
+knockBtn.onclick = () => {
+  const state = knockStateNow();
+  if (state === "install") installOverlay.classList.remove("hidden");    // the Home Screen steps
+  else if (state === "blocked") showToast(t("knockBlockedHint"), "warn");
+  else if (state === "on") knocksOff();
+  else knocksOn();
+};
+
+/** Where to knock for this device, while alerts are on. */
+function knockAddress() {
+  if (!knockSub || knockStateNow() !== "on") return null;
+  const { endpoint, keys } = knockSub.toJSON();
+  const address = { endpoint, p256dh: keys && keys.p256dh, auth: keys && keys.auth };
+  return G.knockAddressValid(address) ? address : null;
+}
+
+/** Who this chat is with among the saved: the person met, or the one just
+    saved here. */
+function knockPeer() {
+  return roomKind === "saved" ? meeting : savedInChat;
+}
+
+/** Tells them where to knock for us — or that alerts are off. */
+function sendKnockAddress() {
+  const address = knockAddress();
+  dcSendE2e({ type: "knock-address", ...(address || { off: true }) }).catch(() => {});
+}
+
+/** Once a channel, in a saved person's room: the address may have changed
+    since — alerts turned on or off, a new subscription. */
+function shareKnockAddress() {
+  if (knockShared || roomKind !== "saved") return;
+  knockShared = true;
+  sendKnockAddress();
+}
+
+/** Saved in this chat: their address, if it came first, is theirs now — and
+    they get ours. */
+function savedInChatNow(person) {
+  savedInChat = person;
+  if (knockEarly) { const early = knockEarly; knockEarly = null; receiveKnockAddress(early); }
+  sendKnockAddress();
+}
+
+/** Where to knock for them, as they sent it — or that they turned alerts off. */
+function receiveKnockAddress(data) {
+  const peer = knockPeer();
+  if (!peer) { knockEarly = data; return; }          // still saving them here
+  const address = data.off === true ? null : { endpoint: data.endpoint, p256dh: data.p256dh, auth: data.auth };
+  if (address && !G.knockAddressValid(address)) return;
+  setKnockAddress(peer.room, address);
+}
+
+function setKnockAddress(room, address) {
+  const next = people.map(q => {
+    if (q.room !== room) return q;
+    const kept = { ...q };
+    delete kept.knock;
+    return address ? { ...kept, knock: address } : kept;
+  });
+  if (!storePeople(next)) return;
+  people = next;
+  const now = people.find(q => q.room === room);
+  if (now && meeting && meeting.room === room) meeting = now;
+  if (now && savedInChat && savedInChat.room === room) savedInChat = now;
+  drawPeople();
+}
+
+/** First in their room, and they get alerts: knock. */
+function knockFor(p) {
+  if (p && p.knock) wsSend({ type: "knock", sessionId: p.room, to: p.knock });
+}
+
+/** The server's answer: knocked, or not — and an address gone for good is
+    forgotten, so it is not tried again. */
+function knockAnswered(data) {
+  if (!meeting || data.sessionId !== meeting.room) return;
+  if (data.gone === true) setKnockAddress(meeting.room, null);
+  knockSent = data.ok === true;
+  drawPeople();
+}
+
+/** The worker's copy, for naming who knocked: each person's room and name,
+    and the page's language — nothing else. Only while alerts are on. */
+function mirrorForKnocks() {
+  if (!knockSub || !window.indexedDB) return;
+  const value = { lang: LANG, names: people.map(p => [p.room, p.name]) };
+  try {
+    const open = indexedDB.open("dc-knock", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("kv");
+    open.onsuccess = () => {
+      const db = open.result;
+      try {
+        const tx = db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(value, "people");
+        tx.oncomplete = tx.onerror = tx.onabort = () => db.close();
+      } catch (_) { db.close(); }
+    };
+  } catch (_) { /* storage off: a knock still comes, without the name */ }
+}
+
+/** Their knock was tapped: meet them — if this page is free; if it is busy,
+    say who. */
+function answerKnock(room) {
+  const p = people.find(q => q.room === room);
+  if (!p || (meeting && meeting.room === room)) return;
+  const free = chatScreen.classList.contains("hidden") && !meeting && !currentSession &&
+               !isConnecting && !listJoinId && !pinJoinInFlight;
+  if (!free) { showToast(I18N[LANG].knockTitle(p.name), "info"); return; }
+  showLobbyTab("rooms");
+  meetPerson(p);
+}
+
+/* Opened by tapping a knock: the worker names the room in the address. */
+const _knockedRoom = (location.hash.match(/^#knock=(~[A-Za-z0-9_-]{43})$/) || [])[1] || null;
+if (_knockedRoom) {
+  history.replaceState({}, "", `${location.pathname}${location.search}`);
+  answerKnock(_knockedRoom);
+}
+/* Tapped with this page already open: the worker says so. */
+if (knockSupported) {
+  navigator.serviceWorker.addEventListener("message", e => {
+    const d = e.data;
+    if (d && d.type === "knock" && typeof d.room === "string" && G.SAVED_ROOM.test(d.room)) answerKnock(d.room);
+  });
+}
+
+/* ══════════════════════════════════════════════
    WEBRTC — DATA CHANNEL PC
 ══════════════════════════════════════════════ */
 
@@ -2313,6 +2598,8 @@ function closePeerConnection() {
   saveOffer = null;
   saveAsked = null;
   if (saveDialog && saveDialog.mode !== "rename") closeSaveDialog();
+  knockShared = false;                     // a new channel is told again
+  knockEarly = null;
   e2eVerifyCode = "";
   e2eVerified = false;
   e2eLocalPubRaw = null;
@@ -2998,6 +3285,10 @@ async function handleSignaling(data) {
       showReconnectButton();
       break;
 
+    case "knock-result":
+      knockAnswered(data);
+      break;
+
     case "seat-taken":
       /* This invite link was opened again in another browser, and the seat
          went there — to Safari or Chrome, most often, from the app the link was
@@ -3334,6 +3625,7 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
   chatSessionLabel.textContent = roomTitle(sessionId);
   setQuality(`⬤ ${t("connecting")}`, "");
   if (!keepMessages) {
+    savedInChat = null;                    // a new chat, perhaps someone else
     closeReactionBar();
     chatMessages.replaceChildren();
     _stickToBottom = true;                 // a new chat starts at its newest
@@ -3374,6 +3666,8 @@ leaveBtn.onclick = () => {
      a name to tap. */
   meeting = null;
   pendingMeet = null;
+  knockSent = false;
+  savedInChat = null;
   drawPeople();
   chatScreen.classList.add("hidden");
   lobbyScreen.classList.remove("hidden");
@@ -3693,6 +3987,11 @@ function handleTextMessage(data, sealed = false) {
       peerDevice = { os: data.os, browser: data.browser };
       renderShieldFacts();
       sendPeerInfo();   // the host's answer; a no-op for the guest, who went first
+      if (isHost) shareKnockAddress();   // likewise: the guest is listening now
+      break;
+
+    case "knock-address":
+      receiveKnockAddress(data);
       break;
 
     case "transfer-meta":

@@ -1688,6 +1688,19 @@ test("the waiting side's link dropping keeps the room, and its host key takes it
   assert.equal(reclaimed.kind, "saved");
 });
 
+test("a server without knock keys offers no knocks, and sends none", async () => {
+  const body = await new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${PORT}/api/ping`, res => { let d = ""; res.on("data", c => d += c); res.on("end", () => resolve(JSON.parse(d))); }).on("error", reject);
+  });
+  assert.equal(body.knockKey, null);
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: savedRoom("nokeys"), side: "a" });
+  await waitFor(a, "session-created");
+  a.send_({ type: "knock", sessionId: savedRoom("nokeys"), to: { endpoint: "https://fcm.googleapis.com/fcm/send/x", p256dh: "B", auth: "x" } });
+  await sleep(300);
+  assert.ok(!a.inbox.some(m => m.type === "knock-result"), "not even an answer");
+});
+
 test("tapping a saved person counts as making a room, for the limit on rooms from one network", async () => {
   const ip = freshIp();
   let refused = null;

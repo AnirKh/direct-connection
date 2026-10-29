@@ -40,6 +40,12 @@
     HOST_AWAY_MS          How long a seat is kept for a side whose link dropped —
                           a waiting room's host, either side of a chat —
                           1000–3600000 (default 600000)
+    KNOCK_PUBLIC_KEY      The key pair knocks are signed with (Web Push, VAPID).
+    KNOCK_PRIVATE_KEY     Make them once with `node tools/knock-keys.js`.
+                          Without both, the server sends no knocks and the page
+                          offers none. See knock.js.
+    KNOCK_SUBJECT         A mailto: or https: contact for the push services
+                          (default: the site's address)
 */
 
 "use strict";
@@ -58,6 +64,14 @@ const { Resend } = require("resend");
 const {
   buildCsp, DEFAULT_ALLOWED_ORIGINS, META_CSP, META_TAG_PATTERN
 } = require("./csp");
+
+/* Knocks — Web Push to a saved person's device. See knock.js. */
+const { knockKeysFromEnv, isPushEndpoint, pushKeysValid, sendKnock } = require("./knock");
+const KNOCK_KEYS = knockKeysFromEnv(process.env);
+/* Tests only: a local server standing in for a push service. Never set on a
+   real server — it lets knocks go to that one address besides the push
+   services. */
+const KNOCK_TEST_ORIGIN = process.env.KNOCK_TEST_ORIGIN || null;
 
 /* Every rate limit below keys on the client address, so it is only as strong
    as this is hard to forge. See clientip.js. */
@@ -201,7 +215,7 @@ app.get("/", (req, res) => {
 app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js", "/guards.js", "/pake.js", "/vendor/noble.js", "/style.css",
          "/manifest.webmanifest", "/icons/icon.svg", "/icons/apple-touch-icon.png",
          "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png",
-         "/icons/link-preview.png",
+         "/icons/link-preview.png", "/sw.js",
          "/vendor/tabler/tabler-icons.min.css", "/vendor/tabler/fonts/tabler-icons.woff2"], (req, res) => {
   res.sendFile(path.join(__dirname, req.path.slice(1)));
 });
@@ -209,7 +223,10 @@ app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js"
 /* ── Ping endpoint — used by client to wake server ── */
 app.get("/api/ping", (req, res) => res.json({
   ok: true,
-  maxLeaveAttachBytes: LEAVE_MESSAGE_MAX_FILE_BYTES
+  maxLeaveAttachBytes: LEAVE_MESSAGE_MAX_FILE_BYTES,
+  /* The public half of the knock keys, for a browser to subscribe with —
+     null when this server sends no knocks. */
+  knockKey: KNOCK_KEYS ? KNOCK_KEYS.publicKey : null
 }));
 
 /* ══════════════════════════════════════════════
@@ -614,6 +631,10 @@ const LIST_SESSIONS_WINDOW_MS  = 60_000;
 const LIST_SESSIONS_MAX        = 40;
 const CREATE_SESSION_WINDOW_MS = 10 * 60 * 1000;
 const CREATE_SESSION_MAX       = 10;
+const knockHits          = new Map();
+const KNOCK_WINDOW_MS    = 10 * 60 * 1000;
+const KNOCK_MAX          = 30;
+const KNOCK_ROOM_GAP_MS  = 20_000;     // one knock per room in this long
 
 /* joinAttempts and emailAttempts each have a sweep above; these two were
    missed, and without one they keep an entry per address seen since startup.
@@ -621,6 +642,7 @@ const CREATE_SESSION_MAX       = 10;
 setInterval(() => {
   pruneExpired(listSessionsHits, LIST_SESSIONS_WINDOW_MS);
   pruneExpired(createSessionHits, CREATE_SESSION_WINDOW_MS);
+  pruneExpired(knockHits, KNOCK_WINDOW_MS);
 }, 60_000);
 
 function recordSessionJoinFailure(sessionId, session) {
@@ -1165,6 +1187,36 @@ wss.on("connection", (ws, req) => {
         ws.send(JSON.stringify({ type: "session-joined", sessionId, hostAway: !hostHere, guestKey: room.guestKey }));
         if (hostHere) room.host.send(JSON.stringify({ type: "guest-joined", sessionId, replaced: hadGuest }));
         console.log(`Session ${sessionLogId(sessionId)} saved person met`);
+        break;
+      }
+
+      /* ── A knock ────────────────────────────────
+         First to a saved person's room, the page asks for them to be told —
+         a notification on their device, the app open or not (see knock.js).
+         The address comes with the knock, from the device that holds it; the
+         server keeps none. Only the host of a saved person's room, while
+         nobody else is in it; only to a push service's own address; once per
+         room in KNOCK_ROOM_GAP_MS and KNOCK_MAX per network in ten minutes.
+         The answer says whether it went, and whether the address is gone for
+         good — the page then forgets it. */
+      case "knock": {
+        const sessionId = data.sessionId;
+        const room = sessions.get(sessionId);
+        if (!KNOCK_KEYS || !room || room.kind !== "saved" || room.host !== ws || room.guest) break;
+        const to = data.to && typeof data.to === "object" ? data.to : {};
+        const refuse = () => ws.send(JSON.stringify({ type: "knock-result", sessionId, ok: false, gone: false }));
+        if (!isPushEndpoint(to.endpoint, KNOCK_TEST_ORIGIN) || !pushKeysValid(to.p256dh, to.auth)) { refuse(); break; }
+        const now = Date.now();
+        if (now - (room.knockedAt || 0) < KNOCK_ROOM_GAP_MS ||
+            !slidingAllow(knockHits, clientIp, KNOCK_MAX, KNOCK_WINDOW_MS)) { refuse(); break; }
+        room.knockedAt = now;
+        sendKnock({ to: { endpoint: to.endpoint, p256dh: to.p256dh, auth: to.auth }, room: sessionId, keys: KNOCK_KEYS, now })
+          .then(result => {
+            console.log(`Session ${sessionLogId(sessionId)} knocked: ${result.status || "no answer"}`);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "knock-result", sessionId, ok: result.ok, gone: result.gone }));
+            }
+          });
         break;
       }
 

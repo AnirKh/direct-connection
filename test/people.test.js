@@ -164,15 +164,81 @@ const NAMES = ["G", "DC", "I18N", "LANG", "t", "localStorage", "window", "docume
   "saveCancelBtn", "saveConfirmBtn", "leaveBtn", "lobbyStatus", "voiceCallBtn", "videoCallBtn", "statsBar", "chatScreen",
   "tablerIcon", "showToast", "keepScreenOn", "scrollBottom", "dcSendE2e", "wsSend", "ws", "WebSocket",
   "clearConnectWatch", "endCall", "closePeerConnection", "setQuality", "appendSys", "showReconnectButton",
-  "setTimeout", "env"];
+  "setTimeout", "knockBtn", "knockIcon", "knockLabel", "Notification", "navigator", "location", "history", "indexedDB",
+  "APP_BUILD", "installOverlay", "showLobbyTab", "runningInstalled", "env"];
+
+/** A real P-256 public key and a 16-byte secret, as a browser's subscription has. */
+function pushKeys() {
+  const ecdh = crypto.createECDH("prime256v1");
+  ecdh.generateKeys();
+  return { p256dh: ecdh.getPublicKey().toString("base64url"), auth: crypto.randomBytes(16).toString("base64url") };
+}
+const SERVER_KNOCK_KEY = (() => { const e = crypto.createECDH("prime256v1"); e.generateKeys(); return e.getPublicKey().toString("base64url"); })();
+
+/** The browser's push and notifications, stood in for. */
+function pushBrowser(env, log) {
+  let current = env.subscribed ? subscription(env.subscribedKey || SERVER_KNOCK_KEY) : null;
+  function subscription(key) {
+    const keys = pushKeys();
+    const endpoint = `https://fcm.googleapis.com/fcm/send/${crypto.randomBytes(8).toString("hex")}`;
+    return {
+      endpoint, options: { applicationServerKey: Uint8Array.from(Buffer.from(key, "base64url")).buffer },
+      toJSON: () => ({ endpoint, keys }),
+      unsubscribe: async () => { log.unsubscribed++; current = null; return true; }
+    };
+  }
+  const reg = { pushManager: {
+    getSubscription: async () => current,
+    subscribe: async opts => {
+      log.subscribed.push({ userVisibleOnly: opts.userVisibleOnly, key: Buffer.from(opts.applicationServerKey).toString("base64url") });
+      current = subscription(Buffer.from(opts.applicationServerKey).toString("base64url"));
+      return current;
+    }
+  } };
+  const swListeners = {};
+  const navigator = {
+    userAgent: env.ua || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edg/130", maxTouchPoints: env.touch || 0,
+    serviceWorker: {
+      register: async (url, opts) => { log.registered.push({ url, opts }); env.registered = true; return reg; },
+      get ready() { return Promise.resolve(reg); },
+      getRegistration: async () => (env.registered ? reg : undefined),
+      addEventListener: (type, f) => { swListeners[type] = f; }
+    }
+  };
+  const Notification = {
+    permission: env.permission || "default",
+    requestPermission: async () => { log.asked++; Notification.permission = env.answer || "granted"; return Notification.permission; }
+  };
+  return { navigator, Notification, swListeners, current: () => current };
+}
+
+/** IndexedDB, as much as the worker's copy needs. */
+function fakeIndexedDB(idb) {
+  return {
+    open: () => {
+      const db = {
+        createObjectStore() {}, close() {},
+        transaction: () => {
+          const tx = { objectStore: () => ({ put: (v, k) => { idb.set(k, JSON.parse(JSON.stringify(v))); setTimeout(() => tx.oncomplete && tx.oncomplete()); } }) };
+          return tx;
+        }
+      };
+      const req = { result: db };
+      setTimeout(() => req.onsuccess && req.onsuccess());
+      return req;
+    }
+  };
+}
 
 /**
  * One page, with `saved` already kept. storage: "works", "readonly" (read but
  * not written), "full" (a small probe fits, the list does not), or "off"
  * (neither read nor written).
  */
-function page({ saved = [], storage = "works", connected = true, checked = true, kind = "pin", wsOpen = true, inChat = false, lang = "mn" } = {}) {
-  const log = { ws: [], sealed: [], toasts: [], sys: [], screen: [], left: 0, quality: [], reconnect: 0, closed: 0 };
+function page({ saved = [], storage = "works", connected = true, checked = true, kind = "pin", wsOpen = true, inChat = false, lang = "mn",
+                 knock = {} } = {}) {
+  const log = { ws: [], sealed: [], toasts: [], sys: [], screen: [], left: 0, quality: [], reconnect: 0, closed: 0,
+                asked: 0, registered: [], subscribed: [], unsubscribed: 0, replaced: [], tabs: [] };
   const store = new Map();
   if (saved.length) store.set("dc-people", JSON.stringify({ v: 1, people: saved }));
   const off = () => { throw new Error("storage off"); };
@@ -182,17 +248,26 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
     removeItem: k => { store.delete(k); }
   };
   const winListeners = {};
-  const window = { addEventListener: (type, f) => { (winListeners[type] = winListeners[type] || []).push(f); } };
+  const idb = new Map();
+  const indexedDB = fakeIndexedDB(idb);
+  const window = { indexedDB, addEventListener: (type, f) => { (winListeners[type] = winListeners[type] || []).push(f); } };
+  const push = pushBrowser(knock, log);
   const document = { createElement: element, createTextNode: s => ({ tag: "#text", textContent: String(s), children: [] }) };
   const els = {};
   for (const n of ["chatMessages", "peopleSection", "peopleList", "saveOverlay", "saveTitle", "saveHint", "saveNameInput",
-                   "saveCancelBtn", "saveConfirmBtn", "leaveBtn", "lobbyStatus", "voiceCallBtn", "videoCallBtn", "statsBar", "chatScreen"]) {
+                   "saveCancelBtn", "saveConfirmBtn", "leaveBtn", "lobbyStatus", "voiceCallBtn", "videoCallBtn", "statsBar", "chatScreen",
+                   "knockBtn", "knockIcon", "knockLabel", "installOverlay"]) {
     els[n] = element(n === "saveNameInput" ? "input" : "div");
   }
   els.peopleSection.classList.add("hidden");
   els.saveOverlay.classList.add("hidden");
+  els.knockBtn.classList.add("hidden");
+  els.installOverlay.classList.add("hidden");
   if (!inChat) els.chatScreen.classList.add("hidden");
-  const env = { kind, connected, checked, onLeave: null };
+  const env = { kind, connected, checked, onLeave: null, knockSupported: knock.supported !== false,
+                knockKey: knock.serverKey === false || knock.keyLater ? null : SERVER_KNOCK_KEY };
+  const location = { hash: knock.hash || "", pathname: "/direct-connection/", search: "" };
+  const history = { replaceState: (s, title, url) => log.replaced.push(url) };
   els.leaveBtn.click = () => { log.left++; if (env.onLeave) env.onLeave(); };
   const ws = { readyState: wsOpen ? 1 : 3 };
   const tablerIcon = name => { const i = element("i"); i.className = `ti ti-${name}`; return i; };
@@ -202,13 +277,18 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
     let hostKey = null, reclaimPending = false, roomSecret = null, pendingRoomSecret = null, pakeCode = null;
     let roomKind = env.kind, guestKey = null, seatPending = false, dataChannel = null;
     let e2eReady = env.connected, e2eSecureMode = env.checked, e2eVerified = false;
+    const knockSupported = env.knockSupported;
+    let knockKey = env.knockKey, knockSub = null, knockSent = false, knockShared = false, savedInChat = null, knockEarly = null;
     ${BLOCK}
     return {
       drawPeople, meetPerson, sendPendingMeet, meetWaiting, endMeeting, savedSeatTaken, roomTitle,
       maybeOfferSave, startSaveOffer, receiveSaveOffer, receiveSaveAccept, receiveSaveDecline,
       renamePerson, askForget, forgetPerson, confirmSaveDialog, cancelSaveDialog,
+      knockStateNow, knockKeyArrived, knocksOn, knocksOff, shareKnockAddress, sendKnockAddress, receiveKnockAddress,
+      knockAnswered, answerKnock, savedInChatNow,
       get: () => ({ people, meeting, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
-                    isConnecting, isHost, hostKey, roomSecret, pendingRoomSecret, roomKind, guestKey }),
+                    isConnecting, isHost, hostKey, roomSecret, pendingRoomSecret, roomKind, guestKey,
+                    knockKey, knockSub, knockSent, knockShared, savedInChat, knockEarly }),
       set: o => { for (const [k, v] of Object.entries(o)) switch (k) {
         case "listJoinId": listJoinId = v; break;
         case "currentSession": currentSession = v; break;
@@ -219,6 +299,7 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
         case "roomKind": roomKind = v; break;
         case "meeting": meeting = v; break;
         case "pendingMeet": pendingMeet = v; break;
+        case "knockShared": knockShared = v; break;
         default: throw new Error("cannot set " + k);
       } }
     };`
@@ -229,16 +310,23 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
     async m => { if (!env.connected) return false; log.sealed.push(JSON.parse(JSON.stringify(m))); return true; },
     m => log.ws.push(JSON.parse(JSON.stringify(m))), ws, { OPEN: 1 },
     () => {}, () => {}, () => { log.closed++; }, q => log.quality.push(q), s => log.sys.push(s), () => { log.reconnect++; },
-    f => f(), env);
+    f => f(), els.knockBtn, els.knockIcon, els.knockLabel, push.Notification, push.navigator, location, history, indexedDB,
+    "202610290000-abcdef12", els.installOverlay, n => log.tabs.push(n), () => Boolean(knock.standalone), env);
   const rows = () => els.peopleList.children;
   const button = (row, cls) => row.children.find(c => c.classList.contains(cls));
   const stored = () => JSON.parse(store.get("dc-people") || "null");
   const storageEvent = () => (winListeners.storage || []).forEach(f => f({ key: "dc-people" }));
   const type = text => { els.saveNameInput.value = text; };
-  return { api, log, els, env, ws, store, rows, button, stored, storageEvent, type };
+  return { api, log, els, env, ws, store, rows, button, stored, storageEvent, type, idb, push };
 }
 
 const settle = () => new Promise(r => setTimeout(r, 0));
+/** Waits for `done` — for work behind the page's own crypto, which one turn
+    of the event loop does not always cover. */
+async function until(done, ms = 2000) {
+  const end = Date.now() + ms;
+  while (!done() && Date.now() < end) await new Promise(r => setTimeout(r, 2));
+}
 
 /* ══════════════════════════════════════════
    The list
@@ -497,8 +585,9 @@ test("their offer: asked to name them back — yes saves them as side b and says
   assert.equal(yes.els.saveCancelBtn.textContent, I18N.mn.saveNotNow);
   yes.type("Bat");
   yes.api.confirmSaveDialog();
-  await settle();
-  assert.deepEqual(yes.log.sealed, [{ type: "save-accept" }]);
+  await until(() => yes.log.sealed.length >= 2);
+  assert.deepEqual(yes.log.sealed, [{ type: "save-accept" }, { type: "knock-address", off: true }],
+    "and where to knock for us — nowhere, with alerts off");
   assert.deepEqual(yes.stored().people.map(q => [q.name, q.secret, q.side]), [["Bat", secret, "b"]]);
   assert.ok(yes.els.chatMessages.querySelector(".save-sys").textContent.includes(I18N.mn.saveLineDone("Bat")));
 
@@ -608,6 +697,7 @@ test("storage full only when the list is written: their offer is turned down, no
   assert.ok(!p.els.saveOverlay.classList.contains("hidden"), "the probe fitted, so they were asked");
   p.type("Bat");
   p.api.confirmSaveDialog();
+  await until(() => p.log.sealed.length >= 1);
   await settle();
   assert.deepEqual(p.log.sealed, [{ type: "save-decline", reason: "storage" }], "no yes for what was not kept");
   assert.deepEqual(p.log.toasts, [I18N.mn.savedNoStorage]);
@@ -753,7 +843,8 @@ test("a tap while a PIN is being tried does nothing", () => {
 });
 
 test("leaving lets go of the person being met, and the lobby shows them as a name again", () => {
-  assert.match(between("leaveBtn.onclick = () => {", "\n};"), /meeting = null;\s*\n\s*pendingMeet = null;\s*\n\s*drawPeople\(\);/);
+  assert.match(between("leaveBtn.onclick = () => {", "\n};"),
+    /meeting = null;\s*\n\s*pendingMeet = null;\s*\n\s*knockSent = false;\s*\n\s*savedInChat = null;\s*\n\s*drawPeople\(\);/);
 });
 
 test("after a chat joined from a link, the whole lobby works again — the name field and Refresh too", () => {
@@ -779,4 +870,263 @@ test("the lobby has the list and the name dialog, and every word is in both lang
     for (const lang of ["mn", "en"]) assert.ok(key in I18N[lang], `${lang}.${key}`);
     assert.equal(typeof I18N.mn[key], typeof I18N.en[key], key);
   }
+});
+
+/* ══════════════════════════════════════════
+   Knocks
+══════════════════════════════════════════ */
+
+const timers = () => new Promise(r => setTimeout(r, 5));
+
+test("an address is believed only in the shape a browser gives one", () => {
+  const keys = pushKeys();
+  const ok = { endpoint: "https://fcm.googleapis.com/fcm/send/x", ...keys };
+  assert.equal(G.knockAddressValid(ok), true);
+  for (const bad of [
+    { ...ok, endpoint: "fcm.googleapis.com/x" }, { ...ok, endpoint: "javascript:alert(1)//x" }, { ...ok, endpoint: "https://a b/x" },
+    { ...ok, endpoint: `https://x.y/${"z".repeat(1100)}` }, { ...ok, p256dh: keys.p256dh.slice(1) }, { ...ok, p256dh: `A${keys.p256dh.slice(1)}` },
+    { ...ok, auth: `${keys.auth}x` }, { ...ok, auth: 7 }, { endpoint: ok.endpoint }, null, "x"
+  ]) assert.equal(G.knockAddressValid(bad), false, JSON.stringify(bad));
+});
+
+test("a person keeps a good address, and loses a bad one — not themselves", async () => {
+  const anu = await person("Anu");
+  const knock = { endpoint: "https://fcm.googleapis.com/fcm/send/x", ...pushKeys() };
+  assert.deepEqual(G.savedPeople({ v: 1, people: [{ ...anu, knock }] }), [{ ...anu, knock }]);
+  assert.deepEqual(G.savedPeople({ v: 1, people: [{ ...anu, knock: { ...knock, auth: "x" } }] }), [anu]);
+  assert.deepEqual(G.savedPeople({ v: 1, people: [{ ...anu, knock: { ...knock, extra: "kept?" } }] })[0].knock, knock, "only the three parts");
+});
+
+test("the alerts switch: only where it can work, and saying how where it cannot yet", () => {
+  const base = { serverKey: true, supported: true, appleTouch: false, standalone: false, permission: "default", subscribed: false };
+  assert.equal(G.knockState(base), "off");
+  assert.equal(G.knockState({ ...base, permission: "granted", subscribed: true }), "on");
+  assert.equal(G.knockState({ ...base, permission: "granted" }), "off", "allowed, but no subscription yet");
+  assert.equal(G.knockState({ ...base, subscribed: true }), "off", "subscribed, but not allowed to show it");
+  assert.equal(G.knockState({ ...base, permission: "denied", subscribed: true }), "blocked");
+  assert.equal(G.knockState({ ...base, serverKey: false, permission: "granted", subscribed: true }), "hidden", "the server sends none");
+  assert.equal(G.knockState({ ...base, supported: false }), "hidden", "a browser that cannot be woken");
+  assert.equal(G.knockState({ ...base, supported: false, appleTouch: true }), "install", "an iPhone in Safari: the Home Screen first");
+  assert.equal(G.knockState({ ...base, supported: false, appleTouch: true, standalone: true }), "hidden");
+  assert.equal(G.knockState(null), "hidden");
+});
+
+test("no knocks from the server, or a browser without push: no switch", async () => {
+  for (const knock of [{ serverKey: false }, { supported: false }]) {
+    const p = page({ saved: [await person("Anu")], knock });
+    assert.ok(p.els.knockBtn.classList.contains("hidden"), JSON.stringify(knock));
+  }
+  const iphone = page({ saved: [await person("Anu")], knock: { supported: false, ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)" } });
+  assert.equal(iphone.els.knockBtn.dataset.state, "install");
+  assert.equal(iphone.els.knockLabel.textContent, I18N.mn.knockInstall);
+  iphone.els.knockBtn.onclick();
+  assert.ok(!iphone.els.installOverlay.classList.contains("hidden"), "the Home Screen steps");
+});
+
+test("turning alerts on: asked inside the tap, the worker registered for this build, subscribed for the server's key", async () => {
+  const p = page({ saved: [await person("Anu")] });
+  assert.equal(p.els.knockBtn.dataset.state, "off");
+  assert.equal(p.els.knockLabel.textContent, I18N.mn.knockOff);
+  assert.equal(p.els.knockBtn.title, I18N.mn.knockHint);
+  p.els.knockBtn.onclick();
+  assert.equal(p.log.asked, 1, "the question is asked in the tap itself");
+  await timers();
+  assert.deepEqual(p.log.registered, [{ url: "sw.js?v=202610290000-abcdef12", opts: { updateViaCache: "none" } }]);
+  assert.deepEqual(p.log.subscribed, [{ userVisibleOnly: true, key: SERVER_KNOCK_KEY }]);
+  assert.equal(p.els.knockBtn.dataset.state, "on");
+  assert.equal(p.els.knockBtn.attrs["aria-pressed"], "true");
+  assert.equal(p.els.knockLabel.textContent, I18N.mn.knockOn);
+  assert.deepEqual(p.log.toasts, [I18N.mn.knockOnDone]);
+});
+
+test("refused: said where to allow it, and the switch says blocked; a tap then only says so again", async () => {
+  const p = page({ saved: [await person("Anu")], knock: { answer: "denied" } });
+  await p.api.knocksOn();
+  assert.deepEqual(p.log.subscribed, []);
+  assert.equal(p.els.knockBtn.dataset.state, "blocked");
+  assert.deepEqual(p.log.toasts, [I18N.mn.knockBlockedHint]);
+  p.els.knockBtn.onclick();
+  assert.equal(p.log.asked, 1, "not asked again — the browser would not show it");
+  const later = page({ saved: [await person("Anu")], knock: { answer: "default" } });
+  await later.api.knocksOn();
+  assert.equal(later.els.knockBtn.dataset.state, "off", "dismissed: still off, nothing said");
+  assert.deepEqual(later.log.toasts, []);
+});
+
+test("turning alerts off unsubscribes", async () => {
+  const p = page({ saved: [await person("Anu")] });
+  await p.api.knocksOn();
+  p.log.toasts.length = 0;
+  p.els.knockBtn.onclick();
+  await timers();
+  assert.equal(p.log.unsubscribed, 1);
+  assert.equal(p.els.knockBtn.dataset.state, "off");
+  assert.deepEqual(p.log.toasts, [I18N.mn.knockOffDone]);
+});
+
+test("the worker's copy: each person's room and name and the language — no secrets — and only while alerts are on", async () => {
+  const anu = await person("Anu", "a"), bat = await person("Bat", "b");
+  const p = page({ saved: [anu, bat] });
+  await timers();
+  assert.equal(p.idb.size, 0, "nothing kept for a worker that is not there");
+  await p.api.knocksOn();
+  await timers();
+  assert.deepEqual(p.idb.get("people"), { lang: "mn", names: [[anu.room, "Anu"], [bat.room, "Bat"]] });
+  assert.ok(!JSON.stringify([...p.idb]).includes(anu.secret));
+  p.api.renamePerson(anu);
+  p.type("Anu (phone)");
+  p.api.confirmSaveDialog();
+  await timers();
+  assert.equal(p.idb.get("people").names[0][1], "Anu (phone)", "kept up to date");
+});
+
+test("alerts on at an earlier visit: taken up again — and made afresh if the server's key changed", async () => {
+  const same = page({ saved: [await person("Anu")], knock: { keyLater: true, registered: true, subscribed: true, permission: "granted" } });
+  await same.api.knockKeyArrived(SERVER_KNOCK_KEY);
+  assert.equal(same.els.knockBtn.dataset.state, "on");
+  assert.equal(same.log.unsubscribed, 0);
+  assert.equal(same.log.registered.length, 1, "the worker brought to this build");
+
+  const changed = page({ saved: [await person("Anu")], knock: { keyLater: true, registered: true, subscribed: true, permission: "granted",
+                                                                  subscribedKey: pushKeys().p256dh } });
+  await changed.api.knockKeyArrived(SERVER_KNOCK_KEY);
+  assert.equal(changed.log.unsubscribed, 1);
+  assert.deepEqual(changed.log.subscribed, [{ userVisibleOnly: true, key: SERVER_KNOCK_KEY }]);
+  assert.equal(changed.els.knockBtn.dataset.state, "on");
+
+  const never = page({ saved: [await person("Anu")], knock: { keyLater: true } });
+  await never.api.knockKeyArrived(SERVER_KNOCK_KEY);
+  assert.deepEqual(never.log.registered, [], "nothing registered for someone who never turned alerts on");
+  assert.equal(never.els.knockBtn.dataset.state, "off");
+});
+
+test("in a saved person's chat, each side says where to knock for it — once a channel — or that alerts are off", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], kind: "saved", inChat: true });
+  p.api.set({ meeting: anu });
+  p.api.shareKnockAddress();
+  p.api.shareKnockAddress();
+  await settle();
+  assert.deepEqual(p.log.sealed, [{ type: "knock-address", off: true }]);
+  const on = page({ saved: [anu], kind: "saved", inChat: true });
+  on.api.set({ meeting: anu });
+  await on.api.knocksOn();
+  on.log.sealed.length = 0;
+  on.api.set({ knockShared: false });
+  on.api.shareKnockAddress();
+  await settle();
+  const sent = on.log.sealed[0];
+  assert.equal(sent.type, "knock-address");
+  assert.ok(G.knockAddressValid(sent), "the subscription's endpoint and keys");
+  const normal = page({ saved: [anu], inChat: true });
+  normal.api.shareKnockAddress();
+  await settle();
+  assert.deepEqual(normal.log.sealed, [], "not in any other room");
+});
+
+test("turned on or off mid-chat with a saved person: they are told at once", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], kind: "saved", inChat: true });
+  p.api.set({ meeting: anu });
+  await p.api.knocksOn();
+  await settle();
+  assert.equal(p.log.sealed.at(-1).type, "knock-address");
+  assert.ok(p.log.sealed.at(-1).endpoint);
+  await p.api.knocksOff();
+  await settle();
+  assert.deepEqual(p.log.sealed.at(-1), { type: "knock-address", off: true });
+});
+
+test("their address is kept with them, and the bell shows by their name; off forgets it; a bad one changes nothing", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], kind: "saved" });
+  p.api.set({ meeting: anu });
+  const address = { endpoint: "https://web.push.apple.com/QGu", ...pushKeys() };
+  p.api.receiveKnockAddress({ type: "knock-address", ...address });
+  assert.deepEqual(p.stored().people[0].knock, address);
+  assert.deepEqual(p.api.get().meeting.knock, address, "the person being met, too");
+  const name = p.rows()[0].querySelector(".person-name");
+  assert.ok(name.children.some(c => c.classList && c.classList.contains("person-knock")), "a bell by the name");
+  p.api.receiveKnockAddress({ type: "knock-address", endpoint: "nope", p256dh: "x", auth: "y" });
+  assert.deepEqual(p.stored().people[0].knock, address, "a bad one changes nothing");
+  p.api.receiveKnockAddress({ type: "knock-address", off: true });
+  assert.equal(p.stored().people[0].knock, undefined);
+  assert.ok(!p.rows()[0].querySelector(".person-name").children.some(c => c.classList && c.classList.contains("person-knock")));
+});
+
+test("saved just now: their address, come before the save finished here, is kept for them — and ours goes to them", async () => {
+  const p = page({ inChat: true });
+  const address = { endpoint: "https://fcm.googleapis.com/fcm/send/early", ...pushKeys() };
+  p.api.receiveKnockAddress({ type: "knock-address", ...address });          // ahead of their yes being handled
+  assert.deepEqual(p.api.get().knockEarly, { type: "knock-address", ...address });
+  p.api.startSaveOffer();
+  p.type("Anu");
+  p.api.confirmSaveDialog();
+  await settle();
+  p.log.sealed.length = 0;
+  await p.api.receiveSaveAccept();
+  assert.deepEqual(p.stored().people[0].knock, address);
+  assert.deepEqual(p.log.sealed, [{ type: "knock-address", off: true }], "and they learn ours");
+});
+
+test("first in their room, and they get alerts: a knock with their address — and none for someone without", async () => {
+  const knock = { endpoint: "https://fcm.googleapis.com/fcm/send/x", ...pushKeys() };
+  const anu = { ...await person("Anu"), knock };
+  const p = page({ saved: [anu] });
+  p.api.meetPerson(p.api.get().people[0]);
+  p.api.meetWaiting({ sessionId: anu.room, hostKey: "k".repeat(32) });
+  assert.deepEqual(p.log.ws.at(-1), { type: "knock", sessionId: anu.room, to: knock });
+  assert.ok(!JSON.stringify(p.log.ws).includes(anu.secret), "nothing of the secret");
+  p.api.knockAnswered({ type: "knock-result", sessionId: anu.room, ok: true, gone: false });
+  assert.ok(p.rows()[0].textContent.includes(I18N.mn.personKnocked));
+
+  const bat = await person("Bat");
+  const q = page({ saved: [bat] });
+  q.api.meetPerson(bat);
+  q.api.meetWaiting({ sessionId: bat.room, hostKey: "k".repeat(32) });
+  assert.deepEqual(q.log.ws.map(m => m.type), ["meet-session"]);
+});
+
+test("an address the push service says is gone is forgotten; another room's answer changes nothing", async () => {
+  const knock = { endpoint: "https://fcm.googleapis.com/fcm/send/x", ...pushKeys() };
+  const anu = { ...await person("Anu"), knock };
+  const p = page({ saved: [anu] });
+  p.api.meetPerson(p.api.get().people[0]);
+  p.api.meetWaiting({ sessionId: anu.room, hostKey: "k".repeat(32) });
+  p.api.knockAnswered({ sessionId: "~other", ok: false, gone: true });
+  assert.deepEqual(p.stored().people[0].knock, knock);
+  p.api.knockAnswered({ sessionId: anu.room, ok: false, gone: true });
+  assert.equal(p.stored().people[0].knock, undefined);
+  assert.ok(p.rows()[0].textContent.includes(I18N.mn.personWaiting), "still waiting, not knocked");
+});
+
+test("opened by tapping a knock: the address tidied, and them met at once", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], knock: { hash: `#knock=${anu.room}` } });
+  assert.deepEqual(p.log.replaced, ["/direct-connection/"]);
+  assert.deepEqual(p.log.ws, [{ type: "meet-session", sessionId: anu.room, side: "a" }]);
+  assert.deepEqual(p.log.tabs, ["rooms"]);
+  const stranger = page({ saved: [anu], knock: { hash: `#knock=~${"z".repeat(43)}` } });
+  assert.deepEqual(stranger.log.ws, [], "someone not saved here: nothing");
+  const bad = page({ saved: [anu], knock: { hash: `#knock=${anu.room}x` } });
+  assert.deepEqual(bad.log.replaced, [], "not a room's shape: left alone");
+});
+
+test("tapped with the page open: met if it is free; if it is busy, only said", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  p.push.swListeners.message({ data: { type: "knock", room: anu.room } });
+  assert.equal(p.log.ws.at(-1).sessionId, anu.room);
+  p.push.swListeners.message({ data: { type: "knock", room: bat.room } });
+  assert.equal(p.log.ws.length, 1, "already meeting someone: not dropped for another");
+  assert.deepEqual(p.log.toasts, [I18N.mn.knockTitle("Bat")]);
+  p.push.swListeners.message({ data: { type: "knock", room: anu.room } });
+  assert.equal(p.log.toasts.length, 1, "their own knock again: nothing more");
+  p.push.swListeners.message({ data: { type: "other", room: bat.room } });
+  p.push.swListeners.message({ data: { type: "knock", room: "<b>" } });
+  assert.equal(p.log.toasts.length, 1);
+  const chatting = page({ saved: [anu], inChat: true });
+  chatting.push.swListeners.message({ data: { type: "knock", room: anu.room } });
+  assert.deepEqual(chatting.log.ws, []);
+  assert.deepEqual(chatting.log.toasts, [I18N.mn.knockTitle("Anu")]);
 });
