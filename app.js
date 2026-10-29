@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610290223-14dae2f9";
+const APP_BUILD = "202610290756-617ea7c5";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -138,6 +138,7 @@ function applyI18n() {
   document.documentElement.lang = LANG === "mn" ? "mn" : "en";
   // re-render session list so timeAgo labels update
   renderSessionList(_lastSessionList);
+  drawPeople();
   // update voice record button title
   if (voiceRecordBtn) voiceRecordBtn.title = t("recordVoice");
   // update typing indicator if visible
@@ -243,6 +244,14 @@ const keyVerifyCode  = document.getElementById("keyVerifyCode");
 const keyVerifyHint  = document.getElementById("keyVerifyHint");
 const keyVerifyInput = document.getElementById("keyVerifyInput");
 const keyVerifyStatus= document.getElementById("keyVerifyStatus");
+const peopleSection  = document.getElementById("peopleSection");   // see "SAVED PEOPLE"
+const peopleList     = document.getElementById("peopleList");
+const saveOverlay    = document.getElementById("saveOverlay");
+const saveTitle      = document.getElementById("saveTitle");
+const saveHint       = document.getElementById("saveHint");
+const saveNameInput  = document.getElementById("saveNameInput");
+const saveCancelBtn  = document.getElementById("saveCancelBtn");
+const saveConfirmBtn = document.getElementById("saveConfirmBtn");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
@@ -275,6 +284,25 @@ let typingTimeout   = null;
 let peerTyping      = false;
 
 let _lastSessionList = [];  // cache for re-render on language change
+
+/* Saved people — see "SAVED PEOPLE" below. Declared up here because
+   applyI18n() draws the list while this file is still being read.
+
+   people      everyone saved on this device, as G.savedPeople read them
+   meeting     the one being met: from the tap on their name until leaving
+   pendingMeet that tap's message, until the server answers it — sent again
+               each time the link comes up, as a create is
+   saveOffer   our offer to save each other, until they answer: { secret, name }
+   saveAsked   their offer, while we are asked about it: { secret }
+   saveDialog  the name dialog, while open: { mode, onConfirm, onCancel }
+   forgetting  the room of the person whose row asks "Forget?"          */
+let people      = [];
+let meeting     = null;
+let pendingMeet = null;
+let saveOffer   = null;
+let saveAsked   = null;
+let saveDialog  = null;
+let forgetting  = null;
 
 /* Last known connection path, so the header badge can be redrawn in the new
    language. Declared here rather than beside renderConnectionPath(): applyI18n()
@@ -700,6 +728,7 @@ function e2eActivate(key, secure) {
      How the chat was verified is the shield's job now; the code is in its
      panel. */
   appendSys(t("sysConnected"));
+  maybeOfferSave();
 
   /* The guest introduces itself; the host answers when that arrives (see the
      peer-info case). Not both at once: the host reaches this line before it
@@ -916,10 +945,12 @@ async function e2eDeriveKey(peerPubJwk) {
     updateKeyVerifyUi();
 
     if (isHost) {
-      /* Guest may hold the room secret (invite link) or not (PIN). Prepare both. */
+      /* Guest may hold the room secret (invite link) or not (PIN). Prepare both
+         — except in a saved person's room, where the secret is the only way in
+         and a key without it is someone else (G.mayUsePlainKey). */
       e2eCandidates = {
         secure: roomSecret ? await deriveKeyWith(peerPub, roomSecret) : null,
-        plain:  await deriveKeyWith(peerPub, null)
+        plain:  G.mayUsePlainKey(roomKind) ? await deriveKeyWith(peerPub, null) : null
       };
     } else {
       e2eKeyPending = await deriveKeyWith(peerPub, roomSecret);
@@ -951,7 +982,7 @@ async function handleE2eConfirm(data) {
     if (secure && await opensConfirm(secure, data.ct, data.iv)) {
       e2eCandidates = null;
       e2eActivate(secure, true);
-    } else if (await opensConfirm(plain, data.ct, data.iv)) {
+    } else if (plain && await opensConfirm(plain, data.ct, data.iv)) {
       e2eCandidates = null;
       e2eActivate(plain, false);
     } else {
@@ -1293,6 +1324,7 @@ function connectWebSocket() {
     requestSessionList();
     checkAutoJoin();
     sendPendingCreate();
+    sendPendingMeet();
     restoreHostRoom();
     sendReclaim();
     resumeSeat();
@@ -1356,7 +1388,9 @@ wakeServer();
    confirms — so checking roomSecret alone would leave the guard inert during
    exactly the message most likely to leak it. */
 function roomSecretsInPlay() {
-  return [roomSecret, pendingRoomSecret, _autoSecret];
+  return [roomSecret, pendingRoomSecret, _autoSecret,
+          meeting && meeting.secret, saveOffer && saveOffer.secret, saveAsked && saveAsked.secret,
+          ...people.map(p => p.secret)];
 }
 
 function wsSend(obj) {
@@ -1660,6 +1694,9 @@ function createRoom(kind) {
    name, same kind, and for a code room the same word, which the guest already
    has. A PIN room gets a new PIN; there is no keeping the old one.        */
 function loseWaitingRoom() {
+  /* Waiting for a saved person: nothing to make again by hand — a tap on
+     their name does it. */
+  if (roomKind === "saved") { endMeeting(); showToast(`⚠️ ${t("savedLost")}`, "warn"); return; }
   const lost = { sessionId: currentSession.sessionId, kind: roomKind };
   forgetHostRoom();
   hostKey = null;
@@ -1700,7 +1737,9 @@ const HOST_ROOM_KEY = "dc-host-room";
 let hostRoomRestoreTried = false;
 
 function saveHostRoom() {
-  if (!isHost || !currentSession || !hostKey || !roomReadyInfo) return;
+  /* Not a saved person's room: a page opened fresh meets them by a tap on
+     their name again, and the server gives that page the seat. */
+  if (!isHost || !currentSession || !hostKey || !roomReadyInfo || roomKind === "saved") return;
   try {
     sessionStorage.setItem(HOST_ROOM_KEY, JSON.stringify({
       v: 1, sessionId: currentSession.sessionId, hostKey, token: currentSession.token,
@@ -1845,6 +1884,406 @@ function attemptJoin() {
 }
 
 /* ══════════════════════════════════════════════
+   SAVED PEOPLE
+   ─────────────────────────────────────────────
+   Talking to the same person again took a room made from nothing each time:
+   a name typed, a kind picked, a link copied and sent through another app,
+   and that link tapped. Once two people have saved each other, each just
+   taps the other's name in the lobby: whoever is first waits, and the second
+   tap connects them — green, with nothing to type, send or compare.
+
+   Saving: in a chat already checked (green — G.mayOfferSave), one side
+   offers and names the other; the other is asked, and names them back. The
+   offer carries a fresh secret, sealed, over the chat itself — never through
+   the server. Each device keeps the secret, the name it chose, and which
+   side of the pair it is ("a" offered, "b" answered).
+
+   Meeting: the room's name is a hash of the secret (DC.savedRoomName), so
+   both devices work it out alone, and the server learns nothing it could
+   join with. One message, meet-session, makes the room or joins it — see
+   server.js. The secret is then mixed into the key exactly as an invite
+   link's is, and the host takes no key made without it (G.mayUsePlainKey):
+   a seat taken by anyone else — the server included — never opens.
+
+   The waiting side waits here in the lobby, on the person's row, with the
+   screen kept on, until they come, it is cancelled, or ten minutes pass.  */
+const PEOPLE_KEY = "dc-people";
+
+function loadPeople() {
+  try { return G.savedPeople(JSON.parse(localStorage.getItem(PEOPLE_KEY) || "null")); }
+  catch (_) { return []; }
+}
+
+/** Stored, or false: storage switched off, full, or a window that keeps nothing. */
+function storePeople(list) {
+  try { localStorage.setItem(PEOPLE_KEY, JSON.stringify({ v: 1, people: list })); return true; }
+  catch (_) { return false; }
+}
+
+/** Asked before offering or accepting, so neither side is left saved alone. */
+function peopleStorable() {
+  try { localStorage.setItem(`${PEOPLE_KEY}-probe`, "1"); localStorage.removeItem(`${PEOPLE_KEY}-probe`); return true; }
+  catch (_) { return false; }
+}
+
+/** What to call a room on screen: a saved person's room by their name, not
+    the hash it is named by. */
+function roomTitle(sessionId) {
+  return meeting && meeting.room === sessionId ? meeting.name : sessionId;
+}
+
+function drawPeople() {
+  peopleSection.classList.toggle("hidden", !people.length);
+  peopleList.replaceChildren(...people.map(personRow));
+}
+
+function personRow(p) {
+  const item = document.createElement("div");
+  item.className = "person-item";
+
+  if (forgetting === p.room) {
+    item.classList.add("asking");
+    const ask = document.createElement("span");
+    ask.className = "person-ask";
+    ask.textContent = I18N[LANG].forgetAsk(p.name);
+    const keep = document.createElement("button");
+    keep.type = "button";
+    keep.className = "person-small-btn btn-quiet";
+    keep.textContent = t("forgetNo");
+    keep.onclick = () => { forgetting = null; drawPeople(); };
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "person-small-btn btn-danger";
+    forget.textContent = t("forgetYes");
+    forget.onclick = () => forgetPerson(p);
+    item.append(ask, keep, forget);
+    return item;
+  }
+
+  const here = Boolean(meeting) && meeting.room === p.room;
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "person-open";
+  open.disabled = Boolean(meeting);
+  const avatar = document.createElement("span");
+  avatar.className = "person-avatar";
+  avatar.appendChild(tablerIcon("user"));
+  const text = document.createElement("span");
+  text.className = "person-text";
+  const name = document.createElement("span");
+  name.className = "person-name";
+  name.textContent = p.name;
+  const sub = document.createElement("span");
+  sub.className = "person-sub";
+  /* Tapped: the room is being made, or made and waited in. */
+  sub.textContent = t(!here ? "personTap" : currentSession ? "personWaiting" : "personConnecting");
+  text.append(name, sub);
+  open.append(avatar, text);
+  open.onclick = () => meetPerson(p);
+  item.appendChild(open);
+
+  if (here) {
+    item.classList.add("waiting");
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "person-small-btn btn-quiet";
+    cancel.textContent = t("personCancel");
+    cancel.onclick = () => leaveBtn.click();
+    item.appendChild(cancel);
+    return item;
+  }
+  for (const [icon, label, act] of [["pencil", "personRename", renamePerson], ["trash", "personForget", askForget]]) {
+    const tool = document.createElement("button");
+    tool.type = "button";
+    tool.className = "person-tool";
+    tool.disabled = Boolean(meeting);
+    tool.setAttribute("aria-label", `${t(label)}: ${p.name}`);
+    tool.title = t(label);
+    tool.appendChild(tablerIcon(icon));
+    tool.onclick = () => act(p);
+    item.appendChild(tool);
+  }
+  return item;
+}
+
+/** A tap on their name: make our room, or join theirs if they are waiting. */
+function meetPerson(p) {
+  if (meeting || listJoinId || pinJoinInFlight || (isConnecting && !currentSession)) return;
+  /* A room of our own still waiting for its guest is given up for this. */
+  if (currentSession) leaveBtn.click();
+  meeting = p;
+  isConnecting = true;
+  roomKind = "saved"; pakeCode = null;
+  pendingRoomSecret = p.secret;       // mixed into the key; never sent
+  pendingMeet = { type: "meet-session", sessionId: p.room, side: p.side };
+  sendPendingMeet();
+  drawPeople();
+}
+
+function sendPendingMeet() {
+  if (pendingMeet && ws && ws.readyState === WebSocket.OPEN) wsSend(pendingMeet);
+}
+
+/** First there: the room is made, and we wait in it — on their row, here in
+    the lobby. A tap cancelled before this answer came has nothing to take up:
+    the cancel's leave-session went after the meet, so the server has already
+    let the room go. Another leave now could only take a room made since. */
+function meetWaiting(data) {
+  pendingMeet = null;
+  if (!meeting || meeting.room !== data.sessionId) return;
+  isHost = true;
+  hostKey = typeof data.hostKey === "string" ? data.hostKey : null;
+  reclaimPending = false;
+  roomKind = "saved";
+  currentSession = { sessionId: data.sessionId, token: null };
+  roomSecret = meeting.secret;
+  pendingRoomSecret = null;
+  isConnecting = false;
+  keepScreenOn(true);                 // a lock now would take the room with it
+  drawPeople();
+}
+
+/** The wait for them is over without a chat — expired, lost, or refused. */
+function endMeeting() {
+  keepScreenOn(false);
+  hostKey = null;
+  reclaimPending = false;
+  if (isHost) currentSession = null;
+  roomSecret = null;
+  pendingRoomSecret = null;
+  isHost = false;
+  isConnecting = false;
+  roomKind = "pin";
+  meeting = null;
+  pendingMeet = null;
+  lobbyStatus.replaceChildren();
+  drawPeople();
+}
+
+/** This chat was opened again elsewhere — another tab, or this page opened
+    afresh — and the seat went there. This copy stops, and nothing joins
+    again by itself, so the two never take the seat back and forth. */
+function savedSeatTaken() {
+  const inChat = !chatScreen.classList.contains("hidden");
+  clearConnectWatch();
+  if (dataChannel) dataChannel.onclose = null;
+  endCall(false);
+  closePeerConnection();
+  guestKey = null;
+  seatPending = false;
+  endMeeting();
+  currentSession = null;
+  if (!inChat) { showToast(t("savedElsewhere"), "info"); return; }
+  voiceCallBtn.disabled = true;
+  videoCallBtn.disabled = true;
+  statsBar.textContent = "";
+  setQuality(`⬤ ${t("seatTakenShort")}`, "failed");
+  appendSys(t("savedElsewhere"));
+  showReconnectButton();
+}
+
+/* ── Saving each other, in a chat ───────────── */
+
+/** Once a chat is checked, it offers — once, as a line in the chat. */
+function maybeOfferSave() {
+  if (chatMessages.querySelector(".save-sys")) return;
+  if (!G.mayOfferSave({ ready: e2eReady, secure: e2eSecureMode, verified: e2eVerified, savedRoom: roomKind === "saved" })) return;
+  const line = document.createElement("div");
+  line.className = "save-sys";
+  chatMessages.appendChild(line);
+  drawSaveLine("offer");
+  scrollBottom();
+}
+
+/** The line: the offer, waiting for their answer, or saved. */
+function drawSaveLine(state, name) {
+  const line = chatMessages.querySelector(".save-sys");
+  if (!line) return;
+  const text = document.createElement("span");
+  if (state !== "offer") {
+    text.textContent = state === "waiting" ? t("saveLineWaiting") : I18N[LANG].saveLineDone(name);
+    line.replaceChildren(text);
+    return;
+  }
+  text.textContent = t("saveLineText");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "reconnect-sys-btn";
+  btn.append(tablerIcon("user-plus"), document.createTextNode(t("saveLineBtn")));
+  btn.onclick = startSaveOffer;
+  line.replaceChildren(text, btn);
+}
+
+function chatChecked() {
+  return G.mayOfferSave({ ready: e2eReady, secure: e2eSecureMode, verified: e2eVerified, savedRoom: roomKind === "saved" });
+}
+
+/** Ours: name them, then ask them. Saved once they say yes. */
+function startSaveOffer() {
+  if (saveOffer || saveAsked) return;
+  if (!chatChecked()) { showToast(t("savedVerifyFirst"), "warn"); return; }
+  if (!peopleStorable()) { showToast(t("savedNoStorage"), "error"); return; }
+  if (people.length >= G.SAVED_PEOPLE_MAX) { showToast(t("savedFull"), "warn"); return; }
+  openSaveDialog("offer", {
+    onConfirm: async name => {
+      if (saveOffer || saveAsked || !chatChecked()) return;
+      saveOffer = { secret: DC.makeRoomSecret(), name };
+      if (!await dcSendE2e({ type: "save-offer", secret: saveOffer.secret })) {
+        saveOffer = null;
+        showToast(t("messageNotSent"), "error");
+        return;
+      }
+      drawSaveLine("waiting");
+    }
+  });
+}
+
+/** Theirs: we are asked, and name them back — or say not now. */
+async function receiveSaveOffer(data) {
+  if (!G.saveOfferValid(data) || saveAsked) return;
+  const decline = reason => dcSendE2e({ type: "save-decline", ...(reason ? { reason } : {}) }).catch(() => {});
+  if (roomKind === "saved") { decline(); return; }       // already saved: nothing to ask
+  /* Both pressed Save, and the offers crossed: both sides keep the same one,
+     answered with the name already given. */
+  if (saveOffer) {
+    if (!G.keepTheirOffer(saveOffer.secret, data.secret)) return;    // they answer ours
+    const { name } = saveOffer;
+    saveOffer = null;
+    await acceptSaveOffer(data.secret, name);
+    return;
+  }
+  if (!chatChecked()) { decline("unverified"); showToast(t("savedVerifyFirst"), "warn"); return; }
+  if (!peopleStorable()) { decline("storage"); showToast(t("savedNoStorage"), "error"); return; }
+  if (people.length >= G.SAVED_PEOPLE_MAX) { decline(); showToast(t("savedFull"), "warn"); return; }
+  saveAsked = { secret: data.secret };
+  openSaveDialog("ask", {
+    onConfirm: name => { if (saveAsked) acceptSaveOffer(saveAsked.secret, name); },
+    onCancel:  () => { if (saveAsked) { saveAsked = null; decline(); } }
+  });
+}
+
+async function acceptSaveOffer(secret, name) {
+  saveAsked = null;
+  const person = await addPerson(name, secret, "b");
+  if (!person) { dcSendE2e({ type: "save-decline", reason: "storage" }).catch(() => {}); return; }
+  dcSendE2e({ type: "save-accept" }).catch(() => {});
+  drawSaveLine("done", person.name);
+  showToast(I18N[LANG].savedDone(person.name), "info");
+}
+
+/** They said yes to ours: saved here too. */
+async function receiveSaveAccept() {
+  if (!saveOffer) return;
+  const { secret, name } = saveOffer;
+  saveOffer = null;
+  const person = await addPerson(name, secret, "a");
+  if (!person) return;
+  drawSaveLine("done", person.name);
+  showToast(I18N[LANG].savedDone(person.name), "info");
+}
+
+/** They said no, or could not. Their reason picks one of our sentences. */
+function receiveSaveDecline(data) {
+  if (!saveOffer) return;
+  saveOffer = null;
+  const reason = data && data.reason;
+  showToast(t(reason === "unverified" ? "savedPeerVerifyFirst" : reason === "storage" ? "savedPeerNoStorage" : "savedDeclined"), "info");
+  drawSaveLine("offer");
+}
+
+/** Keeps one more person, or says why not. Returns them as kept, or null. */
+async function addPerson(rawName, secret, side) {
+  const name = G.personName(rawName);
+  if (!name || !G.SAVED_SECRET.test(secret)) return null;
+  if (people.length >= G.SAVED_PEOPLE_MAX) { showToast(t("savedFull"), "warn"); return null; }
+  const room = await DC.savedRoomName(secret);
+  const next = G.savedPeople({ v: 1, people: [...people, { name, secret, room, side, savedAt: Date.now() }] });
+  if (!storePeople(next)) { showToast(t("savedNoStorage"), "error"); return null; }
+  people = next;
+  drawPeople();
+  return people.find(p => p.secret === secret) || null;
+}
+
+function renamePerson(p) {
+  openSaveDialog("rename", {
+    value: p.name,
+    onConfirm: name => {
+      const next = people.map(q => q.room === p.room ? { ...q, name } : q);
+      if (!storePeople(next)) { showToast(t("savedNoStorage"), "error"); return; }
+      people = next;
+      drawPeople();
+    }
+  });
+}
+
+function askForget(p) {
+  forgetting = p.room;
+  drawPeople();
+}
+
+function forgetPerson(p) {
+  forgetting = null;
+  const next = people.filter(q => q.room !== p.room);
+  if (!storePeople(next)) { showToast(t("savedNoStorage"), "error"); drawPeople(); return; }
+  people = next;
+  drawPeople();
+}
+
+/* ── The name dialog ─────────────────────────
+   One dialog, three uses: naming someone we offer to save, naming them back
+   when they offered, and renaming. */
+function openSaveDialog(mode, { value = "", onConfirm, onCancel = null }) {
+  const words = {
+    offer:  ["saveTitle",    "saveHint",    "saveCancel"],
+    ask:    ["saveAskTitle", "saveAskHint", "saveNotNow"],
+    rename: ["renameTitle",  "renameHint",  "saveCancel"]
+  }[mode];
+  saveDialog = { mode, onConfirm, onCancel };
+  saveTitle.textContent = t(words[0]);
+  saveHint.textContent = t(words[1]);
+  saveCancelBtn.textContent = t(words[2]);
+  saveConfirmBtn.textContent = t("saveConfirm");
+  saveNameInput.value = value;
+  saveOverlay.classList.remove("hidden");
+  setTimeout(() => saveNameInput.focus(), 100);
+}
+
+function closeSaveDialog() {
+  saveOverlay.classList.add("hidden");
+  saveDialog = null;
+}
+
+function confirmSaveDialog() {
+  const name = G.personName(saveNameInput.value);
+  if (!name) { saveNameInput.focus(); return; }
+  const done = saveDialog && saveDialog.onConfirm;
+  closeSaveDialog();
+  if (done) done(name);
+}
+
+function cancelSaveDialog() {
+  const cancel = saveDialog && saveDialog.onCancel;
+  closeSaveDialog();
+  if (cancel) cancel();
+}
+
+saveConfirmBtn.onclick = confirmSaveDialog;
+saveCancelBtn.onclick = cancelSaveDialog;
+saveNameInput.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); confirmSaveDialog(); }
+});
+
+/* Saved or forgotten in another tab: the same list here. */
+window.addEventListener("storage", e => {
+  if (e.key !== PEOPLE_KEY) return;
+  people = loadPeople();
+  drawPeople();
+});
+
+people = loadPeople();
+drawPeople();
+
+/* ══════════════════════════════════════════════
    WEBRTC — DATA CHANNEL PC
 ══════════════════════════════════════════════ */
 
@@ -1870,6 +2309,10 @@ function closePeerConnection() {
      and runs the handshake again. */
   pakeReset();
   keyAgreement = "ECDH";
+  /* An offer to save each other belongs to the channel it was made on. */
+  saveOffer = null;
+  saveAsked = null;
+  if (saveDialog && saveDialog.mode !== "rename") closeSaveDialog();
   e2eVerifyCode = "";
   e2eVerified = false;
   e2eLocalPubRaw = null;
@@ -2293,6 +2736,10 @@ async function handleSignaling(data) {
       break;
 
     case "session-created": {
+      /* First to a saved person's room: we wait in it for them. */
+      if (data.kind === "saved") { meetWaiting(data); break; }
+      /* A room of our own instead — waiting for a saved person is given up. */
+      if (meeting) { meeting = null; pendingMeet = null; drawPeople(); }
       pendingCreate = null;
       isHost = true;
       hostKey = typeof data.hostKey === "string" ? data.hostKey : null;
@@ -2330,9 +2777,13 @@ async function handleSignaling(data) {
       guestKey = typeof data.guestKey === "string" ? data.guestKey : null;
       seatPending = false;
       peerServerAway = false;
-      /* Present only when this join came from an invite link. */
+      /* Present only when this join came from an invite link — or a tap on a
+         saved person, whose secret it is. */
       roomSecret = pendingRoomSecret;
       pendingRoomSecret = null;
+      pendingMeet = null;
+      /* Some other room joined — waiting for a saved person is given up. */
+      if (roomKind !== "saved" && meeting) { meeting = null; drawPeople(); }
       pinOverlay.classList.add("hidden");
       switchToChat(data.sessionId);
       createPeerConnection();
@@ -2340,13 +2791,23 @@ async function handleSignaling(data) {
          for them rather than count down to "could not connect". */
       if (data.hostAway === true) {
         clearConnectWatch();
-        appendSys(t("waitingForHost"));
+        appendSys(roomKind === "saved" && meeting ? I18N[LANG].savedWaitingFor(meeting.name) : t("waitingForHost"));
       }
       break;
 
     case "host-back":
       if (!roomEventIsOurs(data) || isHost) break;
-      appendSys(t("hostBack"));
+      /* A saved person's side opened it again — a reload, another tab — and
+         the chat with the copy it left is over. Start again with the new one,
+         keeping what was said. */
+      if (data.restart === true) {
+        if (dataChannel) dataChannel.onclose = null;
+        endCall(false);
+        createPeerConnection();
+        appendSys(I18N[LANG].savedReopened(roomTitle(currentSession.sessionId)));
+      } else {
+        appendSys(t("hostBack"));
+      }
       watchConnecting();
       break;
 
@@ -2400,7 +2861,9 @@ async function handleSignaling(data) {
         endCall(false);
       }
       switchToChat(currentSession.sessionId, { keepMessages: data.replaced === true });
-      if (data.replaced === true) appendSys(t("guestReopened"));
+      if (data.replaced === true) {
+        appendSys(roomKind === "saved" ? I18N[LANG].savedReopened(roomTitle(currentSession.sessionId)) : t("guestReopened"));
+      }
       createPeerConnection();
       dataChannel = pc.createDataChannel("chat");
       dataChannel.binaryType = "arraybuffer";
@@ -2541,7 +3004,9 @@ async function handleSignaling(data) {
          sent through. The chat goes on there; this copy stops, says so, and
          never joins again (inviteMovedAway). Nothing to offer here: the way
          back to the lobby is the arrow, as always. */
-      if (!roomEventIsOurs(data) || isHost) break;
+      if (!roomEventIsOurs(data)) break;
+      if (roomKind === "saved") { savedSeatTaken(); break; }
+      if (isHost) break;
       inviteMovedAway = true;
       guestKey = null;                   // the seat is the other copy's now
       seatPending = false;
@@ -2595,6 +3060,12 @@ async function handleSignaling(data) {
          chat screen and left the lobby showing a PIN and a link for a room that
          no longer existed — the host waited on it with nothing to say so. */
       if (!roomEventIsOurs(data)) break;
+      if (roomKind === "saved") {
+        const name = meeting ? meeting.name : "";
+        endMeeting();
+        showToast(`⌛ ${I18N[LANG].savedExpired(name)}`, "warn");
+        break;
+      }
       keepScreenOn(false);
       forgetHostRoom();
       hostKey = null;
@@ -2621,6 +3092,12 @@ async function handleSignaling(data) {
          message is English, and was shown as it came. */
       const key = G.serverErrorKey(data.code);
       const said = key ? t(key) : data.message;
+      /* A tap on a saved person, refused — too many rooms from this network. */
+      if (pendingMeet) {
+        endMeeting();
+        showToast(said, "error");
+        break;
+      }
       if (_isAutoJoin && isConnecting) {
         const msg = document.createElement("span");
         msg.style.color = "var(--danger-text)";
@@ -2854,7 +3331,7 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
   lobbyScreen.classList.add("hidden");
   chatScreen.classList.remove("hidden");
   document.getElementById("langSwitcher").style.display = "none";
-  chatSessionLabel.textContent = sessionId;
+  chatSessionLabel.textContent = roomTitle(sessionId);
   setQuality(`⬤ ${t("connecting")}`, "");
   if (!keepMessages) {
     closeReactionBar();
@@ -2893,6 +3370,11 @@ leaveBtn.onclick = () => {
   codeLockedUntil = 0;
   isHost = false;
   isConnecting = false;
+  /* A saved person met, or still waited for: over too. Their row is back to
+     a name to tap. */
+  meeting = null;
+  pendingMeet = null;
+  drawPeople();
   chatScreen.classList.add("hidden");
   lobbyScreen.classList.remove("hidden");
   /* After the chat is off screen, so the Back this queues finds no chat and
@@ -2902,7 +3384,10 @@ leaveBtn.onclick = () => {
   createInfo.textContent = "";
   lobbyStatus.replaceChildren();
   showLobbyTab("rooms");
-  setCreateButtons(false);
+  /* All of the lobby's controls, not just Create: a page that joined from an
+     invite link had the name field and Refresh switched off for the join, and
+     nothing switched them on again after the chat. */
+  setLobbyButtons(false);
   sessionIdInput.value = "";
   requestSessionList();
   /* An update arrived while the chat was going. This is the moment it stops
@@ -3183,6 +3668,20 @@ function handleTextMessage(data, sealed = false) {
 
     case "reaction":
       receiveReaction(data);
+      break;
+
+    /* Saving each other — see "SAVED PEOPLE". Sealed only: none is on the
+       list of types believed in the clear. */
+    case "save-offer":
+      receiveSaveOffer(data);
+      break;
+
+    case "save-accept":
+      receiveSaveAccept();
+      break;
+
+    case "save-decline":
+      receiveSaveDecline(data);
       break;
 
     case "peer-info":
@@ -4217,6 +4716,7 @@ if (keyVerifyInput) {
     keyVerifyStatus.classList.toggle("ok", e2eVerified);
     keyVerifyStatus.classList.toggle("bad", Boolean(typed && !e2eVerified));
     updateShield();
+    maybeOfferSave();     // checked by hand: now they can be saved
   });
 }
 
@@ -4523,7 +5023,7 @@ function showCallOverlay(statusText, withVideo) {
   callOverlay.classList.toggle("voice-only", !withVideo);
   // Show the peer name in voice-only avatar
   const nameEl = document.getElementById("voiceCallPeerName");
-  if (nameEl) nameEl.textContent = currentSession?.sessionId || "";
+  if (nameEl) nameEl.textContent = roomTitle(currentSession?.sessionId || "");
   if (withVideo) {
     remoteVideo.classList.remove("hidden");
     localVideo.classList.remove("hidden");

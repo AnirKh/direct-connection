@@ -47,6 +47,21 @@
     return b64urlBytes(globalThis.crypto.getRandomValues(new Uint8Array(ROOM_SECRET_BYTES)));
   }
 
+  /** Domain separator for a saved person's room name. */
+  const SAVED_ROOM_LABEL = "direct-connection/saved-room/v1:";
+
+  /**
+   * The room two people who saved each other meet in: "~" and a SHA-256 of
+   * their shared secret. The server needs a name both devices can work out
+   * on their own; this one tells it nothing of the secret, which stays the
+   * key's — mixed into it exactly as an invite link's is. No room made by
+   * name can take one (see the server's isSavedRoomId).
+   */
+  async function savedRoomName(secret) {
+    const hash = await subtle.digest("SHA-256", utf8.encode(SAVED_ROOM_LABEL + secret));
+    return `~${b64urlBytes(new Uint8Array(hash))}`;
+  }
+
   /* ══════════════════════════════════════════
      Invite link
      #<encoded room name>:<join token>:<room secret>
@@ -212,7 +227,7 @@
 
   return {
     TRANSFER_ID_LEN, E2E_BIN_IV_LEN, E2E_INFO_LABEL, ROOM_SECRET_BYTES,
-    b64urlBytes, makeRoomSecret,
+    b64urlBytes, makeRoomSecret, savedRoomName,
     buildInviteHash, parseInviteHash, payloadLeaksSecret,
     deriveSharedKey,
     compareBytes, makeSharedVerificationCode, normalizeVerifyCode,

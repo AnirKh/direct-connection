@@ -1467,3 +1467,271 @@ test("a page too old to say whether it is on screen cannot take a seat", async (
   await sleep(200);
   assert.ok(!first.inbox.some(m => m.type === "seat-taken"));
 });
+
+/* ══════════════════════════════════════════
+   Meeting a saved person (meet-session)
+══════════════════════════════════════════ */
+
+/** A saved person's room's name: "~" and 43 base64url characters. */
+const savedRoom = tag => `~${(tag + "_".repeat(43)).slice(0, 43)}`;
+
+test("the first to tap makes the room and waits in it — no PIN, no token, never listed", async () => {
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: savedRoom("first"), side: "a" });
+  const made = await waitFor(a, "session-created");
+  assert.ok(made, `got ${JSON.stringify(a.inbox)}`);
+  assert.equal(made.kind, "saved");
+  assert.equal(made.pin, null, "nothing to type");
+  assert.equal(made.token, null, "and no link to send");
+  assert.equal(made.open, false);
+  assert.ok(typeof made.hostKey === "string" && made.hostKey.length >= 20, "a host key, to take the room back if the link drops");
+  const looker = await client();
+  looker.send_({ type: "list-sessions" });
+  const list = await waitFor(looker, "session-list");
+  assert.ok(!list.sessions.some(s => s.sessionId === savedRoom("first")), "the two of them's alone");
+});
+
+test("the second to tap joins it, and the two are introduced", async () => {
+  const a = await client(), b = await client();
+  a.send_({ type: "meet-session", sessionId: savedRoom("second"), side: "a" });
+  await waitFor(a, "session-created");
+  b.send_({ type: "meet-session", sessionId: savedRoom("second"), side: "b" });
+  const joined = await waitFor(b, "session-joined");
+  assert.ok(joined, `got ${JSON.stringify(b.inbox)}`);
+  assert.equal(joined.hostAway, false);
+  assert.ok(typeof joined.guestKey === "string" && joined.guestKey.length >= 20, "a guest key, to take the seat back if the link drops");
+  assert.ok(await waitFor(a, "guest-joined"), "the one waiting is told");
+  a.send_({ type: "offer", sessionId: savedRoom("second"), offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(b, "offer"), "and they connect as any room does");
+});
+
+test("either side may come first", async () => {
+  const a = await client(), b = await client();
+  b.send_({ type: "meet-session", sessionId: savedRoom("either"), side: "b" });
+  assert.ok(await waitFor(b, "session-created"));
+  a.send_({ type: "meet-session", sessionId: savedRoom("either"), side: "a" });
+  assert.ok(await waitFor(a, "session-joined"));
+  assert.ok(await waitFor(b, "guest-joined"));
+});
+
+test("two taps at once: one makes the room, the other joins it — never two rooms, never a refusal", async () => {
+  for (let i = 0; i < 5; i++) {
+    const a = await client(), b = await client();
+    const room = savedRoom(`atonce${i}`);
+    a.send_({ type: "meet-session", sessionId: room, side: "a" });
+    b.send_({ type: "meet-session", sessionId: room, side: "b" });
+    await sleep(300);
+    const made = [a, b].filter(ws => ws.inbox.some(m => m.type === "session-created"));
+    const joined = [a, b].filter(ws => ws.inbox.some(m => m.type === "session-joined"));
+    assert.equal(made.length, 1, `round ${i}: ${JSON.stringify([a.inbox, b.inbox])}`);
+    assert.equal(joined.length, 1);
+    assert.notEqual(made[0], joined[0]);
+    assert.ok(![a, b].some(ws => ws.inbox.some(m => m.type === "error")));
+  }
+});
+
+test("a saved person's room cannot be joined, made or listed any other way", async () => {
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: savedRoom("only"), side: "a" });
+  await waitFor(a, "session-created");
+  for (const join of [{}, { pin: "123456" }, { token: "x".repeat(32) }]) {
+    const other = await client();
+    other.send_({ type: "join-session", sessionId: savedRoom("only"), visible: true, ...join });
+    const refused = await waitFor(other, "pin-error");
+    assert.equal(refused && refused.code, "not-found", `a join with ${JSON.stringify(join)}: as if not there`);
+  }
+  const maker = await client();
+  maker.send_({ type: "create-session", sessionId: savedRoom("taken-by-name"), open: true });
+  const refused = await waitFor(maker, "error");
+  assert.equal(refused && refused.code, "invalid-name", "no room made by name may take a saved person's name");
+  await sleep(200);
+  assert.ok(!a.inbox.some(m => m.type === "guest-joined"), "nobody got in");
+});
+
+test("a malformed meet is refused, and makes nothing", async () => {
+  for (const bad of [
+    { sessionId: "plain-name", side: "a" },
+    { sessionId: savedRoom("x").slice(0, 40), side: "a" },
+    { sessionId: `${savedRoom("x")}y`, side: "a" },
+    { sessionId: savedRoom("x").replace("~", "!"), side: "a" },
+    { sessionId: savedRoom("x"), side: "c" },
+    { sessionId: savedRoom("x") },
+    { sessionId: 7, side: "a" }
+  ]) {
+    const ws = await client();
+    ws.send_({ type: "meet-session", ...bad });
+    const refused = await waitFor(ws, "error");
+    assert.equal(refused && refused.code, "invalid-name", JSON.stringify(bad));
+    assert.ok(!ws.inbox.some(m => m.type === "session-created"));
+  }
+});
+
+test("the waiting side again — another tab, a reload — takes the seat; the copy left behind is told", async () => {
+  const room = savedRoom("hostagain");
+  const old = await client();
+  old.send_({ type: "meet-session", sessionId: room, side: "a" });
+  const first = await waitFor(old, "session-created");
+  const fresh = await client();
+  fresh.send_({ type: "meet-session", sessionId: room, side: "a" });
+  const again = await waitFor(fresh, "session-created");
+  assert.ok(again, "not refused as taken");
+  assert.equal(again.hostKey, first.hostKey, "the same room");
+  assert.equal(again.pin, null, "still nothing to type");
+  assert.equal(again.token, null);
+  assert.ok(await waitFor(old, "seat-taken"), "the old copy stops");
+  const b = await client();
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  assert.ok(await waitFor(b, "session-joined"));
+  assert.ok(await waitFor(fresh, "guest-joined"), "the newer copy is the one met");
+  await sleep(200);
+  assert.ok(!old.inbox.some(m => m.type === "guest-joined"));
+});
+
+test("the waiting side's link dropped and it taps again: the same room, and whoever came meanwhile is introduced", async () => {
+  const room = savedRoom("hostback");
+  const gone = await client();
+  gone.send_({ type: "meet-session", sessionId: room, side: "a" });
+  await waitFor(gone, "session-created");
+  gone.terminate();
+  await sleep(200);
+  const b = await client();
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  const joined = await waitFor(b, "session-joined");
+  assert.equal(joined && joined.hostAway, true, "told to wait for them");
+  const back = await client();
+  back.send_({ type: "meet-session", sessionId: room, side: "a" });
+  assert.ok(await waitFor(back, "session-created"));
+  assert.ok(await waitFor(back, "guest-joined"), "introduced at once");
+  const hostBack = await waitFor(b, "host-back");
+  assert.ok(hostBack && hostBack.restart !== true, "a chat that never began has nothing to start again");
+});
+
+test("the waiting side opened afresh mid-chat: the other starts again with the new copy", async () => {
+  const room = savedRoom("restart");
+  const a = await client(), b = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  await waitFor(a, "session-created");
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  await waitFor(b, "session-joined");
+  await waitFor(a, "guest-joined");
+  const fresh = await client();
+  fresh.send_({ type: "meet-session", sessionId: room, side: "a" });
+  assert.ok(await waitFor(fresh, "session-created"));
+  assert.ok(await waitFor(fresh, "guest-joined"));
+  const told = await waitForMatch(b, m => m.type === "host-back");
+  assert.equal(told && told.restart, true, "the chat with the old copy is over: start again");
+  assert.ok(await waitFor(a, "seat-taken"));
+});
+
+test("the other side again — another tab — takes the seat, and the one waiting starts again with it", async () => {
+  const room = savedRoom("guestagain");
+  const a = await client(), b = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  await waitFor(a, "session-created");
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  await waitFor(b, "session-joined");
+  await waitFor(a, "guest-joined");
+  const b2 = await client();
+  b2.send_({ type: "meet-session", sessionId: room, side: "b" });
+  assert.ok(await waitFor(b2, "session-joined"), "not 'full'");
+  assert.ok(await waitFor(b, "seat-taken"));
+  assert.ok(await waitForMatch(a, m => m.type === "guest-joined" && m.replaced === true), "the host starts again with the new copy");
+  a.send_({ type: "offer", sessionId: room, offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(b2, "offer"));
+  await sleep(200);
+  assert.ok(!b.inbox.some(m => m.type === "offer"), "the old copy hears nothing more");
+});
+
+test("a link already seated does not change sides", async () => {
+  const room = savedRoom("sides");
+  const a = await client(), b = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  await waitFor(a, "session-created");
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  await waitFor(b, "session-joined");
+  await waitFor(a, "guest-joined");
+  a.inbox.length = 0; b.inbox.length = 0;
+  b.send_({ type: "meet-session", sessionId: room, side: "a" });
+  a.send_({ type: "meet-session", sessionId: room, side: "b" });
+  await sleep(300);
+  assert.deepEqual([a.inbox, b.inbox], [[], []], "nothing moves, nobody is told anything");
+  a.send_({ type: "offer", sessionId: room, offer: { type: "offer", sdp: "x" } });
+  assert.ok(await waitFor(b, "offer"), "the room is as it was");
+});
+
+test("leaving on purpose ends a saved person's room, and the next tap makes it afresh", async () => {
+  const room = savedRoom("leave");
+  const a = await client(), b = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  await waitFor(a, "session-created");
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  await waitFor(b, "session-joined");
+  b.send_({ type: "leave-session", sessionId: room });
+  assert.ok(await waitFor(a, "peer-disconnected"));
+  const again = await client();
+  again.send_({ type: "meet-session", sessionId: room, side: "b" });
+  const made = await waitFor(again, "session-created");
+  assert.ok(made, "made afresh: whoever taps first waits");
+});
+
+test("the waiting side's link dropping keeps the room, and its host key takes it back", async () => {
+  const room = savedRoom("reclaim");
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  const made = await waitFor(a, "session-created");
+  a.terminate();
+  await sleep(200);
+  const back = await client();
+  back.send_({ type: "reclaim-session", sessionId: room, hostKey: made.hostKey });
+  const reclaimed = await waitFor(back, "session-reclaimed");
+  assert.ok(reclaimed, `got ${JSON.stringify(back.inbox)}`);
+  assert.equal(reclaimed.kind, "saved");
+});
+
+test("tapping a saved person counts as making a room, for the limit on rooms from one network", async () => {
+  const ip = freshIp();
+  let refused = null;
+  for (let i = 0; i < 12 && !refused; i++) {
+    const ws = await connect(ip);
+    open.push(ws);
+    ws.send_({ type: "meet-session", sessionId: savedRoom(`limit${i}`), side: "a" });
+    await sleep(80);
+    refused = ws.inbox.find(m => m.type === "error");
+  }
+  assert.equal(refused && refused.code, "too-many-rooms");
+});
+
+test("one room per link: tapping a saved person lets go of a room this link was hosting", async () => {
+  const host = await client();
+  host.send_({ type: "create-session", sessionId: "given-up-for-a-person", open: true });
+  await waitFor(host, "session-created");
+  host.inbox.length = 0;
+  host.send_({ type: "meet-session", sessionId: savedRoom("instead"), side: "a" });
+  assert.ok(await waitFor(host, "session-created"));
+  const guest = await client();
+  guest.send_({ type: "join-session", sessionId: "given-up-for-a-person" });
+  const refused = await waitFor(guest, "pin-error");
+  assert.equal(refused && refused.code, "not-found", "the old room is gone");
+});
+
+test("a seat whose chat is over cannot be taken back by the copy that left it", async () => {
+  const room = savedRoom("stalekey");
+  const a = await client(), b = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  await waitFor(a, "session-created");
+  b.send_({ type: "meet-session", sessionId: room, side: "b" });
+  const joined = await waitFor(b, "session-joined");
+  await waitFor(a, "guest-joined");
+  b.terminate();                                   // the other side's link drops: its seat is kept
+  await sleep(200);
+  const fresh = await client();
+  fresh.send_({ type: "meet-session", sessionId: room, side: "a" });  // and this side opens it afresh
+  assert.ok(await waitFor(fresh, "session-created"));
+  const late = await client();
+  late.send_({ type: "rejoin-session", sessionId: room, guestKey: joined.guestKey });
+  assert.ok(await waitFor(late, "rejoin-failed"), "the chat it would take back is gone");
+  const b2 = await client();
+  b2.send_({ type: "meet-session", sessionId: room, side: "b" });
+  assert.ok(await waitFor(b2, "session-joined"), "a tap on the name gets in");
+  assert.ok(await waitFor(fresh, "guest-joined"));
+});

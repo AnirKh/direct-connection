@@ -15,9 +15,9 @@
        Install button at the bottom left is in the lobby (installOffer in
        guards.js). iPhones read the apple-* lines, since Safari takes the icon
        and title from these rather than from the manifest. -->
-  <link rel="manifest" href="manifest.webmanifest?v=202610290223-14dae2f9">
-  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610290223-14dae2f9">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610290223-14dae2f9">
+  <link rel="manifest" href="manifest.webmanifest?v=202610290756-617ea7c5">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610290756-617ea7c5">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610290756-617ea7c5">
   <meta name="theme-color" content="#15151a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -62,7 +62,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610290223-14dae2f9"></script>
+  <script src="framebust.js?v=202610290756-617ea7c5"></script>
 
   <!--
     The icons, from our own copy. They came from a CDN, which saw every visit —
@@ -72,8 +72,8 @@
     test/csp.test.js checks, so it cannot be edited by accident. See "Icon
     font" in the README.
   -->
-  <link rel="stylesheet" href="vendor/tabler/tabler-icons.min.css?v=202610290223-14dae2f9">
-  <link rel="stylesheet" href="style.css?v=202610290223-14dae2f9">
+  <link rel="stylesheet" href="vendor/tabler/tabler-icons.min.css?v=202610290756-617ea7c5">
+  <link rel="stylesheet" href="style.css?v=202610290756-617ea7c5">
 </head>
 <body>
 
@@ -129,6 +129,13 @@
       <div id="lobbyStatus" class="lobby-status" role="status"></div>
 
       <div id="panelRooms" class="card lobby-panel" role="tabpanel" aria-labelledby="tabRooms">
+        <!-- People saved on this device: a tap meets them, with nothing to
+             type or send. Shown only once someone is saved — see "SAVED
+             PEOPLE" in app.js. -->
+        <div id="peopleSection" class="people-section hidden">
+          <p class="card-label"><span data-i18n="peopleLabel">Хадгалсан хүмүүс</span></p>
+          <div id="peopleList" class="people-list"></div>
+        </div>
         <p class="card-label">
           <span data-i18n="roomsLabel">Идэвхтэй байгаа өрөөнүүд</span>
           <button id="refreshBtn" class="refresh-btn">
@@ -267,6 +274,22 @@
       <div style="display:flex;gap:10px;margin-top:12px">
         <button id="codeCancelBtn" style="background:var(--input-bg);color:var(--text)" data-i18n="pinCancel">Цуцлах</button>
         <button id="codeConfirmBtn"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- A NAME FOR A SAVED PERSON — saving them, answering their offer to save
+       each other, or renaming them. openSaveDialog() in app.js sets the
+       words per use. -->
+  <div id="saveOverlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="saveTitle">
+      <h2 id="saveTitle"></h2>
+      <p id="saveHint" class="save-hint"></p>
+      <input id="saveNameInput" type="text" maxlength="40" autocomplete="off" autocapitalize="words" spellcheck="false"
+             enterkeyhint="done" data-i18n-ph="saveNamePlaceholder" placeholder="Нэр">
+      <div class="modal-actions save-actions">
+        <button id="saveCancelBtn" class="btn-quiet" type="button"></button>
+        <button id="saveConfirmBtn" type="button"></button>
       </div>
     </div>
   </div>
@@ -500,14 +523,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610290223-14dae2f9"></script>
-  <script src="connstats.js?v=202610290223-14dae2f9"></script>
-  <script src="guards.js?v=202610290223-14dae2f9"></script>
-  <script src="i18n.js?v=202610290223-14dae2f9"></script>
+  <script src="protocol.js?v=202610290756-617ea7c5"></script>
+  <script src="connstats.js?v=202610290756-617ea7c5"></script>
+  <script src="guards.js?v=202610290756-617ea7c5"></script>
+  <script src="i18n.js?v=202610290756-617ea7c5"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610290223-14dae2f9"></script>
-  <script src="pake.js?v=202610290223-14dae2f9"></script>
-  <script src="app.js?v=202610290223-14dae2f9"></script>
+  <script src="vendor/noble.js?v=202610290756-617ea7c5"></script>
+  <script src="pake.js?v=202610290756-617ea7c5"></script>
+  <script src="app.js?v=202610290756-617ea7c5"></script>
 </body>
 </html>

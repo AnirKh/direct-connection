@@ -305,7 +305,8 @@ test("the guest is told when the host is back, and the wait for a connection sta
 
 test("a guest who arrives while the host is away waits, rather than counting down to 'could not connect'", () => {
   const joined = between('    case "session-joined":', '    case "host-back":');
-  assert.match(joined, /if \(data\.hostAway === true\) \{\s*\n\s*clearConnectWatch\(\);\s*\n\s*appendSys\(t\("waitingForHost"\)\);/);
+  assert.match(joined, /if \(data\.hostAway === true\) \{\s*\n\s*clearConnectWatch\(\);\s*\n\s*appendSys\(roomKind === "saved" && meeting \? I18N\[LANG\]\.savedWaitingFor\(meeting\.name\) : t\("waitingForHost"\)\);/,
+    "and a saved person is waited for by name");
 });
 
 test("the room is kept from creation, and let go when the chat starts, the room ends, or the host leaves", () => {

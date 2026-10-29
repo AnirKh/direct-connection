@@ -579,6 +579,15 @@ function isValidSessionId(sessionId) {
     SESSION_ID_PATTERN.test(sessionId);
 }
 
+/** The room two people who saved each other meet in: "~" and a SHA-256 of
+    the secret only their two devices hold (savedRoomName in protocol.js).
+    No room made by name may take one — see create-session. */
+const SAVED_ROOM_PATTERN = /^~[A-Za-z0-9_-]{43}$/;
+
+function isSavedRoomId(sessionId) {
+  return typeof sessionId === "string" && SAVED_ROOM_PATTERN.test(sessionId);
+}
+
 function sessionLogId(sessionId) {
   return crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 10);
 }
@@ -592,6 +601,7 @@ function publicSessions() {
   if (!PUBLIC_SESSION_LIST) return [];
   return Array.from(sessions)
     .filter(([, s]) => !s.guest && !s.guestAwaySince && !hostAwayExpired(s))   // a seat kept for a guest is not free
+    .filter(([, s]) => s.kind !== "saved")       // two saved people's room is theirs: never listed
     /* `open` lets the lobby show which rooms can be entered without a PIN, and
        skip the PIN dialog for them. It gives nothing away: the server answers
        the same question for anyone who tries the door. */
@@ -656,8 +666,9 @@ function isCreateKey(key) {
 /** A create sent again for a room this server already made for it: the same
     room, answered as the first create would have been — and a guest who
     arrived while the host was away introduced now, as when a host takes its
-    room back (reclaim-session). */
-function adoptRoom(ws, sessionId, session) {
+    room back (reclaim-session). `restart`: the guest was in a chat with an
+    earlier copy of this host, which is over; it starts again with this one. */
+function adoptRoom(ws, sessionId, session, { restart = false } = {}) {
   if (session.host !== ws) cleanupClient(ws);    // one room per socket
   session.host = ws;
   session.hostAwaySince = 0;
@@ -666,7 +677,7 @@ function adoptRoom(ws, sessionId, session) {
   const { pin, token, hostKey, open, kind } = session;
   ws.send(JSON.stringify({ type: "session-created", sessionId, pin, token, hostKey, open, kind }));
   if (session.guest?.readyState === WebSocket.OPEN) {
-    session.guest.send(JSON.stringify({ type: "host-back", sessionId }));
+    session.guest.send(JSON.stringify({ type: "host-back", sessionId, ...(restart ? { restart: true } : {}) }));
     ws.send(JSON.stringify({ type: "guest-joined", sessionId }));
     session.paired = true;
   }
@@ -825,7 +836,10 @@ wss.on("connection", (ws, req) => {
 
       /* ── Create session ─────────────────────── */
       case "create-session": {
-        if (!isValidSessionId(data.sessionId)) {
+        /* A saved person's room's name is not one to make a room under: that
+           room is made only by meeting (meet-session), never listed, never
+           with a PIN. */
+        if (!isValidSessionId(data.sessionId) || isSavedRoomId(data.sessionId)) {
           ws.send(JSON.stringify({ type: "error", code: "invalid-name", message: "Invalid session name" }));
           break;
         }
@@ -895,7 +909,9 @@ wss.on("connection", (ws, req) => {
           if (away && hostAwayExpired(away)) dropSession(data.sessionId, away);
         }
         const session = sessions.get(data.sessionId);
-        if (!session) {
+        /* A saved person's room is entered only by meeting there, and only
+           the two who saved each other can name it: to a join, it is not here. */
+        if (!session || session.kind === "saved") {
           console.log(`Session lookup failed from ${ipLogId(ip)}`);
           ws.send(JSON.stringify({
             type: "pin-error",
@@ -1055,6 +1071,100 @@ wss.on("connection", (ws, req) => {
         }
         broadcastSessionList();
         console.log(`Session ${sessionLogId(data.sessionId)} guest joined from ${ipLogId(ip)}`);
+        break;
+      }
+
+      /* ── Meeting a saved person ─────────────────
+         Two people who saved each other meet in a room named by a hash of a
+         secret only their two devices hold (see "Saved people" in the
+         README). Either may come first, so one message does both: the first
+         makes the room and waits in it, the second joins — two taps at once
+         cannot both make it. Never listed, no PIN, no token, no link: the
+         name is the way in, and only those two devices can work it out. The
+         secret itself is then proven between them, so even a server that took
+         the seat could not read or join the chat.
+
+         Each device says which side of the pair it is ("a" or "b"). The same
+         side again — another tab, a reload, a page the phone closed — is a
+         newer copy, and takes that side's seat, as a link opened again does;
+         the copy left behind is told (seat-taken). */
+      case "meet-session": {
+        const sessionId = data.sessionId;
+        const side = data.side;
+        if (!isSavedRoomId(sessionId) || (side !== "a" && side !== "b")) {
+          ws.send(JSON.stringify({ type: "error", code: "invalid-name", message: "Invalid session name" }));
+          break;
+        }
+        {
+          const found = sessions.get(sessionId);
+          if (found && hostAwayExpired(found)) dropSession(sessionId, found);
+        }
+        const room = sessions.get(sessionId);
+
+        /* First here: make the room and wait in it. */
+        if (!room) {
+          if (!slidingAllow(createSessionHits, clientIp, CREATE_SESSION_MAX, CREATE_SESSION_WINDOW_MS)) {
+            ws.send(JSON.stringify({ type: "error", code: "too-many-rooms", message: "Too many rooms created from this network. Try again later." }));
+            break;
+          }
+          cleanupClient(ws);                   // one room per socket
+          const hostKey = generateToken();     // to take the room back if this link drops
+          sessions.set(sessionId, {
+            host: ws, guest: null, offer: null,
+            kind: "saved", open: false, pin: null, token: null, hostKey, hostSide: side,
+            createdAt: Date.now(), hostAwaySince: 0, createKey: null,
+            joinLockedUntil: 0, failedJoinWindowStart: 0, failedJoinCount: 0
+          });
+          ws.send(JSON.stringify({ type: "session-created", sessionId, pin: null, token: null, hostKey, open: false, kind: "saved" }));
+          console.log(`Session ${sessionLogId(sessionId)} made for a saved person`);
+          break;
+        }
+        if (room.kind !== "saved") {
+          ws.send(JSON.stringify({ type: "error", code: "name-taken", message: "Session name is already in use" }));
+          break;
+        }
+        /* A link already seated here does not change sides. */
+        if (room.guest === ws || (room.host === ws && side !== room.hostSide)) break;
+
+        /* The waiting side, again. Its newest copy hosts; one still open is
+           told it no longer does. If the chat the old copy was in is over —
+           the other side starts again with this one; if that side's own link
+           is down too, its seat goes, since the chat it would take back is
+           gone. */
+        if (side === room.hostSide) {
+          if (room.host && room.host !== ws && room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: "seat-taken", sessionId }));
+          }
+          const restart = room.paired === true && room.host !== ws;
+          if (restart && room.guest?.readyState !== WebSocket.OPEN) {
+            room.guest = null;
+            room.guestAwaySince = 0;
+            room.guestKey = null;
+            clearTimeout(room.guestAwayTimer);
+            room.paired = false;
+          }
+          adoptRoom(ws, sessionId, room, { restart });
+          break;
+        }
+
+        /* The other side: into the seat. A copy of it there before — another
+           tab, or one whose link dropped — gives the seat up to this one, and
+           the host starts again. */
+        const replaced = room.guest;
+        const hadGuest = Boolean(replaced) || room.guestAwaySince > 0;
+        cleanupClient(ws);                     // one room per socket
+        room.guest = ws;
+        room.guestAwaySince = 0;
+        clearTimeout(room.guestAwayTimer);
+        room.guestKey = generateToken();       // to take the seat back if this link drops
+        if (replaced && replaced.readyState === WebSocket.OPEN) {
+          replaced.send(JSON.stringify({ type: "seat-taken", sessionId }));
+        }
+        const hostHere = room.host?.readyState === WebSocket.OPEN;
+        room.paired = hostHere;
+        ws.send(JSON.stringify({ type: "session-joined", sessionId, hostAway: !hostHere, guestKey: room.guestKey }));
+        if (hostHere) room.host.send(JSON.stringify({ type: "guest-joined", sessionId, replaced: hadGuest }));
+        console.log(`Session ${sessionLogId(sessionId)} saved person met`);
         break;
       }
 

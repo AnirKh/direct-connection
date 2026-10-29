@@ -54,18 +54,29 @@ test("each of the server's room refusals has words, in both languages", () => {
 
 const ERROR_CASE = between('    case "error": {', '    case "pin-error": {');
 
-function refusal(data, { autoJoin = false, lang = "mn" } = {}) {
-  const log = { toasts: [], status: [] };
+function refusal(data, { autoJoin = false, lang = "mn", meeting = false } = {}) {
+  const log = { toasts: [], status: [], ended: 0 };
   new Function("G", "t", "console", "document", "lobbyStatus", "createInfo", "showToast", "autoJoinSettled",
-    "setLobbyButtons", "setCreateButtons", "settlePinJoin", "start", `
+    "setLobbyButtons", "setCreateButtons", "settlePinJoin", "endMeeting", "start", `
     let _isAutoJoin = start.autoJoin, isConnecting = true, pendingCreate = {};
+    let pendingMeet = start.meeting ? { type: "meet-session" } : null;
     function deliver(data) { switch (data.type) {\n${ERROR_CASE}\n} }
     deliver(start.data);`
   )(G, k => I18N[lang][k], { error() {} }, { createElement: () => ({ style: {}, textContent: "" }) },
     { replaceChildren: el => log.status.push(el.textContent) }, {}, m => log.toasts.push(m), () => {},
-    () => {}, () => {}, () => {}, { autoJoin, data });
+    () => {}, () => {}, () => {}, () => { log.ended++; }, { autoJoin, data, meeting });
   return log;
 }
+
+test("a tap on a saved person that the server refuses ends the wait, and says why in a toast — on an invite page too", () => {
+  for (const autoJoin of [false, true]) {
+    const log = refusal({ type: "error", code: "too-many-rooms", message: "x" }, { meeting: true, autoJoin });
+    assert.equal(log.ended, 1, "the person's row is a name to tap again");
+    assert.deepEqual(log.toasts, [I18N.mn.tooManyRooms]);
+    assert.deepEqual(log.status, [], "not the invite's status line: this was no invite");
+  }
+  assert.equal(refusal({ type: "error", code: "name-taken", message: "x" }).ended, 0, "and only a tap on a person");
+});
 
 test("a room name already taken is said in Mongolian — it was shown in the server's English", () => {
   assert.deepEqual(refusal({ type: "error", code: "name-taken", message: "Session name is already in use" }).toasts,

@@ -1209,6 +1209,101 @@
   }
 
   /* ══════════════════════════════════════════
+     Saved people
+  ══════════════════════════════════════════ */
+
+  /** A saved person's secret: 32 random bytes in base64url (makeRoomSecret). */
+  const SAVED_SECRET = /^[A-Za-z0-9_-]{43}$/;
+  /** The room two saved people meet in: "~" and a SHA-256 in base64url
+      (savedRoomName in protocol.js). */
+  const SAVED_ROOM = /^~[A-Za-z0-9_-]{43}$/;
+  const PERSON_NAME_MAX = 40;
+  const SAVED_PEOPLE_MAX = 50;
+
+  /**
+   * A name for a saved person, as typed: control characters and the marks
+   * that turn text round taken out, runs of spaces made one, the ends trimmed,
+   * and no more than PERSON_NAME_MAX characters — counted as characters, so
+   * an emoji is never cut in half. Nothing left is no name. The name is this
+   * device's alone; nothing the other side sends goes into it.
+   */
+  function personName(raw) {
+    if (typeof raw !== "string") return null;
+    const clean = raw.replace(/[\u0000-\u001f\u007f-\u009f\u200b\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, "")
+                     .replace(/\s+/g, " ").trim();
+    return Array.from(clean).slice(0, PERSON_NAME_MAX).join("").trim() || null;
+  }
+
+  /**
+   * The people saved on this device, read back from storage. Each is a key to
+   * a room, so they are checked like anything else that arrives: only
+   * well-formed entries, each secret and room once, at most SAVED_PEOPLE_MAX.
+   * Anything else is left out rather than half-believed.
+   *
+   * @returns {{name: string, secret: string, room: string, side: "a"|"b", savedAt: number}[]}
+   */
+  function savedPeople(stored) {
+    const list = stored && typeof stored === "object" && stored.v === 1 && Array.isArray(stored.people)
+      ? stored.people : [];
+    const out = [];
+    const seen = new Set();
+    for (const p of list) {
+      if (!p || typeof p !== "object") continue;
+      const name = personName(p.name);
+      if (!name) continue;
+      if (typeof p.secret !== "string" || !SAVED_SECRET.test(p.secret)) continue;
+      if (typeof p.room !== "string" || !SAVED_ROOM.test(p.room)) continue;
+      if (p.side !== "a" && p.side !== "b") continue;
+      if (seen.has(p.secret) || seen.has(p.room)) continue;
+      seen.add(p.secret);
+      seen.add(p.room);
+      out.push({ name, secret: p.secret, room: p.room, side: p.side, savedAt: Number.isFinite(p.savedAt) ? p.savedAt : 0 });
+      if (out.length === SAVED_PEOPLE_MAX) break;
+    }
+    return out;
+  }
+
+  /**
+   * May this chat offer to save the person in it? Only once nobody can be in
+   * the middle — the shield green, by an invite link, a shared word or the
+   * code compared. The secret that saves them goes over this chat to whoever
+   * is at the other end of it: a middleman in an amber chat would be handed the
+   * key to every chat after. Not in a saved person's own room: they are saved.
+   *
+   * @param {{ready: boolean, secure: boolean, verified: boolean, savedRoom: boolean}} o
+   */
+  function mayOfferSave(o) {
+    return shieldState(o) === "ok" && o.savedRoom !== true;
+  }
+
+  /** An offer to save each other, as it arrived: believed only with a secret
+      of the shape this app makes. The other side chose it, and nothing else
+      of the offer is used. */
+  function saveOfferValid(data) {
+    return Boolean(data) && typeof data.secret === "string" && SAVED_SECRET.test(data.secret);
+  }
+
+  /**
+   * Both pressed Save at once, and the two offers crossed. Both sides keep the
+   * one with the greater secret, so both save the same one: true when theirs
+   * is it, and this side answers it with the name it already gave them.
+   */
+  function keepTheirOffer(mine, theirs) {
+    return typeof mine === "string" && typeof theirs === "string" && theirs > mine;
+  }
+
+  /**
+   * May the host take a key agreed with no secret? In every other room the
+   * host works out two keys, with the invite link's secret and without, since
+   * a guest may have come in by PIN or from the list. A saved person's room
+   * has neither: the secret is the only way in, and a key without it is
+   * someone else — the server, or whoever it told the room's name.
+   */
+  function mayUsePlainKey(roomKind) {
+    return roomKind !== "saved";
+  }
+
+  /* ══════════════════════════════════════════
      The server's refusals, in the user's language
   ══════════════════════════════════════════ */
 
@@ -1315,6 +1410,8 @@
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, splitLinks,
     REACTIONS, reactionKey, reactionValid, nextReaction, reactionBadge,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
+    SAVED_SECRET, SAVED_ROOM, PERSON_NAME_MAX, SAVED_PEOPLE_MAX,
+    personName, savedPeople, mayOfferSave, saveOfferValid, keepTheirOffer, mayUsePlainKey,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,
