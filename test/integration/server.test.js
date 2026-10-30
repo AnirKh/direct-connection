@@ -10,8 +10,8 @@
 
 const test   = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
 const path   = require("node:path");
+const { startServer, waitForServer } = require("./serve.js");
 const http   = require("node:http");
 const WebSocket = require("ws");
 
@@ -63,15 +63,9 @@ async function client() {
 }
 
 test.before(async () => {
-  server = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
-    env: { ...process.env, PORT: String(PORT), HEARTBEAT_MS: "1000", HOST_AWAY_MS: "1500" },
-    stdio: "ignore"
-  });
+  server = startServer({ PORT: String(PORT), HEARTBEAT_MS: "1000", HOST_AWAY_MS: "1500" });
   // wait for the port to accept connections
-  for (let i = 0; i < 60; i++) {
-    try { (await connect()).close(); return; } catch (_) { await sleep(100); }
-  }
-  throw new Error("server did not start");
+  await waitForServer(server, async () => { (await connect()).close(); return true; });
 });
 
 test.after(() => {

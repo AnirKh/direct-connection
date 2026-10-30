@@ -8,14 +8,12 @@
 
 const test   = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
-const path   = require("node:path");
 const http   = require("node:http");
+const { startServer, waitForServer } = require("./serve.js");
 const os     = require("node:os");
 const WebSocket = require("ws");
 
 const PORT  = 3197;
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 let server;
 
 function get(urlPath, host = "127.0.0.1") {
@@ -29,15 +27,8 @@ function get(urlPath, host = "127.0.0.1") {
 }
 
 test.before(async () => {
-  server = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
-    env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", BASE_PATH: "/dc", NODE_ENV: "production" },
-    stdio: "ignore"
-  });
-  for (let i = 0; i < 60; i++) {
-    if ((await get("/api/ping")).status === 200) return;
-    await sleep(100);
-  }
-  throw new Error("server did not start");
+  server = startServer({ PORT: String(PORT), HOST: "127.0.0.1", BASE_PATH: "/dc", NODE_ENV: "production" });
+  await waitForServer(server, async () => (await get("/api/ping")).status === 200);
 });
 
 test.after(() => { if (server) server.kill(); });

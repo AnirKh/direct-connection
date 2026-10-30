@@ -8,8 +8,8 @@
 
 const test   = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
 const path   = require("node:path");
+const serve  = require("./serve.js");
 const http   = require("node:http");
 const fs     = require("node:fs");
 const os     = require("node:os");
@@ -28,16 +28,10 @@ const pushed = [];
 const rogueGot = [];          // answers like a push service, but is not one: never to be sent to
 
 function startServer() {
-  server = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
-    env: { ...process.env, PORT: String(PORT), MAILBOX_DIR: DIR, KNOCK_PUBLIC_KEY: KEYS.publicKey, KNOCK_PRIVATE_KEY: KEYS.privateKey, KNOCK_TEST_ORIGIN: pushOrigin },
-    stdio: "ignore"
-  });
+  server = serve.startServer({ PORT: String(PORT), MAILBOX_DIR: DIR, KNOCK_PUBLIC_KEY: KEYS.publicKey, KNOCK_PRIVATE_KEY: KEYS.privateKey, KNOCK_TEST_ORIGIN: pushOrigin });
 }
-async function waitForServer() {
-  for (let i = 0; i < 60; i++) {
-    try { (await connect()).close(); return; } catch (_) { await sleep(100); }
-  }
-  throw new Error("server did not start");
+function waitForServer() {
+  return serve.waitForServer(server, async () => { (await connect()).close(); return true; });
 }
 
 let nextIp = 0;

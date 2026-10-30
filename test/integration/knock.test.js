@@ -8,9 +8,8 @@
 
 const test   = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
-const path   = require("node:path");
 const http   = require("node:http");
+const { startServer, waitForServer } = require("./serve.js");
 const crypto = require("node:crypto");
 const WebSocket = require("ws");
 const K = require("../../knock.js");
@@ -87,15 +86,9 @@ test.before(async () => {
   rogue = http.createServer((req, res) => { rogueReceived.push(req.url); res.statusCode = 201; res.end(); });
   await new Promise(r => rogue.listen(0, "127.0.0.1", r));
   rogueOrigin = `http://127.0.0.1:${rogue.address().port}`;
-  server = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
-    env: { ...process.env, PORT: String(PORT), KNOCK_PUBLIC_KEY: KEYS.publicKey, KNOCK_PRIVATE_KEY: KEYS.privateKey,
-           KNOCK_SUBJECT: "mailto:test@example.com", KNOCK_TEST_ORIGIN: pushOrigin },
-    stdio: "ignore"
-  });
-  for (let i = 0; i < 60; i++) {
-    try { (await connect()).close(); return; } catch (_) { await sleep(100); }
-  }
-  throw new Error("server did not start");
+  server = startServer({ PORT: String(PORT), KNOCK_PUBLIC_KEY: KEYS.publicKey, KNOCK_PRIVATE_KEY: KEYS.privateKey,
+                         KNOCK_SUBJECT: "mailto:test@example.com", KNOCK_TEST_ORIGIN: pushOrigin });
+  await waitForServer(server, async () => { (await connect()).close(); return true; });
 });
 
 test.after(() => {
