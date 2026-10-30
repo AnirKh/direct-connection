@@ -34,7 +34,7 @@ const I18N = {
     aboutLabel:      "Энэ хуудасны тухай",
     aboutTitle:      "Шууд холбоос",
     authorLabel:     "Зохиогчийн тухай",
-    authorAbout:     "Хүмүүс бие биетэйгээ гуравдагч этгээдгүйгээр шууд, нууцлалтай ярилцаж болохоор энэ аппыг бүтээлээ. Надтай холбогдох бол эндээс холбогдоорой.",
+    authorAbout:     "Хүмүүс хоорондоо хялбар, чөлөөтэй харилцах боломжийг бүрдүүлэхийн тулд энэхүү аппыг бүтээлээ. Надтай холбогдохыг хүсвэл эндээс холбогдоорой.",
     aboutDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
     // Lobby
     lobbyTitle:      "Шууд холбогдох хэсэг",
@@ -353,7 +353,7 @@ const I18N = {
     aboutLabel:      "About this page",
     aboutTitle:      "Direct Connection",
     authorLabel:     "About the author",
-    authorAbout:     "I built this app so people can talk to each other directly and privately, with no third party in between. To reach me, connect here.",
+    authorAbout:     "I built this app to make it easier for people to connect and communicate. If you'd like to get in touch with me, you can reach me here.",
     aboutDesc:       "This link was created to communicate without sharing your information through any third party.",
     lobbyTitle:      "Direct Connection",
     tabRooms:        "Rooms",
