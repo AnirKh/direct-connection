@@ -135,7 +135,12 @@ function knockKeysFromEnv(env) {
 function makeKnockKeys() {
   const ecdh = crypto.createECDH("prime256v1");
   ecdh.generateKeys();
-  return { publicKey: b64u(ecdh.getPublicKey()), privateKey: b64u(ecdh.getPrivateKey()) };
+  /* Padded to its 32 bytes: node drops a private key's leading zero bytes —
+     about one key in 250 — and knockKeysFromEnv rightly takes only 32, so
+     such a pair turned knocks off without a word. Found as a test of
+     tools/knock-keys.js that failed now and then. */
+  const priv = ecdh.getPrivateKey();
+  return { publicKey: b64u(ecdh.getPublicKey()), privateKey: b64u(Buffer.concat([Buffer.alloc(32 - priv.length), priv])) };
 }
 
 /**

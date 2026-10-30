@@ -112,6 +112,17 @@ test("the keys come from the server's environment, as a pair, or there are no kn
   }
 });
 
+test("every pair made is one the server takes — a private key with leading zero bytes too", () => {
+  /* Node drops a private key's leading zero bytes, about one in 250; such a
+     pair used to be turned away, and knocks were off. Three thousand makes
+     the chance of meeting none of them about one in a hundred thousand. */
+  for (let i = 0; i < 3000; i++) {
+    const k = K.makeKnockKeys();
+    assert.equal(Buffer.from(k.privateKey, "base64url").length, 32);
+    assert.ok(K.knockKeysFromEnv({ KNOCK_PUBLIC_KEY: k.publicKey, KNOCK_PRIVATE_KEY: k.privateKey }), `pair ${i} turned away`);
+  }
+});
+
 test("node tools/knock-keys.js prints a working pair, and nothing else", () => {
   const out = require("node:child_process").execFileSync(process.execPath, [path.join(__dirname, "..", "tools", "knock-keys.js")]).toString();
   const lines = out.trim().split(/\r?\n/);
