@@ -1344,7 +1344,7 @@ test("the conversation: opened by the envelope, named, read — theirs left, our
   envelope(p.rows()[0]).click();
   assert.ok(!p.els.mailOverlay.classList.contains("hidden"));
   assert.equal(p.els.mailTitle.textContent, "Anu");
-  assert.equal(p.els.mailHint.textContent, I18N.mn.mailHint("Anu"));
+  assert.equal(p.els.mailHint.textContent, I18N.mn.mailHint, "said plainly, with no name worked into it");
   const rows = p.els.mailList.children;
   assert.deepEqual(rows.map(r => r.className), ["mail-item peer", "mail-item me"]);
   assert.equal(rows[0].querySelector(".mail-bubble").textContent, "hello there");

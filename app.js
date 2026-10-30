@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610300558-ae63e7cf";
+const APP_BUILD = "202610300642-c9843e1d";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -2808,7 +2808,7 @@ async function takeMail(data) {
 function openThread(p) {
   mailOpenFor = p.room;
   mailTitle.textContent = p.name;
-  mailHint.textContent = I18N[LANG].mailHint(p.name);
+  mailHint.textContent = t("mailHint");
   mailClearBtn.classList.remove("asking");
   mailClearBtn.textContent = t("mailClear");
   threadFor(p.room).read = Date.now();

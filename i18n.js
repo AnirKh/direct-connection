@@ -329,7 +329,7 @@ const I18N = {
     // Waiting messages — written while they are away
     personMail:      "Мессеж",
     mailUnreadCount: (n) => `${n} шинэ мессеж`,
-    mailHint:        (n) => `Түгжээтэй — зөвхөн та хоёр уншина. ${n} аппаа нээтэл таны сервер дээр хүлээнэ (7 хоног хүртэл).`,
+    mailHint:        "Хувийн офлайн мессеж: зөвхөн та болон энэ хүн уншина. Нээгээгүй мессеж 7 хоногийн дараа устгагдана.",
     mailPlaceholder: "Мессеж…",
     mailSend:        "Илгээх",
     mailClose:       "Хаах",
@@ -633,7 +633,7 @@ const I18N = {
     // Waiting messages — written while they are away
     personMail:      "Messages",
     mailUnreadCount: (n) => `${n} new message${n === 1 ? "" : "s"}`,
-    mailHint:        (n) => `Locked — only you two can read it. It waits on your server until ${n} opens the app (up to 7 days).`,
+    mailHint:        "Private offline messages: only you and this person can read them. Unopened messages are deleted after 7 days.",
     mailPlaceholder: "Message…",
     mailSend:        "Send",
     mailClose:       "Close",
