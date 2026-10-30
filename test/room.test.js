@@ -198,8 +198,8 @@ test("the link dropping holds a waiting room for taking back; the link returning
   assert.match(onclose, /if \(hostKey\) awaitReclaim\(\);\s*\n\s*else loseWaitingRoom\(\);/,
     "kept for taking back — or, from a server that gave no host key, said to be lost as before");
   const onopen = between("  ws.onopen    = () => {", "  ws.onclose");
-  assert.match(onopen, /sendPendingCreate\(\);\s*\n\s*sendPendingMeet\(\);\s*\n\s*restoreHostRoom\(\);\s*\n\s*sendReclaim\(\);/,
-    "and a tap on a saved person, the same way");
+  assert.match(onopen, /sendPendingCreate\(\);\s*\n\s*sendPendingMeet\(\);\s*\n\s*mailAtConnect\(\);\s*\n\s*restoreHostRoom\(\);\s*\n\s*sendReclaim\(\);/,
+    "and a tap on a saved person, the same way — and messages written or waiting");
 });
 
 test("an answer — the room made, or refused — ends the wait", () => {

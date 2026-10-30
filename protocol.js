@@ -277,6 +277,62 @@
     return true;
   }
 
+  /* ══════════════════════════════════════════
+     Waiting messages
+     ──────────────────────────────────────────
+     A message to a saved person who is not there waits on the server until
+     they open the app. The two devices seal it with a key of their own,
+     worked out from the secret they share — which the server keeping it has
+     never had — and bind it, like everything sealed, to where it belongs:
+     which pair's mailbox, who wrote it, to whom, its id and when. Opened as
+     anything else — handed back to its writer, moved to another mailbox,
+     dated otherwise — it does not open at all.
+  ══════════════════════════════════════════ */
+
+  const MAILBOX_INFO_LABEL = "direct-connection/mailbox/v1";
+
+  /** The pair's key for waiting messages, from their shared secret. */
+  async function mailboxKey(secret) {
+    const ikm = await subtle.importKey("raw", utf8.encode(secret), "HKDF", false, ["deriveKey"]);
+    return subtle.deriveKey(
+      { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: utf8.encode(MAILBOX_INFO_LABEL) },
+      ikm, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+
+  /** What a waiting message is bound to. */
+  function mailAad(box, from, to, id, at) {
+    return sealData(["dc-mail-1", box, from, to, id, at]);
+  }
+
+  /** A waiting message's id: 16 random bytes. */
+  function makeMailId() {
+    return b64urlBytes(globalThis.crypto.getRandomValues(new Uint8Array(16)));
+  }
+
+  function unb64url(text) {
+    const b64 = String(text).replace(/-/g, "+").replace(/_/g, "/");
+    return Uint8Array.from(atob(b64 + "=".repeat((4 - b64.length % 4) % 4)), c => c.charCodeAt(0));
+  }
+
+  /** Seals `text` for the other side of the pair: { iv, ct }, both base64url. */
+  async function sealMail(key, { box, from, to, id, at, text }) {
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const ct = await subtle.encrypt({ name: "AES-GCM", iv, additionalData: mailAad(box, from, to, id, at) },
+      key, utf8.encode(JSON.stringify({ text })));
+    return { iv: b64urlBytes(iv), ct: b64urlBytes(new Uint8Array(ct)) };
+  }
+
+  /** The text of a waiting message, or null: not sealed with this key, or
+      not for here, from there, with this id and time — or not a text. */
+  async function openMail(key, { box, from, to, id, at, iv, ct }) {
+    try {
+      const plain = await subtle.decrypt({ name: "AES-GCM", iv: unb64url(iv), additionalData: mailAad(box, from, to, id, at) },
+        key, unb64url(ct));
+      const body = JSON.parse(new TextDecoder().decode(plain));
+      return body && typeof body.text === "string" ? body.text : null;
+    } catch (_) { return null; }
+  }
+
   /** UUID v4 shape, used as the transfer id. */
   function makeTransferId() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
@@ -292,6 +348,7 @@
     deriveSharedKey,
     compareBytes, makeSharedVerificationCode, normalizeVerifyCode,
     packChunk, unpackChunk, splitChunkBody, makeTransferId,
-    SEAL_ROLES, SEAL_WINDOW, messageAad, chunkAad, confirmAad, sealWindow, takeSeal
+    SEAL_ROLES, SEAL_WINDOW, messageAad, chunkAad, confirmAad, sealWindow, takeSeal,
+    mailboxKey, mailAad, makeMailId, sealMail, openMail
   };
 });

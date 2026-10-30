@@ -528,6 +528,52 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* They will be alerted when this device knocks: a small bell by the name. */
 .person-knock { font-size: 13px; color: var(--accent-text); margin-left: 6px; vertical-align: -1px; }
 
+/* Messages waiting for them, or from them: the envelope, with how many are
+   new from them. */
+.person-tool.mail { position: relative; }
+.mail-count {
+  position: absolute; top: 1px; right: 0;
+  min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  background: var(--danger); color: #fff;
+  font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center;
+}
+.person-tool.mail.has-new { color: var(--accent-text); }
+
+/* The conversation kept for a saved person who is away. */
+.modal.mail-modal {
+  max-width: 520px; padding: 16px 16px 14px; text-align: left;
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: calc(var(--app-height) - 32px - var(--safe-top) - var(--safe-bottom));
+}
+.mail-head { display: flex; align-items: center; gap: 6px; }
+.mail-head h2 { flex: 1; min-width: 0; margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mail-head-btn {
+  width: auto; margin: 0; padding: 6px 12px; min-height: 34px; font-size: 12.5px;
+  background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 8px;
+}
+.mail-head-btn.asking { color: var(--danger-text); border-color: rgba(240,138,141,0.5); }
+.modal .mail-hint { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.mail-list {
+  flex: 1; min-height: 120px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--sunken); border-radius: 12px; padding: 12px;
+}
+.mail-empty { margin: auto; color: var(--muted); font-size: 13px; }
+.mail-item { display: flex; flex-direction: column; max-width: 85%; }
+.mail-item.me { align-self: flex-end; align-items: flex-end; }
+.mail-item.peer { align-self: flex-start; align-items: flex-start; }
+.mail-bubble {
+  padding: 8px 12px; border-radius: 14px; font-size: 14px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--input-bg); color: var(--text);
+}
+.mail-item.me .mail-bubble { background: var(--accent); color: var(--on-accent); }
+.mail-bubble a { color: inherit; text-decoration: underline; }
+.mail-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.mail-meta.refused { color: var(--danger-text); }
+.mail-compose { display: flex; gap: 8px; align-items: flex-end; }
+.mail-compose textarea { flex: 1; min-height: 44px; max-height: 140px; resize: none; margin: 0; border-radius: 12px; }
+
 /* "Forget Anu?", in the row itself. */
 .person-item.asking { padding: 8px 8px 8px 14px; }
 .person-ask { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.4; }

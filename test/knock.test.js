@@ -235,15 +235,16 @@ function worker({ kept = null, i18n = true, pages = [] } = {}) {
   new Function("self", "indexedDB", "importScripts", "I18N", read("sw.js"))(self, indexedDB, importScripts, i18n ? I18N : undefined);
   const fire = async (type, event) => { let wait; listeners[type]({ ...event, waitUntil: p => { wait = p; } }); await wait; };
   const push = data => fire("push", { data: data === undefined ? null : { json: () => (typeof data === "string" ? JSON.parse(data) : data) } });
-  const click = room => fire("notificationclick", { notification: { data: { room }, close() { log.closedNote = true; } } });
-  return { log, push, click, listeners };
+  const clickWith = data => fire("notificationclick", { notification: { data, close() { log.closedNote = true; } } });
+  const click = room => clickWith({ room });
+  return { log, push, click, clickWith, listeners };
 }
 
 test("a knock from someone saved is shown by the name this device gave them, in its language", async () => {
   const w = worker({ kept: { lang: "en", names: [[ROOM, "Anu"]] } });
   await w.push({ t: "knock", room: ROOM });
   assert.deepEqual(w.log.shown, [{ title: I18N.en.knockTitle("Anu"),
-    options: { body: I18N.en.knockBody, tag: ROOM, renotify: true, icon: "icons/icon-192.png", data: { room: ROOM } } }]);
+    options: { body: I18N.en.knockBody, tag: ROOM, renotify: true, icon: "icons/icon-192.png", data: { room: ROOM, kind: "knock" } } }]);
   const mn = worker({ kept: { lang: "mn", names: [[ROOM, "Ану"]] } });
   await mn.push({ t: "knock", room: ROOM });
   assert.equal(mn.log.shown[0].title, I18N.mn.knockTitle("Ану"));
@@ -263,9 +264,35 @@ test("every push is shown — without a name when there is none to give, or noth
     else await w.push(data);
     assert.equal(w.log.shown.length, 1, JSON.stringify(data));
     assert.match(w.log.shown[0].title, /saved|Хадгалсан/);
-    assert.deepEqual(w.log.shown[0].options.data, { room: null }, "and opens to no one in particular");
+    assert.deepEqual(w.log.shown[0].options.data, { room: null, kind: "knock" }, "and opens to no one in particular");
     assert.equal(w.log.shown[0].options.tag, "knock");
   }
+});
+
+test("a message waiting: shown by name as a message, not a knock — its own tag, opening their messages", async () => {
+  const w = worker({ kept: { lang: "en", names: [[ROOM, "Anu"]] } });
+  await w.push({ t: "mail", room: ROOM });
+  assert.deepEqual(w.log.shown, [{ title: I18N.en.mailNoticeTitle("Anu"),
+    options: { body: I18N.en.mailNoticeBody, tag: `mail:${ROOM}`, renotify: true, icon: "icons/icon-192.png", data: { room: ROOM, kind: "mail" } } }]);
+  const unnamed = worker({ kept: { lang: "mn", names: [] } });
+  await unnamed.push({ t: "mail", room: ROOM });
+  assert.equal(unnamed.log.shown[0].title, I18N.mn.mailNoticeSomeone);
+  assert.equal(unnamed.log.shown[0].options.tag, "mail");
+  const english = worker({ kept: { lang: "mn", names: [[ROOM, "Anu"]] }, i18n: false });
+  await english.push({ t: "mail", room: ROOM });
+  assert.equal(english.log.shown[0].title, "Anu sent you a message", "English without the words file, as for a knock");
+});
+
+test("a message waiting, tapped: an open page is told it is a message; a closed one opens at the messages", async () => {
+  const open = worker({ pages: ["https://anirkh.github.io/direct-connection/"] });
+  await open.clickWith({ room: ROOM, kind: "mail" });
+  assert.deepEqual(open.log.posted, [{ type: "mail", room: ROOM }]);
+  const closed = worker();
+  await closed.clickWith({ room: ROOM, kind: "mail" });
+  assert.deepEqual(closed.log.opened, [`https://anirkh.github.io/direct-connection/#mail=${ROOM}`]);
+  const odd = worker();
+  await odd.clickWith({ room: ROOM, kind: "<script>" });
+  assert.deepEqual(odd.log.opened, [`https://anirkh.github.io/direct-connection/#knock=${ROOM}`], "an unknown kind is a knock");
 });
 
 test("without the words file, English stands in", async () => {

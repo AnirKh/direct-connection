@@ -1307,6 +1307,59 @@
   }
 
   /* ══════════════════════════════════════════
+     Waiting messages
+  ══════════════════════════════════════════ */
+
+  const MAIL_THREAD_MAX = 200;    // messages kept per person on this device
+  const MAIL_SEEN_MAX   = 500;    // ids remembered per person, so none is shown twice
+  const MAIL_ID = /^[A-Za-z0-9_-]{22}$/;
+  const MAIL_STATES = ["sending", "kept", "refused"];
+
+  /** The other side of a saved pair. */
+  function otherSide(side) {
+    return side === "a" ? "b" : side === "b" ? "a" : null;
+  }
+
+  /**
+   * The conversations kept on this device, read back from storage — each
+   * person's messages (theirs and ours) and when they were last read, and the
+   * ids already taken, so a message delivered again is not shown again. Only
+   * well-formed entries are believed, at most MAIL_THREAD_MAX a person.
+   *
+   * @returns {{v: 1, threads: object, seen: object}}
+   */
+  function mailStore(stored) {
+    const out = { v: 1, threads: {}, seen: {} };
+    if (!stored || typeof stored !== "object" || stored.v !== 1) return out;
+    for (const [room, thread] of Object.entries(stored.threads || {})) {
+      if (!SAVED_ROOM.test(room) || !thread || !Array.isArray(thread.items)) continue;
+      const items = thread.items.filter(m => m && typeof m === "object" && MAIL_ID.test(m.id) && Number.isSafeInteger(m.at) &&
+        typeof m.mine === "boolean" && typeof m.text === "string" && messageFits(m.text) &&
+        (m.mine ? MAIL_STATES.includes(m.state) : m.state === undefined));
+      out.threads[room] = { read: Number.isSafeInteger(thread.read) ? thread.read : 0,
+                            items: items.sort((x, y) => x.at - y.at).slice(-MAIL_THREAD_MAX) };
+    }
+    for (const [room, ids] of Object.entries(stored.seen || {})) {
+      if (SAVED_ROOM.test(room) && Array.isArray(ids)) out.seen[room] = ids.filter(id => typeof id === "string" && MAIL_ID.test(id)).slice(-MAIL_SEEN_MAX);
+    }
+    return out;
+  }
+
+  /** Their messages not yet read. */
+  function mailUnread(thread) {
+    if (!thread || !Array.isArray(thread.items)) return 0;
+    return thread.items.filter(m => !m.mine && m.at > (thread.read || 0)).length;
+  }
+
+  const MAIL_REFUSALS = Object.freeze({ "full": "mailBoxFull", "server-full": "mailServerFull", "too-many": "mailTooMany" });
+
+  /** Why the server would not keep a message, in our words: the key for it.
+      A code this page does not know is just "not sent". */
+  function mailRefusalKey(code) {
+    return typeof code === "string" && Object.prototype.hasOwnProperty.call(MAIL_REFUSALS, code) ? MAIL_REFUSALS[code] : "mailNotSent";
+  }
+
+  /* ══════════════════════════════════════════
      Knocks
   ══════════════════════════════════════════ */
 
@@ -1455,6 +1508,7 @@
     SAVED_SECRET, SAVED_ROOM, PERSON_NAME_MAX, SAVED_PEOPLE_MAX,
     personName, savedPeople, mayOfferSave, saveOfferValid, keepTheirOffer, mayUsePlainKey,
     knockAddressValid, knockState,
+    MAIL_THREAD_MAX, MAIL_SEEN_MAX, otherSide, mailStore, mailUnread, mailRefusalKey,
     inAppBrowser, inAppAdvice, safariUrl, androidIntentUrl,
     CLEAR_TYPES, mayRenderText, mayHandleFrame,
     mayDeliverRecording, mayStartRecording, mayKeepMicOpen,

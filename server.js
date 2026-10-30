@@ -52,6 +52,8 @@
                           proxy on the same machine (default: every address)
     BASE_PATH             A path the proxy in front passes on without taking it
                           off, e.g. /dc — taken off here (default: none)
+    MAILBOX_DIR           Where waiting messages are kept (default: systemd's
+                          STATE_DIRECTORY; without either, memory only)
     See deploy/pi/SETUP.md for running it on a Raspberry Pi.
 */
 
@@ -79,6 +81,18 @@ const KNOCK_KEYS = knockKeysFromEnv(process.env);
    real server — it lets knocks go to that one address besides the push
    services. */
 const KNOCK_TEST_ORIGIN = process.env.KNOCK_TEST_ORIGIN || null;
+
+/* Messages waiting for a saved person who is not there — sealed by the two
+   devices, kept and handed over here, never read. See mailbox.js. Kept in a
+   file in MAILBOX_DIR, or the directory systemd gives the service
+   (STATE_DIRECTORY, on the Pi), so a restart loses none; in memory only
+   without either. */
+const { createMailboxes } = require("./mailbox");
+const MAILBOX_DIR = process.env.MAILBOX_DIR || (process.env.STATE_DIRECTORY || "").split(":")[0] || null;
+const mail = createMailboxes({ file: MAILBOX_DIR ? path.join(MAILBOX_DIR, "mailbox.json") : null });
+setInterval(() => mail.sweep(), 60 * 60 * 1000).unref();
+/* Stopping — every update restarts the server — keeps what waits first. */
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => { mail.flush(); process.exit(0); });
 
 /* Every rate limit below keys on the client address, so it is only as strong
    as this is hard to forge. See clientip.js. */
@@ -684,6 +698,22 @@ const knockHits          = new Map();
 const KNOCK_WINDOW_MS    = 10 * 60 * 1000;
 const KNOCK_MAX          = 30;
 const KNOCK_ROOM_GAP_MS  = 20_000;     // one knock per room in this long
+const mailDropHits       = new Map();
+const MAIL_DROP_WINDOW_MS = 10 * 60 * 1000;
+const MAIL_DROP_MAX      = 60;
+const mailFetchHits      = new Map();
+const MAIL_FETCH_WINDOW_MS = 60_000;
+const MAIL_FETCH_MAX     = 30;
+const MAIL_KNOCK_GAP_MS  = 60_000;     // "a message waits" once a minute per mailbox
+const mailKnockedAt      = new Map();
+/* A page told a message waits asks for it at once. One that has not within
+   this long is not really there — a locked phone, a page gone whose link has
+   not yet been noticed closed — and its device is alerted instead. */
+const MAIL_ANSWER_MS     = 4000;
+const mailFetchedAt      = new Map();  // `${box}:${side}` → when last asked after
+/* The links that asked after a mailbox, told the moment a message arrives
+   for it: `${box}:${side}` → links. */
+const mailListeners      = new Map();
 
 /* joinAttempts and emailAttempts each have a sweep above; these two were
    missed, and without one they keep an entry per address seen since startup.
@@ -692,6 +722,10 @@ setInterval(() => {
   pruneExpired(listSessionsHits, LIST_SESSIONS_WINDOW_MS);
   pruneExpired(createSessionHits, CREATE_SESSION_WINDOW_MS);
   pruneExpired(knockHits, KNOCK_WINDOW_MS);
+  pruneExpired(mailDropHits, MAIL_DROP_WINDOW_MS);
+  pruneExpired(mailFetchHits, MAIL_FETCH_WINDOW_MS);
+  for (const [box, at] of mailKnockedAt) if (Date.now() - at > MAIL_KNOCK_GAP_MS) mailKnockedAt.delete(box);
+  for (const [key, at] of mailFetchedAt) if (Date.now() - at > 60_000) mailFetchedAt.delete(key);
 }, 60_000);
 
 function recordSessionJoinFailure(sessionId, session) {
@@ -868,7 +902,14 @@ wss.on("connection", (ws, req) => {
      moment a page left open finds out it is old. */
   if (CLIENT_BUILD) ws.send(JSON.stringify({ type: "hello", build: CLIENT_BUILD }));
 
-  ws.on("close", () => { console.log(`Client disconnected ${ipLogId(clientIp)}`); cleanupClient(ws, { dropped: true }); });
+  ws.on("close", () => {
+    console.log(`Client disconnected ${ipLogId(clientIp)}`);
+    cleanupClient(ws, { dropped: true });
+    for (const key of ws.mailKeys || []) {
+      const set = mailListeners.get(key);
+      if (set) { set.delete(ws); if (!set.size) mailListeners.delete(key); }
+    }
+  });
   ws.on("error", (e) => { console.error("WS error:", e); cleanupClient(ws, { dropped: true }); });
 
   /* Nothing catches what a "message" listener throws: it becomes an uncaught
@@ -1275,6 +1316,69 @@ wss.on("connection", (ws, req) => {
         break;
       }
 
+      /* ── Waiting messages ───────────────────────
+         A message for a saved person who is not there, sealed by the device
+         that wrote it (see mailbox.js and protocol.js, sealMail): kept here
+         until theirs asks, never read. A mailbox is the pair's room name and
+         the side it is for; knowing the name is the way in, as for meeting.
+         Kept once by its id, whoever sends it again. Then whoever is asking
+         after that mailbox right now is told at once (mail-waiting). If
+         nobody is — or nobody asks for it within MAIL_ANSWER_MS, so was not
+         really there — and the sender gave their knock address, their device
+         is told "a message waits", at most once a minute. */
+      case "mail-drop": {
+        const { box, to, id, at, iv, ct } = data;
+        const refuse = code => ws.send(JSON.stringify({ type: "mail-refused", id: typeof id === "string" ? id.slice(0, 32) : null, code }));
+        if (!slidingAllow(mailDropHits, clientIp, MAIL_DROP_MAX, MAIL_DROP_WINDOW_MS)) { refuse("too-many"); break; }
+        const result = mail.drop(box, to, { id, at, iv, ct });
+        if (result === "invalid" || result === "full" || result === "server-full") { refuse(result); break; }
+        ws.send(JSON.stringify({ type: "mail-dropped", id }));
+        if (result !== "new") break;                       // sent again: told already
+        const key = `${box}:${to}`;
+        const listening = [...(mailListeners.get(key) || [])].filter(l => l.readyState === WebSocket.OPEN && l !== ws);
+        for (const l of listening) l.send(JSON.stringify({ type: "mail-waiting", box }));
+        const knock = data.knock && typeof data.knock === "object" ? data.knock : null;
+        const alert = () => {
+          if (!knock || !KNOCK_KEYS || !isPushEndpoint(knock.endpoint, KNOCK_TEST_ORIGIN) || !pushKeysValid(knock.p256dh, knock.auth)) return;
+          if (Date.now() - (mailKnockedAt.get(key) || 0) < MAIL_KNOCK_GAP_MS || !slidingAllow(knockHits, clientIp, KNOCK_MAX, KNOCK_WINDOW_MS)) return;
+          mailKnockedAt.set(key, Date.now());
+          sendKnock({ to: { endpoint: knock.endpoint, p256dh: knock.p256dh, auth: knock.auth }, room: box, keys: KNOCK_KEYS, kind: "mail" })
+            .then(r => console.log(`Mail knock: ${r.status || "no answer"}`));
+        };
+        if (!listening.length) { alert(); break; }
+        const toldAt = Date.now();
+        const check = setTimeout(() => { if ((mailFetchedAt.get(key) || 0) < toldAt) alert(); }, MAIL_ANSWER_MS);
+        if (check.unref) check.unref();
+        break;
+      }
+
+      /* What waits for this device, in each of its mailboxes — and from now
+         on, word the moment more arrives, while this link is open. */
+      case "mail-fetch": {
+        if (!slidingAllow(mailFetchHits, clientIp, MAIL_FETCH_MAX, MAIL_FETCH_WINDOW_MS)) break;
+        const asked = Array.isArray(data.boxes) ? data.boxes.slice(0, 50) : [];
+        ws.mailKeys = ws.mailKeys || new Set();
+        for (const b of asked) {
+          if (!b || typeof b.box !== "string" || !SAVED_ROOM_PATTERN.test(b.box) || (b.side !== "a" && b.side !== "b")) continue;
+          const key = `${b.box}:${b.side}`;
+          if (!ws.mailKeys.has(key) && ws.mailKeys.size >= 50) continue;
+          ws.mailKeys.add(key);
+          if (!mailListeners.has(key)) mailListeners.set(key, new Set());
+          mailListeners.get(key).add(ws);
+          mailFetchedAt.set(key, Date.now());
+          const items = mail.take(b.box, b.side);
+          if (items.length) ws.send(JSON.stringify({ type: "mail", box: b.box, side: b.side, items }));
+        }
+        break;
+      }
+
+      /* The device has them: gone from here for good. */
+      case "mail-ack": {
+        if (typeof data.box !== "string" || !SAVED_ROOM_PATTERN.test(data.box) || (data.side !== "a" && data.side !== "b")) break;
+        mail.ack(data.box, data.side, Array.isArray(data.ids) ? data.ids.slice(0, 200) : []);
+        break;
+      }
+
       /* ── WebRTC signaling ───────────────────── */
       case "offer": {
         const session = sessions.get(data.sessionId);
@@ -1485,4 +1589,6 @@ server.listen(PORT, HOST, () => {
     console.log("   otherwise clients can forge their address and evade rate limits.)");
   }
   console.log(`Server running on ${HOST || "every address"}, port ${PORT}${BASE_PATH ? `, under ${BASE_PATH}` : ""}`);
+  const kept = mail.stats();
+  console.log(kept.file ? `Mailbox: kept in ${kept.file} (${kept.messages} waiting)` : "Mailbox: in memory only — lost on restart");
 });

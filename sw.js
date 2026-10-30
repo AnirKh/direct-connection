@@ -28,7 +28,10 @@ const ROOM = /^~[A-Za-z0-9_-]{43}$/;
 const FALLBACK = {
   knockTitle: name => `${name} wants to talk`,
   knockSomeone: "Someone you saved wants to talk",
-  knockBody: "Tap to connect."
+  knockBody: "Tap to connect.",
+  mailNoticeTitle: name => `${name} sent you a message`,
+  mailNoticeSomeone: "A message is waiting for you",
+  mailNoticeBody: "Tap to read."
 };
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -53,53 +56,61 @@ function keptForKnocks() {
   });
 }
 
-function wordsFor(lang) {
+/** The words for a kind of push: a knock, or a message waiting. */
+function wordsFor(lang, kind) {
   const table = typeof I18N === "object" && I18N ? I18N[lang === "en" ? "en" : "mn"] : null;
   const word = key => (table && table[key] !== undefined ? table[key] : FALLBACK[key]);
-  return { title: word("knockTitle"), someone: word("knockSomeone"), body: word("knockBody") };
+  return kind === "mail"
+    ? { title: word("mailNoticeTitle"), someone: word("mailNoticeSomeone"), body: word("mailNoticeBody") }
+    : { title: word("knockTitle"), someone: word("knockSomeone"), body: word("knockBody") };
 }
 
-/** The room a push is about, if it is a knock and names one properly. */
-function knockedRoom(data) {
+/** What a push says: a knock, or a message waiting — and which room, if it
+    names one properly. Anything else is shown as a knock from no one. */
+function pushed(data) {
   try {
     const message = data ? data.json() : null;
-    return message && message.t === "knock" && ROOM.test(message.room) ? message.room : null;
-  } catch (_) { return null; }
+    const kind = message && message.t === "mail" ? "mail" : "knock";
+    const room = message && (message.t === "knock" || message.t === "mail") && ROOM.test(message.room) ? message.room : null;
+    return { kind, room };
+  } catch (_) { return { kind: "knock", room: null }; }
 }
 
-/** Every push is shown — a browser requires it. A knock from someone this
+/** Every push is shown — a browser requires it. One from someone this
     device no longer has, or one it cannot read, says so without a name. */
-async function showKnock(room) {
+async function showPush({ kind, room }) {
   const kept = await keptForKnocks();
-  const words = wordsFor(kept && kept.lang);
+  const words = wordsFor(kept && kept.lang, kind);
   const names = new Map(kept && Array.isArray(kept.names) ? kept.names : []);
   const name = room && typeof names.get(room) === "string" ? names.get(room) : null;
   return self.registration.showNotification(name ? words.title(name) : words.someone, {
     body: words.body,
-    tag: name ? room : "knock",          // a second knock replaces the first
+    tag: name ? `${kind === "mail" ? "mail:" : ""}${room}` : kind,     // a second replaces the first
     renotify: true,
     icon: "icons/icon-192.png",
-    data: { room: name ? room : null }
+    data: { room: name ? room : null, kind }
   });
 }
 
-self.addEventListener("push", event => event.waitUntil(showKnock(knockedRoom(event.data))));
+self.addEventListener("push", event => event.waitUntil(showPush(pushed(event.data))));
 
-/** Tapped: to the app, and to them. An open page is brought forward and told
-    who knocked; otherwise a new one opens, naming them in its address. */
-async function openFor(room) {
+/** Tapped: to the app, and to them — their room for a knock, their messages
+    for a message. An open page is brought forward and told; otherwise a new
+    one opens, naming them in its address. */
+async function openFor(room, kind) {
   const pages = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const page = pages.find(p => p.url.startsWith(self.registration.scope));
   if (page) {
     try { await page.focus(); } catch (_) { /* brought forward or not, it is told */ }
-    if (room) page.postMessage({ type: "knock", room });
+    if (room) page.postMessage({ type: kind, room });
     return;
   }
-  await self.clients.openWindow(room ? `${self.registration.scope}#knock=${room}` : self.registration.scope);
+  await self.clients.openWindow(room ? `${self.registration.scope}#${kind}=${room}` : self.registration.scope);
 }
 
 self.addEventListener("notificationclick", event => {
   event.notification.close();
-  const room = event.notification.data && ROOM.test(event.notification.data.room || "") ? event.notification.data.room : null;
-  event.waitUntil(openFor(room));
+  const data = event.notification.data || {};
+  const room = ROOM.test(data.room || "") ? data.room : null;
+  event.waitUntil(openFor(room, data.kind === "mail" ? "mail" : "knock"));
 });

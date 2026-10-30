@@ -144,11 +144,12 @@ function makeKnockKeys() {
  * it should forget it. Never rejects: a knock that does not arrive is a knock
  * that does not arrive, and the room still waits.
  */
-function sendKnock({ to, room, keys, now = Date.now(), timeoutMs = 10_000 }) {
+function sendKnock({ to, room, keys, kind = "knock", now = Date.now(), timeoutMs = 10_000 }) {
   return new Promise(resolve => {
     let body, authorization;
     try {
-      body = encryptForPush(JSON.stringify({ t: "knock", room }), to);
+      /* "knock": they are waiting in the room; "mail": a message waits for them. */
+      body = encryptForPush(JSON.stringify({ t: kind === "mail" ? "mail" : "knock", room }), to);
       authorization = vapidAuthorization(to.endpoint, keys, now);
     } catch (_) { resolve({ ok: false, gone: false, status: 0 }); return; }
     const url = new URL(to.endpoint);
@@ -162,8 +163,9 @@ function sendKnock({ to, room, keys, now = Date.now(), timeoutMs = 10_000 }) {
         "Content-Length": body.length,
         "TTL": String(KNOCK_TTL_S),
         "Urgency": "high",
-        /* A second knock on the same room replaces one not yet delivered. */
-        "Topic": crypto.createHash("sha256").update(room).digest("base64url").slice(0, 32)
+        /* A second knock on the same room replaces one not yet delivered —
+           and a second "a message waits" the first. */
+        "Topic": crypto.createHash("sha256").update(`${kind === "mail" ? "mail:" : ""}${room}`).digest("base64url").slice(0, 32)
       }
     }, res => {
       res.resume();

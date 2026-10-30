@@ -165,7 +165,9 @@ const NAMES = ["G", "DC", "I18N", "LANG", "t", "localStorage", "window", "docume
   "tablerIcon", "showToast", "keepScreenOn", "scrollBottom", "dcSendE2e", "wsSend", "ws", "WebSocket",
   "clearConnectWatch", "endCall", "closePeerConnection", "setQuality", "appendSys", "showReconnectButton",
   "setTimeout", "knockBtn", "knockIcon", "knockLabel", "Notification", "navigator", "location", "history", "indexedDB",
-  "APP_BUILD", "installOverlay", "showLobbyTab", "runningInstalled", "env"];
+  "APP_BUILD", "installOverlay", "showLobbyTab", "runningInstalled",
+  "mailOverlay", "mailTitle", "mailHint", "mailList", "mailInput", "mailSendBtn", "mailCloseBtn", "mailClearBtn",
+  "fillMessage", "noticeArrival", "typingWithFinger", "env"];
 
 /** A real P-256 public key and a 16-byte secret, as a browser's subscription has. */
 function pushKeys() {
@@ -236,11 +238,12 @@ function fakeIndexedDB(idb) {
  * (neither read nor written).
  */
 function page({ saved = [], storage = "works", connected = true, checked = true, kind = "pin", wsOpen = true, inChat = false, lang = "mn",
-                 knock = {} } = {}) {
+                 knock = {}, mail = null, hash = "" } = {}) {
   const log = { ws: [], sealed: [], toasts: [], sys: [], screen: [], left: 0, quality: [], reconnect: 0, closed: 0,
-                asked: 0, registered: [], subscribed: [], unsubscribed: 0, replaced: [], tabs: [] };
+                asked: 0, registered: [], subscribed: [], unsubscribed: 0, replaced: [], tabs: [], noticed: 0 };
   const store = new Map();
   if (saved.length) store.set("dc-people", JSON.stringify({ v: 1, people: saved }));
+  if (mail) store.set("dc-mail", JSON.stringify(mail));
   const off = () => { throw new Error("storage off"); };
   const localStorage = {
     getItem: k => (storage === "off" ? off() : store.has(k) ? store.get(k) : null),
@@ -256,17 +259,19 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
   const els = {};
   for (const n of ["chatMessages", "peopleSection", "peopleList", "saveOverlay", "saveTitle", "saveHint", "saveNameInput",
                    "saveCancelBtn", "saveConfirmBtn", "leaveBtn", "lobbyStatus", "voiceCallBtn", "videoCallBtn", "statsBar", "chatScreen",
-                   "knockBtn", "knockIcon", "knockLabel", "installOverlay"]) {
-    els[n] = element(n === "saveNameInput" ? "input" : "div");
+                   "knockBtn", "knockIcon", "knockLabel", "installOverlay",
+                   "mailOverlay", "mailTitle", "mailHint", "mailList", "mailInput", "mailSendBtn", "mailCloseBtn", "mailClearBtn"]) {
+    els[n] = element(n === "saveNameInput" || n === "mailInput" ? "input" : "div");
   }
   els.peopleSection.classList.add("hidden");
   els.saveOverlay.classList.add("hidden");
+  els.mailOverlay.classList.add("hidden");
   els.knockBtn.classList.add("hidden");
   els.installOverlay.classList.add("hidden");
   if (!inChat) els.chatScreen.classList.add("hidden");
   const env = { kind, connected, checked, onLeave: null, knockSupported: knock.supported !== false,
                 knockKey: knock.serverKey === false || knock.keyLater ? null : SERVER_KNOCK_KEY };
-  const location = { hash: knock.hash || "", pathname: "/direct-connection/", search: "" };
+  const location = { hash: knock.hash || hash || "", pathname: "/direct-connection/", search: "" };
   const history = { replaceState: (s, title, url) => log.replaced.push(url) };
   els.leaveBtn.click = () => { log.left++; if (env.onLeave) env.onLeave(); };
   const ws = { readyState: wsOpen ? 1 : 3 };
@@ -279,6 +284,7 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
     let e2eReady = env.connected, e2eSecureMode = env.checked, e2eVerified = false;
     const knockSupported = env.knockSupported;
     let knockKey = env.knockKey, knockSub = null, knockSent = false, knockShared = false, savedInChat = null, knockEarly = null;
+    let mailStore = { v: 1, threads: {}, seen: {} }, mailOpenFor = null;
     ${BLOCK}
     return {
       drawPeople, meetPerson, sendPendingMeet, meetWaiting, endMeeting, savedSeatTaken, roomTitle,
@@ -286,9 +292,10 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
       renamePerson, askForget, forgetPerson, confirmSaveDialog, cancelSaveDialog,
       knockStateNow, knockKeyArrived, knocksOn, knocksOff, shareKnockAddress, sendKnockAddress, receiveKnockAddress,
       knockAnswered, answerKnock, savedInChatNow,
+      openThread, closeThread, sendMail, receiveMail, mailAnswered, mailAtConnect, fetchMail, answerMail, sendFromThread,
       get: () => ({ people, meeting, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
                     isConnecting, isHost, hostKey, roomSecret, pendingRoomSecret, roomKind, guestKey,
-                    knockKey, knockSub, knockSent, knockShared, savedInChat, knockEarly }),
+                    knockKey, knockSub, knockSent, knockShared, savedInChat, knockEarly, mailStore, mailOpenFor }),
       set: o => { for (const [k, v] of Object.entries(o)) switch (k) {
         case "listJoinId": listJoinId = v; break;
         case "currentSession": currentSession = v; break;
@@ -311,7 +318,9 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
     m => log.ws.push(JSON.parse(JSON.stringify(m))), ws, { OPEN: 1 },
     () => {}, () => {}, () => { log.closed++; }, q => log.quality.push(q), s => log.sys.push(s), () => { log.reconnect++; },
     f => f(), els.knockBtn, els.knockIcon, els.knockLabel, push.Notification, push.navigator, location, history, indexedDB,
-    "202610290000-abcdef12", els.installOverlay, n => log.tabs.push(n), () => Boolean(knock.standalone), env);
+    "202610290000-abcdef12", els.installOverlay, n => log.tabs.push(n), () => Boolean(knock.standalone),
+    els.mailOverlay, els.mailTitle, els.mailHint, els.mailList, els.mailInput, els.mailSendBtn, els.mailCloseBtn, els.mailClearBtn,
+    (el, text) => { el.textContent = text; }, () => { log.noticed++; }, () => false, env);
   const rows = () => els.peopleList.children;
   const button = (row, cls) => row.children.find(c => c.classList.contains(cls));
   const stored = () => JSON.parse(store.get("dc-people") || "null");
@@ -347,9 +356,13 @@ test("everyone saved is a name to tap — with nothing of their secret or room o
   assert.ok(all.includes(I18N.mn.personTap));
   for (const x of [anu.secret, anu.room, bat.secret, bat.room]) assert.ok(!all.includes(x));
   const tools = p.rows()[0].children.filter(c => c.classList.contains("person-tool"));
-  assert.deepEqual(tools.map(c => c.attrs["aria-label"]), [`${I18N.mn.personRename}: Anu`, `${I18N.mn.personForget}: Anu`],
+  assert.deepEqual(tools.map(c => c.attrs["aria-label"]),
+    [`${I18N.mn.personMail}: Anu`, `${I18N.mn.personRename}: Anu`, `${I18N.mn.personForget}: Anu`],
     "the small buttons say what they do, and to whom");
 });
+
+/** The row's small button that does `what` (an i18n key), found by its label. */
+const toolFor = (row, what) => row.children.find(c => c.classList.contains("person-tool") && String(c.attrs["aria-label"]).startsWith(I18N.mn[what]));
 
 test("storage switched off: an empty list, and nothing breaks", () => {
   const p = page({ storage: "off" });
@@ -728,7 +741,7 @@ test("fifty at most", async () => {
 test("renamed here, and only here", async () => {
   const anu = await person("Anu"), bat = await person("Bat");
   const p = page({ saved: [anu, bat] });
-  p.button(p.rows()[0], "person-tool").click();
+  toolFor(p.rows()[0], "personRename").click();
   assert.equal(p.els.saveTitle.textContent, I18N.mn.renameTitle);
   assert.equal(p.els.saveNameInput.value, "Anu", "the old name to change");
   p.type("Anu (phone)");
@@ -742,7 +755,7 @@ test("renamed here, and only here", async () => {
 test("forget asks first, in the row; Keep keeps; Forget takes them off this device", async () => {
   const anu = await person("Anu"), bat = await person("Bat");
   const p = page({ saved: [anu, bat] });
-  p.rows()[0].children.filter(c => c.classList.contains("person-tool"))[1].click();
+  toolFor(p.rows()[0], "personForget").click();
   assert.ok(p.rows()[0].classList.contains("asking"));
   assert.ok(p.rows()[0].textContent.includes(I18N.mn.forgetAsk("Anu")));
   p.rows()[0].children.find(c => c.textContent === I18N.mn.forgetNo).click();
@@ -758,7 +771,9 @@ test("while one is being met, nobody can be renamed or forgotten", async () => {
   const anu = await person("Anu"), bat = await person("Bat");
   const p = page({ saved: [anu, bat] });
   p.api.meetPerson(anu);
-  assert.ok(p.rows()[1].children.filter(c => c.classList.contains("person-tool")).every(c => c.disabled));
+  assert.ok(["personRename", "personForget"].every(what => toolFor(p.rows()[1], what).disabled));
+  assert.equal(toolFor(p.rows()[1], "personMail").disabled, false, "a message can still be written");
+  assert.ok(toolFor(p.rows()[0], "personMail"), "to the one being waited for too");
 });
 
 /* ══════════════════════════════════════════
@@ -1187,4 +1202,229 @@ test("tapped with the page open: met if it is free; if it is busy, only said", a
   chatting.push.swListeners.message({ data: { type: "knock", room: anu.room } });
   assert.deepEqual(chatting.log.ws, []);
   assert.deepEqual(chatting.log.toasts, [I18N.mn.knockTitle("Anu")]);
+});
+
+/* ══════════════════════════════════════════
+   Waiting messages
+══════════════════════════════════════════ */
+
+/** A message from the other side of `p`'s pair, sealed as their device seals it. */
+async function fromThem(p, text, over = {}) {
+  const key = await DC.mailboxKey(p.secret);
+  const m = { box: p.room, from: G.otherSide(p.side), to: p.side, id: DC.makeMailId(), at: Date.now() - 1000, text, ...over };
+  const sealed = await DC.sealMail(key, m);
+  return { id: m.id, at: m.at, ...sealed };
+}
+const envelope = row => toolFor(row, "personMail");
+
+test("the envelope by each name, counting what is new from them", async () => {
+  const anu = await person("Anu", "a");
+  const mail = { v: 1, threads: { [anu.room]: { read: 10, items: [
+    { id: "a".repeat(22), at: 5, mine: false, text: "old" },
+    { id: "b".repeat(22), at: 20, mine: false, text: "new" },
+    { id: "c".repeat(22), at: 30, mine: false, text: "newer" },
+    { id: "d".repeat(22), at: 40, mine: true, text: "ours", state: "kept" }] } }, seen: {} };
+  const p = page({ saved: [anu], mail });
+  const tool = envelope(p.rows()[0]);
+  assert.ok(tool.classList.contains("has-new"));
+  assert.equal(tool.querySelector(".mail-count").textContent, "2");
+  assert.equal(tool.attrs["aria-label"], `${I18N.mn.personMail}: Anu — ${I18N.mn.mailUnreadCount(2)}`);
+  const none = page({ saved: [anu] });
+  assert.equal(envelope(none.rows()[0]).querySelector(".mail-count"), null);
+});
+
+test("written: sealed here for their side, sent to their mailbox — with where to alert them, if they get alerts", async () => {
+  const knock = { endpoint: "https://fcm.googleapis.com/fcm/send/x", ...pushKeys() };
+  const anu = { ...await person("Anu", "a"), knock };
+  const p = page({ saved: [anu] });
+  await p.api.sendMail(p.api.get().people[0], "see you at 6");
+  const sent = p.log.ws.at(-1);
+  assert.deepEqual(Object.keys(sent).sort(), ["at", "box", "ct", "id", "iv", "knock", "to", "type"]);
+  assert.equal(sent.type, "mail-drop");
+  assert.equal(sent.box, anu.room);
+  assert.equal(sent.to, "b", "for the other side");
+  assert.deepEqual(sent.knock, knock);
+  assert.ok(!JSON.stringify(sent).includes("see you") && !JSON.stringify(sent).includes(anu.secret), "neither the text nor the secret");
+  assert.equal(await DC.openMail(await DC.mailboxKey(anu.secret), { box: anu.room, from: "a", to: "b", id: sent.id, at: sent.at, iv: sent.iv, ct: sent.ct }),
+    "see you at 6", "their device opens it");
+  const kept = JSON.parse(p.store.get("dc-mail")).threads[anu.room].items[0];
+  assert.equal(kept.state, "sending");
+  assert.equal(kept.text, "see you at 6");
+  const bat = await person("Bat");
+  const q = page({ saved: [bat] });
+  await q.api.sendMail(bat, "hi");
+  assert.equal(q.log.ws.at(-1).knock, undefined, "no alerts for them: no address sent");
+});
+
+test("sent again at each connection until the server says it has it — then never again", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  await p.api.sendMail(anu, "one");
+  await p.api.sendMail(anu, "two");
+  const [first, second] = p.log.ws.filter(m => m.type === "mail-drop");
+  p.log.ws.length = 0;
+  p.api.mailAtConnect();
+  assert.deepEqual(p.log.ws.filter(m => m.type === "mail-drop").map(m => m.id), [first.id, second.id], "the link was down: both again, the same ids");
+  assert.deepEqual(p.log.ws.find(m => m.type === "mail-fetch"), { type: "mail-fetch", boxes: [{ box: anu.room, side: "a" }] });
+  p.api.mailAnswered({ type: "mail-dropped", id: first.id }, true);
+  p.log.ws.length = 0;
+  p.api.mailAtConnect();
+  assert.deepEqual(p.log.ws.filter(m => m.type === "mail-drop").map(m => m.id), [second.id]);
+  const kept = JSON.parse(p.store.get("dc-mail")).threads[anu.room].items.find(m => m.id === first.id);
+  assert.equal(kept.state, "kept");
+  assert.equal(kept.ct, undefined, "the sealed copy is let go once kept");
+});
+
+test("refused by the server: said why, in our words, and marked not sent", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  await p.api.sendMail(anu, "hello");
+  const id = p.log.ws.at(-1).id;
+  p.api.mailAnswered({ type: "mail-refused", id, code: "full" }, false);
+  assert.deepEqual(p.log.toasts, [I18N.mn.mailBoxFull]);
+  assert.equal(p.api.get().mailStore.threads[anu.room].items[0].state, "refused");
+  p.api.mailAnswered({ type: "mail-refused", id, code: "full" }, false);
+  assert.equal(p.log.toasts.length, 1, "said once");
+});
+
+test("theirs: opened, kept, counted and said — and the server told it can let them go", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  const m = await fromThem(anu, "are you free tonight?");
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [m] });
+  const thread = p.api.get().mailStore.threads[anu.room];
+  assert.deepEqual(thread.items.map(x => [x.mine, x.text]), [[false, "are you free tonight?"]]);
+  assert.deepEqual(p.log.ws.at(-1), { type: "mail-ack", box: anu.room, side: "a", ids: [m.id] });
+  assert.deepEqual(p.log.toasts, [I18N.mn.mailArrived("Anu")]);
+  assert.equal(p.log.noticed, 1, "chimed and counted, as a chat message is");
+  assert.equal(envelope(p.rows()[0]).querySelector(".mail-count").textContent, "1");
+  assert.ok(JSON.parse(p.store.get("dc-mail")).seen[anu.room].includes(m.id));
+});
+
+test("one handed back, from another pair, re-dated or garbled: not shown — and still let go", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  const ours = await fromThem(anu, "mine, reflected", { from: "a", to: "b" });
+  const otherPair = await fromThem({ ...anu, secret: DC.makeRoomSecret() }, "not for us");
+  const redated = { ...(await fromThem(anu, "moved in time")), at: Date.now() };
+  const garbled = { id: DC.makeMailId(), at: Date.now(), iv: "x".repeat(16), ct: "AAAA" };
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [ours, otherPair, redated, garbled] });
+  assert.equal((p.api.get().mailStore.threads[anu.room] || { items: [] }).items.length, 0, "none shown");
+  assert.deepEqual(p.log.ws.at(-1).ids, [ours.id, otherPair.id, redated.id, garbled.id]);
+  assert.deepEqual(p.log.toasts, []);
+});
+
+test("delivered twice — or two deliveries crossing — shown once", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  const m = await fromThem(anu, "once");
+  const one = p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [m] });
+  const two = p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [m] });
+  await Promise.all([one, two]);
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [m] });
+  assert.equal(p.api.get().mailStore.threads[anu.room].items.length, 1);
+  assert.equal(p.log.toasts.length, 1);
+});
+
+test("for someone not saved here: nothing opened, nothing said", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  const stranger = await person("x", "a");
+  await p.api.receiveMail({ type: "mail", box: stranger.room, side: "a", items: [await fromThem(stranger, "hi")] });
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "b", items: [await fromThem(anu, "wrong side")] });
+  assert.deepEqual(p.api.get().mailStore.threads, {});
+  assert.deepEqual(p.log.toasts, []);
+});
+
+test("the conversation: opened by the envelope, named, read — theirs left, ours right", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [await fromThem(anu, "hello there")] });
+  await p.api.sendMail(anu, "hi!");
+  envelope(p.rows()[0]).click();
+  assert.ok(!p.els.mailOverlay.classList.contains("hidden"));
+  assert.equal(p.els.mailTitle.textContent, "Anu");
+  assert.equal(p.els.mailHint.textContent, I18N.mn.mailHint("Anu"));
+  const rows = p.els.mailList.children;
+  assert.deepEqual(rows.map(r => r.className), ["mail-item peer", "mail-item me"]);
+  assert.equal(rows[0].querySelector(".mail-bubble").textContent, "hello there");
+  assert.match(rows[1].querySelector(".mail-meta").textContent, new RegExp(I18N.mn.mailSending));
+  assert.equal(envelope(p.rows()[0]).querySelector(".mail-count"), null, "read now");
+  assert.equal(p.log.ws.at(-1).type, "mail-fetch", "and anything newer asked after");
+  p.api.closeThread();
+  assert.ok(p.els.mailOverlay.classList.contains("hidden"));
+});
+
+test("with their conversation open, a new one is shown there — read, and no toast", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  p.api.openThread(anu);
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [await fromThem(anu, "while you look")] });
+  assert.equal(p.els.mailList.children.length, 1);
+  assert.deepEqual(p.log.toasts, []);
+  assert.equal(G.mailUnread(p.api.get().mailStore.threads[anu.room]), 0);
+});
+
+test("Enter sends on a computer; nothing for an empty one; too long is refused, and kept to fix", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu] });
+  p.api.openThread(anu);
+  p.els.mailInput.value = "   ";
+  p.els.mailInput.fire("keydown", { key: "Enter", shiftKey: false, isComposing: false, preventDefault() {} });
+  assert.ok(!p.log.ws.some(m => m.type === "mail-drop"));
+  p.els.mailInput.value = "x".repeat(G.MAX_MESSAGE_CHARS + 1);
+  p.api.sendFromThread();
+  assert.deepEqual(p.log.toasts, [I18N.mn.messageTooLong(G.MAX_MESSAGE_CHARS)]);
+  assert.equal(p.els.mailInput.value.length, G.MAX_MESSAGE_CHARS + 1, "not lost");
+  p.els.mailInput.value = "hello";
+  p.els.mailInput.fire("keydown", { key: "Enter", shiftKey: false, isComposing: false, preventDefault() {} });
+  await until(() => p.log.ws.some(m => m.type === "mail-drop"));
+  assert.equal(p.els.mailInput.value, "");
+  p.els.mailInput.value = "line";
+  p.els.mailInput.fire("keydown", { key: "Enter", shiftKey: true, isComposing: false, preventDefault() {} });
+  assert.equal(p.els.mailInput.value, "line", "Shift+Enter is a new line");
+});
+
+test("clearing takes two taps — and keeps the ids, so nothing cleared comes back; forgetting them takes it all", async () => {
+  const anu = await person("Anu", "a"), bat = await person("Bat", "a");
+  const p = page({ saved: [anu, bat] });
+  const m = await fromThem(anu, "hello");
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [m] });
+  p.api.openThread(anu);
+  p.els.mailClearBtn.onclick();
+  assert.equal(p.api.get().mailStore.threads[anu.room].items.length, 1, "one tap only asks");
+  assert.equal(p.els.mailClearBtn.textContent, I18N.mn.mailClearSure);
+  p.els.mailClearBtn.onclick();
+  assert.equal(p.api.get().mailStore.threads[anu.room].items.length, 0);
+  await p.api.receiveMail({ type: "mail", box: anu.room, side: "a", items: [m] });
+  assert.equal(p.api.get().mailStore.threads[anu.room].items.length, 0, "delivered again: still gone");
+  await p.api.receiveMail({ type: "mail", box: bat.room, side: "a", items: [await fromThem(bat, "from bat")] });
+  p.api.askForget(bat);
+  p.rows()[1].children.find(c => c.textContent === I18N.mn.forgetYes).click();
+  assert.equal(p.api.get().mailStore.threads[bat.room], undefined);
+  assert.equal(JSON.parse(p.store.get("dc-mail")).seen[bat.room], undefined);
+});
+
+test("\"a message waits\" tapped: the app opens at their conversation — or, already open, goes to it", async () => {
+  const anu = await person("Anu", "a");
+  const p = page({ saved: [anu], hash: `#mail=${anu.room}` });
+  assert.ok(!p.els.mailOverlay.classList.contains("hidden"));
+  assert.equal(p.els.mailTitle.textContent, "Anu");
+  assert.deepEqual(p.log.replaced, ["/direct-connection/"], "the address tidied");
+  const q = page({ saved: [anu] });
+  q.push.swListeners.message({ data: { type: "mail", room: anu.room } });
+  assert.equal(q.els.mailTitle.textContent, "Anu");
+  const stranger = page({ saved: [anu], hash: `#mail=~${"z".repeat(43)}` });
+  assert.ok(stranger.els.mailOverlay.classList.contains("hidden"), "not saved here: nothing opens");
+});
+
+test("the wiring: asked after at each connection, the server's word taken, and the payload nothing but the sealed message", () => {
+  const onopen = between("  ws.onopen    = () => {", "  ws.onclose");
+  assert.match(onopen, /mailAtConnect\(\);/);
+  for (const type of ["mail", "mail-waiting", "mail-dropped", "mail-refused"]) assert.ok(app.includes(`case "${type}":`), type);
+  assert.match(fn("dropMail"), /wsSend\(\{ type: "mail-drop", box: p\.room, to: G\.otherSide\(p\.side\), id: item\.id, at: item\.at, iv: item\.iv, ct: item\.ct,\s*\n\s*\.\.\.\(p\.knock \? \{ knock: p\.knock \} : \{\}\) \}\);/);
+  assert.match(fn("forgetPerson"), /delete mailStore\.threads\[p\.room\];\s*\n\s*delete mailStore\.seen\[p\.room\];/);
+  for (const id of ["mailOverlay", "mailTitle", "mailHint", "mailList", "mailInput", "mailSendBtn", "mailCloseBtn", "mailClearBtn"]) {
+    assert.ok(html.includes(`id="${id}"`), id);
+  }
 });

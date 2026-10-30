@@ -29,6 +29,12 @@ test("the server runs as its own user, from its folder, with its settings, and c
   }
 });
 
+test("one place it may write: its state folder, for messages waiting — the server finds it there by itself", () => {
+  assert.ok(service.split("\n").includes("StateDirectory=direct-connection"));
+  assert.ok(service.split("\n").includes("StateDirectoryMode=0700"), "the server's alone");
+  assert.match(read("server.js"), /const MAILBOX_DIR = process\.env\.MAILBOX_DIR \|\| \(process\.env\.STATE_DIRECTORY \|\| ""\)\.split\(":"\)\[0\] \|\| null;/);
+});
+
 test("with nothing it does not need", () => {
   for (const line of ["NoNewPrivileges=true", "CapabilityBoundingSet=", "ProtectSystem=strict", "ProtectHome=true", "PrivateTmp=true",
                       "PrivateDevices=true", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "RestrictSUIDSGID=true"]) {

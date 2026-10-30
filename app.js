@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610300513-b356e0f0";
+const APP_BUILD = "202610300558-ae63e7cf";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -255,6 +255,14 @@ const saveConfirmBtn = document.getElementById("saveConfirmBtn");
 const knockBtn       = document.getElementById("knockBtn");          // see "KNOCKS"
 const knockIcon      = document.getElementById("knockIcon");
 const knockLabel     = document.getElementById("knockLabel");
+const mailOverlay    = document.getElementById("mailOverlay");       // see "WAITING MESSAGES"
+const mailTitle      = document.getElementById("mailTitle");
+const mailHint       = document.getElementById("mailHint");
+const mailList       = document.getElementById("mailList");
+const mailInput      = document.getElementById("mailInput");
+const mailSendBtn    = document.getElementById("mailSendBtn");
+const mailCloseBtn   = document.getElementById("mailCloseBtn");
+const mailClearBtn   = document.getElementById("mailClearBtn");
 
 /* ── State ───────────────────────────────────── */
 let ws              = null;
@@ -322,6 +330,15 @@ let knockSent   = false;
 let knockShared = false;
 let savedInChat = null;
 let knockEarly  = null;   // their address, come before our side finished saving them
+
+/* Waiting messages — see "WAITING MESSAGES" below; declared up here because
+   each person's row shows how many are new.
+
+   mailStore    each person's conversation kept on this device, and the ids
+                already taken (G.mailStore)
+   mailOpenFor  the room whose conversation is open, if one is            */
+let mailStore   = { v: 1, threads: {}, seen: {} };
+let mailOpenFor = null;
 
 /* Last known connection path, so the header badge can be redrawn in the new
    language. Declared here rather than beside renderConnectionPath(): applyI18n()
@@ -1368,6 +1385,7 @@ function connectWebSocket() {
     checkAutoJoin();
     sendPendingCreate();
     sendPendingMeet();
+    mailAtConnect();
     restoreHostRoom();
     sendReclaim();
     resumeSeat();
@@ -2037,6 +2055,9 @@ function personRow(p) {
   open.onclick = () => meetPerson(p);
   item.appendChild(open);
 
+  /* Messages for them, or from them — also while waiting for them: a word
+     left instead. */
+  item.appendChild(mailTool(p));
   if (here) {
     item.classList.add("waiting");
     const cancel = document.createElement("button");
@@ -2261,6 +2282,7 @@ async function addPerson(rawName, secret, side) {
   if (!storePeople(next)) { showToast(t("savedNoStorage"), "error"); return null; }
   people = next;
   drawPeople();
+  fetchMail();                        // their mailbox, asked after from now on
   return people.find(p => p.secret === secret) || null;
 }
 
@@ -2286,6 +2308,11 @@ function forgetPerson(p) {
   const next = people.filter(q => q.room !== p.room);
   if (!storePeople(next)) { showToast(t("savedNoStorage"), "error"); drawPeople(); return; }
   people = next;
+  /* Their conversation goes with them. */
+  delete mailStore.threads[p.room];
+  delete mailStore.seen[p.room];
+  storeMail();
+  if (mailOpenFor === p.room) closeThread();
   drawPeople();
   renewKnockAddress(p);
 }
@@ -2613,8 +2640,270 @@ if (_knockedRoom) {
 if (knockSupported) {
   navigator.serviceWorker.addEventListener("message", e => {
     const d = e.data;
-    if (d && d.type === "knock" && typeof d.room === "string" && G.SAVED_ROOM.test(d.room)) answerKnock(d.room);
+    if (!d || typeof d.room !== "string" || !G.SAVED_ROOM.test(d.room)) return;
+    if (d.type === "knock") answerKnock(d.room);
+    else if (d.type === "mail") answerMail(d.room);
   });
+}
+
+/* ══════════════════════════════════════════════
+   WAITING MESSAGES
+   ─────────────────────────────────────────────
+   A chat needs both people there at once. Now a saved person who is away
+   can be written to: the message waits on the server — the Pi at home —
+   until they open the app, and is theirs then. They can write back the same
+   way. Each person's envelope, by their name, opens the conversation, and
+   says how many are new.
+
+   Sealed here, before it goes (DC.sealMail): with a key worked out from the
+   secret only the two devices share, and bound to where it belongs — the
+   pair's mailbox, who wrote it, to whom, its id and its time. The server
+   keeps it and hands it over (mailbox.js); it cannot read it, change it, or
+   pass one off as from the other. One opened as anything else does not
+   open, and one delivered twice is shown once (the ids taken, kept here).
+
+   A message goes again, by itself, until the server says it has kept it —
+   so one written while the link is down is not lost. Whoever has the app
+   open hears of a new one at once; whoever has alerts on and is away is
+   told "Anu sent you a message". Each conversation is kept on this device
+   only, up to G.MAIL_THREAD_MAX messages, and goes when the person is
+   forgotten or it is cleared.                                              */
+const MAIL_KEY = "dc-mail";
+const mailKeys = new Map();              // room → the pair's key, worked out once
+
+function loadMail() {
+  try { return G.mailStore(JSON.parse(localStorage.getItem(MAIL_KEY) || "null")); }
+  catch (_) { return G.mailStore(null); }
+}
+
+/** Kept, or false: storage off or full. What is on screen stays either way. */
+function storeMail() {
+  try { localStorage.setItem(MAIL_KEY, JSON.stringify(mailStore)); return true; }
+  catch (_) { return false; }
+}
+
+function threadFor(room) {
+  if (!mailStore.threads[room]) mailStore.threads[room] = { read: 0, items: [] };
+  return mailStore.threads[room];
+}
+
+/** One more message in a conversation: in time order, the oldest let go past the limit. */
+function addToThread(room, item) {
+  const thread = threadFor(room);
+  thread.items.push(item);
+  thread.items.sort((x, y) => x.at - y.at);
+  if (thread.items.length > G.MAIL_THREAD_MAX) thread.items.splice(0, thread.items.length - G.MAIL_THREAD_MAX);
+}
+
+function mailKeyFor(p) {
+  if (!mailKeys.has(p.room)) mailKeys.set(p.room, DC.mailboxKey(p.secret));
+  return mailKeys.get(p.room);
+}
+
+/** The envelope by their name, with how many of theirs are new. */
+function mailTool(p) {
+  const unread = G.mailUnread(mailStore.threads[p.room]);
+  const tool = document.createElement("button");
+  tool.type = "button";
+  tool.className = unread ? "person-tool mail has-new" : "person-tool mail";
+  tool.setAttribute("aria-label", `${t("personMail")}: ${p.name}${unread ? ` — ${I18N[LANG].mailUnreadCount(unread)}` : ""}`);
+  tool.title = t("personMail");
+  tool.appendChild(tablerIcon("mail"));
+  if (unread) {
+    const count = document.createElement("span");
+    count.className = "mail-count";
+    count.textContent = unread > 9 ? "9+" : String(unread);
+    tool.appendChild(count);
+  }
+  tool.onclick = () => openThread(p);
+  return tool;
+}
+
+/** Ours, sealed here and handed to the server; shown at once as on its way. */
+async function sendMail(p, text) {
+  const id = DC.makeMailId();
+  const at = Date.now();
+  const sealed = await DC.sealMail(await mailKeyFor(p), { box: p.room, from: p.side, to: G.otherSide(p.side), id, at, text });
+  const item = { id, at, mine: true, text, state: "sending", iv: sealed.iv, ct: sealed.ct };
+  addToThread(p.room, item);
+  storeMail();
+  dropMail(p, item);
+  drawThread();
+}
+
+/** To the server — and where to knock for them, if they get alerts, so it
+    can tell them a message waits. */
+function dropMail(p, item) {
+  wsSend({ type: "mail-drop", box: p.room, to: G.otherSide(p.side), id: item.id, at: item.at, iv: item.iv, ct: item.ct,
+           ...(p.knock ? { knock: p.knock } : {}) });
+}
+
+/** Each time the link comes up: ours the server has not said it kept, again
+    (it keeps each once), and what waits for us, asked after. */
+function mailAtConnect() {
+  for (const p of people) {
+    for (const item of (mailStore.threads[p.room] || { items: [] }).items) {
+      if (item.mine && item.state === "sending" && item.iv && item.ct) dropMail(p, item);
+    }
+  }
+  fetchMail();
+}
+
+function fetchMail() {
+  if (people.length) wsSend({ type: "mail-fetch", boxes: people.map(p => ({ box: p.room, side: p.side })) });
+}
+
+/** The server kept ours — or would not, and why. */
+function mailAnswered(data, kept) {
+  for (const [room, thread] of Object.entries(mailStore.threads)) {
+    const item = thread.items.find(m => m.mine && m.id === data.id);
+    if (!item || item.state !== "sending") continue;
+    item.state = kept ? "kept" : "refused";
+    delete item.iv;                       // sealed for sending; not needed now
+    delete item.ct;
+    storeMail();
+    if (!kept) showToast(t(G.mailRefusalKey(data.code)), "error");
+    if (mailOpenFor === room) drawThread();
+    return;
+  }
+}
+
+/** Theirs, from the server — one delivery at a time, so two that cross are
+    not both taken for new. */
+let mailQueue = Promise.resolve();
+function receiveMail(data) {
+  mailQueue = mailQueue.then(() => takeMail(data)).catch(err => console.error("Messages could not be taken:", err));
+  return mailQueue;
+}
+
+/** Opened here — or not at all — kept, and the server told it can let them go. */
+async function takeMail(data) {
+  const p = people.find(q => q.room === data.box && q.side === data.side);
+  const items = Array.isArray(data.items) ? data.items.filter(m => m && typeof m.id === "string") : [];
+  if (!p || !items.length) return;
+  const key = await mailKeyFor(p);
+  const seen = new Set(mailStore.seen[p.room] || []);
+  let fresh = 0;
+  for (const m of items) {
+    if (seen.has(m.id)) continue;                        // delivered before: shown once
+    const text = await DC.openMail(key, { box: p.room, from: G.otherSide(p.side), to: p.side, id: m.id, at: m.at, iv: m.iv, ct: m.ct });
+    seen.add(m.id);                                      // opened or not, never tried again
+    if (text === null || !G.messageFits(text) || !Number.isSafeInteger(m.at)) continue;
+    addToThread(p.room, { id: m.id, at: m.at, mine: false, text });
+    fresh++;
+  }
+  mailStore.seen[p.room] = [...seen].slice(-G.MAIL_SEEN_MAX);
+  if (mailOpenFor === p.room) threadFor(p.room).read = Date.now();
+  storeMail();
+  wsSend({ type: "mail-ack", box: p.room, side: p.side, ids: items.map(m => m.id) });
+  if (!fresh) return;
+  drawPeople();
+  if (mailOpenFor === p.room) { drawThread(); return; }
+  showToast(I18N[LANG].mailArrived(p.name), "info");
+  noticeArrival();
+}
+
+/* ── The conversation ────────────────────── */
+
+function openThread(p) {
+  mailOpenFor = p.room;
+  mailTitle.textContent = p.name;
+  mailHint.textContent = I18N[LANG].mailHint(p.name);
+  mailClearBtn.classList.remove("asking");
+  mailClearBtn.textContent = t("mailClear");
+  threadFor(p.room).read = Date.now();
+  storeMail();
+  mailOverlay.classList.remove("hidden");
+  drawThread();
+  drawPeople();
+  fetchMail();                                           // anything newer
+  setTimeout(() => mailInput.focus(), 100);
+}
+
+function closeThread() {
+  mailOverlay.classList.add("hidden");
+  mailOpenFor = null;
+  drawPeople();
+}
+
+function drawThread() {
+  if (!mailOpenFor) return;
+  const items = (mailStore.threads[mailOpenFor] || { items: [] }).items;
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "mail-empty";
+    empty.textContent = t("mailEmpty");
+    mailList.replaceChildren(empty);
+    return;
+  }
+  mailList.replaceChildren(...items.map(mailBubble));
+  mailList.scrollTop = mailList.scrollHeight;
+}
+
+function mailBubble(m) {
+  const row = document.createElement("div");
+  row.className = `mail-item ${m.mine ? "me" : "peer"}`;
+  const bubble = document.createElement("div");
+  bubble.className = "mail-bubble";
+  fillMessage(bubble, m.text);                           // links tappable, nothing else made of it
+  const meta = document.createElement("div");
+  meta.className = m.state === "refused" ? "mail-meta refused" : "mail-meta";
+  const when = new Date(m.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  meta.textContent = m.mine ? `${when} · ${t({ sending: "mailSending", kept: "mailKept", refused: "mailNotSent" }[m.state])}` : when;
+  row.append(bubble, meta);
+  return row;
+}
+
+function sendFromThread() {
+  const p = people.find(q => q.room === mailOpenFor);
+  const text = mailInput.value;
+  if (!p || !text.trim()) return;
+  if (!G.messageFits(text)) { showToast(I18N[LANG].messageTooLong(G.MAX_MESSAGE_CHARS), "warn"); return; }
+  mailInput.value = "";
+  sendMail(p, text).catch(err => { console.error("Message could not be sealed:", err); showToast(t("mailNotSent"), "error"); });
+}
+
+mailSendBtn.onclick = sendFromThread;
+mailInput.addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  if (!G.enterSends({ touch: typingWithFinger(), shift: e.shiftKey, composing: e.isComposing || e.keyCode === 229 })) return;
+  e.preventDefault();
+  sendFromThread();
+});
+mailCloseBtn.onclick = closeThread;
+mailOverlay.onclick = e => { if (e.target === mailOverlay) closeThread(); };
+
+/* Clear: a second tap, so one is not enough to lose a conversation. The ids
+   taken are kept, so nothing cleared comes back. */
+mailClearBtn.onclick = () => {
+  if (!mailOpenFor) return;
+  if (!mailClearBtn.classList.contains("asking")) {
+    mailClearBtn.classList.add("asking");
+    mailClearBtn.textContent = t("mailClearSure");
+    return;
+  }
+  mailClearBtn.classList.remove("asking");
+  mailClearBtn.textContent = t("mailClear");
+  threadFor(mailOpenFor).items = [];
+  storeMail();
+  drawThread();
+  drawPeople();
+};
+
+/** "A message waits" tapped: their conversation, and anything newer. */
+function answerMail(room) {
+  const p = people.find(q => q.room === room);
+  if (p) openThread(p);
+}
+
+mailStore = loadMail();
+drawPeople();
+
+/* Opened by tapping "a message waits": the worker names the room in the address. */
+const _mailRoom = (location.hash.match(/^#mail=(~[A-Za-z0-9_-]{43})$/) || [])[1] || null;
+if (_mailRoom) {
+  history.replaceState({}, "", `${location.pathname}${location.search}`);
+  answerMail(_mailRoom);
 }
 
 /* ══════════════════════════════════════════════
@@ -3336,6 +3625,23 @@ async function handleSignaling(data) {
 
     case "knock-result":
       knockAnswered(data);
+      break;
+
+    /* Waiting messages — see "WAITING MESSAGES". */
+    case "mail":
+      receiveMail(data);
+      break;
+
+    case "mail-waiting":
+      fetchMail();
+      break;
+
+    case "mail-dropped":
+      mailAnswered(data, true);
+      break;
+
+    case "mail-refused":
+      mailAnswered(data, false);
       break;
 
     case "seat-taken":

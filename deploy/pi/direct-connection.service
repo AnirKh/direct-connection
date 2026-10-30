@@ -17,8 +17,13 @@ EnvironmentFile=/etc/direct-connection.env
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=3
+# The one place it may write: /var/lib/direct-connection, for messages
+# waiting for someone (mailbox.json — sealed, unreadable here). Passed to it
+# as STATE_DIRECTORY.
+StateDirectory=direct-connection
+StateDirectoryMode=0700
 
-# Nothing but its own folder, read-only, and the network.
+# Nothing but its own folder, read-only, its state folder, and the network.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 ProtectSystem=strict

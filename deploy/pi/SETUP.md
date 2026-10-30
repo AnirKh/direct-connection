@@ -127,3 +127,22 @@ The hash in the last "Client connected" line should match the **last** one
 
 The app itself still talks to Render until its address is changed to the
 Pi's — that is done in the repository once this report says everything works.
+
+## 8. When the service file changes
+
+The updater brings new code, never a new service file: that would let what
+comes from GitHub change how — and as whom — it runs. When
+`deploy/pi/direct-connection.service` changes, install it again by hand. It
+did on 2026-10-30, for messages waiting for someone: a folder of the
+server's own to keep them in, so a restart — every update is one — loses
+none.
+
+```sh
+sudo install -m 644 /opt/direct-connection/deploy/pi/direct-connection.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart direct-connection
+journalctl -u direct-connection -n 8 --no-pager | grep Mailbox
+```
+
+The last line should say `Mailbox: kept in /var/lib/direct-connection/mailbox.json`
+— not "in memory only".
