@@ -1,0 +1,13 @@
+# Brings the Pi's copy up to date with GitHub — run by the timer beside it.
+# The script is the installed copy in /usr/local/sbin, not the one in the
+# repository: what is pulled from GitHub runs as the server's own user, never
+# as root. See deploy/pi/SETUP.md.
+
+[Unit]
+Description=Update Direct Connection from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/direct-connection-update

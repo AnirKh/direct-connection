@@ -3,6 +3,9 @@
 # by a carriage return fails with "bad interpreter" — a broken hook on a fresh
 # clone, which is exactly when nobody is looking for one.
 .githooks/* text eol=lf
+# The same for what runs on the Raspberry Pi: a script, systemd units and an
+# environment file, all read on Linux.
+deploy/pi/* text eol=lf
 
 # Pictures are bytes, not text: never convert their line endings.
 *.png binary

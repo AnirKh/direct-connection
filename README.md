@@ -20,6 +20,7 @@ AnirKh.github.io/direct-connection
 | `manifest.webmanifest`, `icons/` | What makes the site installable as an app: its name, colours and icons. `icons/icon.svg` is the drawing; the PNGs are rendered from it. See "Installable as an app". `icons/link-preview.png` is the card a shared link shows — see "Link previews". |
 | `server.js` | Signaling, PIN/token auth, rate limits, `/api/send-message`. |
 | `knock.js` | Sending a knock: Web Push to a saved person's device — RFC 8291 encryption (checked against the RFC's own example), VAPID signing, and the push services it may send to. Node's own crypto, no dependency. See "Knocks". |
+| `deploy/pi/` | Running the server on a Raspberry Pi behind Tailscale Funnel instead of Render: the systemd service, an updater and its timer, the settings file, and `SETUP.md`. See "On a Raspberry Pi at home". |
 | `sw.js` | The service worker, for knocks only: shows one by the name this device gave the person, and opens the app to them when tapped. Answers no requests, so nothing is ever cached. |
 
 Adding a string means adding it to **both** languages in `i18n.js` — `t()` falls back to the key name, so a missing translation shows up as raw text in the UI.
@@ -901,3 +902,9 @@ Optional:
 - **`KNOCK_PUBLIC_KEY`**, **`KNOCK_PRIVATE_KEY`** — the key pair knocks are signed with (Web Push, VAPID). Make them once with `node tools/knock-keys.js` and paste its two lines in. Without both, knocks are off: the server sends none and `/api/ping` offers no key, so the page shows no alerts switch. A new pair later makes every device subscribe again (it does so by itself when next opened) and tell each saved person again (when they next connect). See "Knocks".
 - **`KNOCK_SUBJECT`** — a `mailto:` or `https:` contact the push services may use (default the site's address).
 - **`KNOCK_TEST_ORIGIN`** — tests only: lets knocks go to one local stand-in for a push service. Never set it on a real server.
+- **`HOST`** — the one address to listen on (default every address). Behind a proxy on the same machine, `127.0.0.1`: then nothing reaches the server except through the proxy, which is what `TRUSTED_PROXY_HOPS` relies on.
+- **`BASE_PATH`** — a path the proxy in front passes on without taking it off, such as `/dc`: the server takes it off itself before routing (default none; only a plain `/name` is accepted). The WebSocket answers on any path.
+
+### On a Raspberry Pi at home
+
+`deploy/pi/` runs the server on a Pi behind Tailscale Funnel instead of Render, so it never sleeps: a service running as its own user with nothing it does not need (`direct-connection.service`), listening on `127.0.0.1` in production; a timer that checks GitHub every two minutes and restarts it when there is something new (`update.sh`, installed as a fixed copy so what is pulled never runs as root, and npm installing with `--ignore-scripts`); and the settings file, whose secrets the person at the Pi fills in. `deploy/pi/SETUP.md` is the steps, written so Claude on the Pi can follow them, ending in checks that the public address answers, the live link opens through Funnel, and each visitor is seen by their own address rather than Funnel's. `test/deploy.test.js` keeps those files to what they promise; `test/integration/pi.test.js` runs the server with `HOST` and `BASE_PATH`.

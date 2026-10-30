@@ -35,6 +35,8 @@
 
 const DEFAULT_ALLOWED_ORIGINS = [
   "https://direct-connection.onrender.com",
+  /* The Raspberry Pi at home, through Tailscale Funnel — see deploy/pi. */
+  "https://raspberrypi.vulture-manta.ts.net",
   "https://anirkh.github.io",
   "http://localhost:3000",
   "http://127.0.0.1:3000"

@@ -48,6 +48,11 @@
                           offers none. See knock.js.
     KNOCK_SUBJECT         A mailto: or https: contact for the push services
                           (default: the site's address)
+    HOST                  The one address to listen on — 127.0.0.1 behind a
+                          proxy on the same machine (default: every address)
+    BASE_PATH             A path the proxy in front passes on without taking it
+                          off, e.g. /dc — taken off here (default: none)
+    See deploy/pi/SETUP.md for running it on a Raspberry Pi.
 */
 
 "use strict";
@@ -85,6 +90,21 @@ const { slidingAllow, pruneExpired, safeLabel, joinVerdict } = require("./rateli
 
 const app    = express();
 const server = http.createServer(app);
+
+/* Mounted under a path by a proxy that passes the path on as it came — say
+   Tailscale Funnel at /dc, should it not take it off itself (see deploy/pi).
+   The path is taken off here before anything else sees the request; the
+   WebSocket answers on any path anyway. Only a plain "/name" counts. */
+const BASE_PATH = /^\/[A-Za-z0-9_-]+$/.test(process.env.BASE_PATH || "") ? process.env.BASE_PATH : "";
+if (BASE_PATH) {
+  app.use((req, res, next) => {
+    if (req.url === BASE_PATH || req.url.startsWith(`${BASE_PATH}/`) || req.url.startsWith(`${BASE_PATH}?`)) {
+      const rest = req.url.slice(BASE_PATH.length);
+      req.url = rest.startsWith("/") ? rest : `/${rest}`;
+    }
+    next();
+  });
+}
 
 const PUBLIC_SESSION_LIST = process.env.PUBLIC_SESSION_LIST !== "0";
 
@@ -1452,7 +1472,11 @@ setInterval(() => {
 
 /* ── Start ─────────────────────────────────── */
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+/* Every address unless HOST names one. Behind a proxy on the same machine —
+   Tailscale Funnel on the Pi — 127.0.0.1: nothing reaches it except through
+   the proxy, which is what TRUSTED_PROXY_HOPS counts on. */
+const HOST = process.env.HOST || undefined;
+server.listen(PORT, HOST, () => {
   warnIfCspDrifted();
   console.log(`Trusting ${TRUSTED_PROXY_HOPS} proxy hop(s) for client addresses`);
   if (TRUSTED_PROXY_HOPS > 0 && process.env.TRUSTED_PROXY_HOPS === undefined) {
@@ -1460,5 +1484,5 @@ server.listen(PORT, () => {
     console.log("   Set TRUSTED_PROXY_HOPS=0 if this process is exposed directly,");
     console.log("   otherwise clients can forge their address and evade rate limits.)");
   }
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on ${HOST || "every address"}, port ${PORT}${BASE_PATH ? `, under ${BASE_PATH}` : ""}`);
 });

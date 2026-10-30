@@ -1,0 +1,13 @@
+# Looks for a new version every two minutes — about as soon as GitHub Pages
+# has one, so the page and the server change together. See deploy/pi/SETUP.md.
+
+[Unit]
+Description=Look for a new version of Direct Connection
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target

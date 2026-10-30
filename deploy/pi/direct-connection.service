@@ -1,0 +1,43 @@
+# Direct Connection's server on the Raspberry Pi — see deploy/pi/SETUP.md.
+# Runs as its own user, with nothing it does not need: it listens on
+# 127.0.0.1 only (HOST, in the environment file), and Tailscale Funnel is the
+# one way in from outside.
+
+[Unit]
+Description=Direct Connection server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dc
+Group=dc
+WorkingDirectory=/opt/direct-connection
+EnvironmentFile=/etc/direct-connection.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+
+# Nothing but its own folder, read-only, and the network.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
