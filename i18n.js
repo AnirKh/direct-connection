@@ -129,7 +129,6 @@ const I18N = {
     // Attach menu / chat
     photoImage:      "Зураг / Фото",
     fileUpload:      "Файл",
-    voiceHint:       "Дуу бичихийн тулд микрофон дарна уу",
     peerTyping:      "Бичиж байна…",
     chatPlaceholder: "Мэдээлэл…",
     // System messages
@@ -440,7 +439,6 @@ const I18N = {
     pathRelayedHint: "A direct connection was not possible, so a relay server is carrying the traffic. The contents stay encrypted, but that server can see who is talking to whom, and when.",
     photoImage:      "Photo / Image",
     fileUpload:      "File",
-    voiceHint:       "Tap mic to record voice",
     peerTyping:      "Peer is typing…",
     chatPlaceholder: "Message…",
     sysConnected:    "Connected",
