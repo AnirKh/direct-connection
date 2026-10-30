@@ -755,6 +755,31 @@
   }
 
   /**
+   * The chat's channel has closed — the other side has left — during a call.
+   * What becomes of the call?
+   *
+   *   "none"    no call: nothing to end
+   *   "missed"  theirs was still ringing here: a missed call, as a hang-up
+   *             while ringing is
+   *   "ended"   a call was on: it ends now, and says so
+   *
+   * Reported: when one side left during a call — the X, then Leave — the
+   * other's call froze on "Reconnecting…" for half a minute, then said the
+   * connection had dropped. Leaving ended the call only on the side that
+   * left; the other waited for its own recovery to give up. The call cannot
+   * go on without the channel that carries its signalling, and the person
+   * has gone, so it ends with the chat, as a hang-up would.
+   *
+   * @param {{inCall: boolean, ringingHere: boolean}} o
+   */
+  function callWhenChatCloses(o) {
+    if (!o) return "none";
+    if (o.ringingHere === true) return "missed";
+    if (o.inCall === true) return "ended";
+    return "none";
+  }
+
+  /**
    * The X at the top of the chat was pressed. Ask before leaving?
    *
    * Reported: the arrow that was there read as "back", not as "end the chat
@@ -1522,7 +1547,7 @@
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
     mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery,
     CHAT_REPAIR, chatRepair, unattended, tabTitle,
-    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, leaveAsks, splitLinks,
+    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, leaveAsks, callWhenChatCloses, splitLinks,
     REACTIONS, reactionKey, reactionValid, nextReaction, reactionBadge,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     SAVED_SECRET, SAVED_ROOM, PERSON_NAME_MAX, SAVED_PEOPLE_MAX,

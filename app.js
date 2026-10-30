@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610301114-5481478a";
+const APP_BUILD = "202610301124-c87a5d37";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3199,6 +3199,14 @@ function setupDataChannel() {
     sendBtn.disabled = true;
     voiceCallBtn.disabled = true;
     videoCallBtn.disabled = true;
+    /* A call goes with the chat, at once — it used to freeze on
+       "Reconnecting…" for half a minute (G.callWhenChatCloses). Said first:
+       the call ended, then they left. */
+    const call = G.callWhenChatCloses({ inCall, ringingHere: !callRequestModal.classList.contains("hidden") });
+    if (call !== "none") {
+      endCall(false);
+      appendSys(t(call === "missed" ? "sysMissedCall" : "sysCallEnded"));
+    }
     /* The server already said they had gone and the chat went on; now the
        channel has closed too, which is them leaving. */
     appendSys(t(serverRoomGone ? "sysPeerLeft" : "sysClosed"));

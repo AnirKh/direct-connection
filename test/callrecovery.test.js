@@ -225,3 +225,61 @@ test("a candidate that arrives before its fresh description is kept and tried ag
   assert.ok(failed, "handleCallIce has no catch");
   assert.match(failed[0], /callIceQueue\.push\(candidate\);/);
 });
+
+/* ══════════════════════════════════════════
+   The other side leaves during a call
+   ──────────────────────────────────────────
+   Reported: when one side left mid-call — the X, then Leave — the other's
+   call froze on "Reconnecting…" for half a minute, then said the
+   connection had dropped. Now the chat's channel closing ends the call at
+   once, as a hang-up would.
+══════════════════════════════════════════ */
+
+test("the chat closing ends a call that is on, and a call still ringing here is a missed one", () => {
+  assert.equal(G.callWhenChatCloses({ inCall: true, ringingHere: false }), "ended");
+  assert.equal(G.callWhenChatCloses({ inCall: false, ringingHere: true }), "missed");
+  assert.equal(G.callWhenChatCloses({ inCall: true, ringingHere: true }), "missed", "theirs, unanswered: missed, as a hang-up while ringing is");
+  assert.equal(G.callWhenChatCloses({ inCall: false, ringingHere: false }), "none");
+  assert.equal(G.callWhenChatCloses({ inCall: "yes" }), "none", "only a real yes");
+  assert.equal(G.callWhenChatCloses(undefined), "none");
+});
+
+/** The chat channel's close handler, as shipped, run with a stand-in page. */
+function chatCloses({ inCall = false, ringing = false } = {}) {
+  const body = grab(/^  dataChannel\.onclose = \(\) => \{[\s\S]*?^  \};/m, "dataChannel.onclose");
+  const log = { sys: [], ended: [] };
+  const hidden = { contains: c => c === "hidden" && !ringing };
+  const env = {
+    G, t: k => k,
+    sendBtn: {}, voiceCallBtn: {}, videoCallBtn: {},
+    callRequestModal: { classList: hidden },
+    endCall: notify => { log.ended.push(notify); },
+    appendSys: k => log.sys.push(k),
+    serverRoomGone: true,
+    recvBuffers: {}, pendingAcks: {}, orphanChunks: {}, refusedTransfers: new Set(),
+    failTransfer() {}, stopChatRepair() {}, showReconnectButton() {}
+  };
+  const names = Object.keys(env);
+  const run = new Function(...names, "inCall", `
+    let dataChannel = {}, orphanChunkCount = 0;
+    ${body}
+    dataChannel.onclose();`);
+  run(...names.map(n => env[n]), inCall);
+  return log;
+}
+
+test("the other side leaves mid-call: the call ends at once, without a word sent back, and the chat says so first", () => {
+  const log = chatCloses({ inCall: true });
+  assert.deepEqual(log.ended, [false], "ended here; nothing to tell a side that has gone");
+  assert.deepEqual(log.sys, ["sysCallEnded", "sysPeerLeft"], "the call ended, then they left");
+});
+
+test("they leave while their call is still ringing here: a missed call", () => {
+  assert.deepEqual(chatCloses({ ringing: true }).sys, ["sysMissedCall", "sysPeerLeft"]);
+});
+
+test("they leave with no call on: only that they left", () => {
+  const log = chatCloses();
+  assert.deepEqual(log.ended, []);
+  assert.deepEqual(log.sys, ["sysPeerLeft"]);
+});
