@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610300447-dd1b3865";
+const APP_BUILD = "202610300513-b356e0f0";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1085,7 +1085,11 @@ function dcSendCallSignal(obj) {
   return dcSendE2e(obj);
 }
 
-const DEFAULT_SERVER_URL = "https://direct-connection.onrender.com";
+/* The Raspberry Pi at home, through Tailscale Funnel (see deploy/pi): it never
+   sleeps, so nobody waits for it to wake. Render still runs the same server
+   and is the way back — https://direct-connection.onrender.com — should the
+   Pi be gone for long. */
+const DEFAULT_SERVER_URL = "https://raspberrypi.vulture-manta.ts.net/dc";
 const SERVER_URL = window.DIRECT_CONNECTION_SERVER_URL ||
   (["localhost", "127.0.0.1"].includes(location.hostname)
     ? `${location.protocol}//${location.hostname}:3000`

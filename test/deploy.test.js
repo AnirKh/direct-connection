@@ -80,8 +80,10 @@ test("the Pi's files keep Linux line endings on any checkout", () => {
   assert.match(read(".gitattributes"), /^deploy\/pi\/\* text eol=lf$/m);
 });
 
-test("the page may talk to the Pi", () => {
+test("the page talks to the Pi, under /dc — and may, by its own rules", () => {
   const { DEFAULT_ALLOWED_ORIGINS, META_CSP } = require("../csp.js");
+  assert.match(read("app.js"), /^const DEFAULT_SERVER_URL = "https:\/\/raspberrypi\.vulture-manta\.ts\.net\/dc";$/m);
   assert.ok(DEFAULT_ALLOWED_ORIGINS.includes("https://raspberrypi.vulture-manta.ts.net"));
   assert.match(META_CSP, /wss:\/\/raspberrypi\.vulture-manta\.ts\.net/);
+  assert.ok(DEFAULT_ALLOWED_ORIGINS.includes("https://direct-connection.onrender.com"), "and Render stays allowed: the way back");
 });
