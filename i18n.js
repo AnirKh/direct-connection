@@ -33,6 +33,8 @@ const I18N = {
     // Modal
     aboutLabel:      "Энэ хуудасны тухай",
     aboutTitle:      "Шууд холбоос",
+    authorLabel:     "Зохиогчийн тухай",
+    authorAbout:     "Хүмүүс бие биетэйгээ гуравдагч этгээдгүйгээр шууд, нууцлалтай ярилцаж болохоор энэ аппыг бүтээлээ. Надтай холбогдох бол эндээс холбогдоорой.",
     aboutDesc:       "Энэхүү холбоосыг ямар нэгэн гуравдагч этгээдээр мэдээллээ дамжуулалгүйгээр харилцах зорилготой бүтээлээ.",
     // Lobby
     lobbyTitle:      "Шууд холбогдох хэсэг",
@@ -350,6 +352,8 @@ const I18N = {
   en: {
     aboutLabel:      "About this page",
     aboutTitle:      "Direct Connection",
+    authorLabel:     "About the author",
+    authorAbout:     "I built this app so people can talk to each other directly and privately, with no third party in between. To reach me, connect here.",
     aboutDesc:       "This link was created to communicate without sharing your information through any third party.",
     lobbyTitle:      "Direct Connection",
     tabRooms:        "Rooms",

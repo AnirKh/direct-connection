@@ -15,9 +15,9 @@
        Install button at the bottom left is in the lobby (installOffer in
        guards.js). iPhones read the apple-* lines, since Safari takes the icon
        and title from these rather than from the manifest. -->
-  <link rel="manifest" href="manifest.webmanifest?v=202610301155-6aa195fd">
-  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610301155-6aa195fd">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610301155-6aa195fd">
+  <link rel="manifest" href="manifest.webmanifest?v=202610301239-70708b41">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg?v=202610301239-70708b41">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=202610301239-70708b41">
   <meta name="theme-color" content="#15151a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -62,7 +62,7 @@
     soon as it parses.
   -->
   <style id="antiClickjack">body{visibility:hidden}</style>
-  <script src="framebust.js?v=202610301155-6aa195fd"></script>
+  <script src="framebust.js?v=202610301239-70708b41"></script>
 
   <!--
     The icons, from our own copy. They came from a CDN, which saw every visit —
@@ -72,8 +72,8 @@
     test/csp.test.js checks, so it cannot be edited by accident. See "Icon
     font" in the README.
   -->
-  <link rel="stylesheet" href="vendor/tabler/tabler-icons.min.css?v=202610301155-6aa195fd">
-  <link rel="stylesheet" href="style.css?v=202610301155-6aa195fd">
+  <link rel="stylesheet" href="vendor/tabler/tabler-icons.min.css?v=202610301239-70708b41">
+  <link rel="stylesheet" href="style.css?v=202610301239-70708b41">
 </head>
 <body>
 
@@ -85,6 +85,30 @@
 
   <!-- LOBBY SCREEN -->
   <div id="lobbyScreen" class="screen">
+    <!-- Who made this, small, at the top left; a tap says so briefly, with
+         where else to find them. No degree, workplace, email or phone: the app
+         is the way to reach them. Opened and closed like the about panel. -->
+    <details id="authorDropdown" class="author">
+      <summary class="author-btn" data-i18n-aria="authorLabel" aria-label="Зохиогчийн тухай">
+        <img src="icons/author.jpg?v=202610301239-70708b41" alt="" width="36" height="36">
+      </summary>
+      <div class="author-panel">
+        <img class="author-photo" src="icons/author.jpg?v=202610301239-70708b41" alt="" width="72" height="72">
+        <div class="author-name">Anir Khurelbaatar</div>
+        <p data-i18n="authorAbout">Хүмүүс бие биетэйгээ гуравдагч этгээдгүйгээр шууд, нууцлалтай ярилцаж болохоор энэ аппыг бүтээлээ. Надтай холбогдох бол эндээс холбогдоорой.</p>
+        <div class="author-links">
+          <a href="https://www.linkedin.com/in/anir-kh-97a069159/" target="_blank" rel="noopener noreferrer" title="LinkedIn">
+            <i class="ti ti-brand-linkedin" aria-hidden="true"></i><span class="sr-only">LinkedIn</span>
+          </a>
+          <a href="https://www.facebook.com/anir.kh" target="_blank" rel="noopener noreferrer" title="Facebook">
+            <i class="ti ti-brand-facebook" aria-hidden="true"></i><span class="sr-only">Facebook</span>
+          </a>
+          <a href="https://www.youtube.com/@anirkh" target="_blank" rel="noopener noreferrer" title="YouTube">
+            <i class="ti ti-brand-youtube" aria-hidden="true"></i><span class="sr-only">YouTube</span>
+          </a>
+        </div>
+      </div>
+    </details>
     <div class="lobby-wrap">
       <!-- What the page is for, on request. It used to be a dialog in front of
            every visit with an "approve" button that approved nothing — it only
@@ -551,14 +575,14 @@
   </div>
 
   <!-- Load order matters: app.js reads DCProtocol, LANG and I18N at parse time. -->
-  <script src="protocol.js?v=202610301155-6aa195fd"></script>
-  <script src="connstats.js?v=202610301155-6aa195fd"></script>
-  <script src="guards.js?v=202610301155-6aa195fd"></script>
-  <script src="i18n.js?v=202610301155-6aa195fd"></script>
+  <script src="protocol.js?v=202610301239-70708b41"></script>
+  <script src="connstats.js?v=202610301239-70708b41"></script>
+  <script src="guards.js?v=202610301239-70708b41"></script>
+  <script src="i18n.js?v=202610301239-70708b41"></script>
   <!-- vendor/noble.js sets window.DCNoble; pake.js (SPAKE2) reads it, and app.js
        reads window.DCPake. So both load before app.js, noble before pake. -->
-  <script src="vendor/noble.js?v=202610301155-6aa195fd"></script>
-  <script src="pake.js?v=202610301155-6aa195fd"></script>
-  <script src="app.js?v=202610301155-6aa195fd"></script>
+  <script src="vendor/noble.js?v=202610301239-70708b41"></script>
+  <script src="pake.js?v=202610301239-70708b41"></script>
+  <script src="app.js?v=202610301239-70708b41"></script>
 </body>
 </html>

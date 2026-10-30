@@ -52,6 +52,8 @@ const CLIENT_FILES = [
   "framebust.js", "protocol.js", "connstats.js", "guards.js", "i18n.js",
   "vendor/noble.js", "pake.js", "app.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/apple-touch-icon.png",
+  /* The author's photo, in the lobby's top left corner. */
+  "icons/author.jpg",
   /* The icon font's stylesheet. The font itself is not listed: index.html
      does not load it (the stylesheet does, at its own ?v3.31.0), and it
      changes only with the stylesheet, which is. */
@@ -67,7 +69,7 @@ const NOT_IN_PAGE = ["sw.js"];
 /* Pictures are hashed as the bytes they are. Read as text, two different
    pictures could hash the same: every byte that is not valid UTF-8 decodes to
    the same replacement character, and the CRLF fold below would edit them. */
-const BINARY = /\.png$/;
+const BINARY = /\.(?:png|jpg)$/;
 
 /** The files index.html loads, which is where the stamp has to appear. */
 const STAMPED_ASSETS = CLIENT_FILES.filter(f => f !== "index.html" && !NOT_IN_PAGE.includes(f));

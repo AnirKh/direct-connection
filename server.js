@@ -276,7 +276,7 @@ app.get("/", (req, res) => {
 });
 
 app.get(["/app.js", "/protocol.js", "/i18n.js", "/framebust.js", "/connstats.js", "/guards.js", "/pake.js", "/vendor/noble.js", "/style.css",
-         "/manifest.webmanifest", "/icons/icon.svg", "/icons/apple-touch-icon.png",
+         "/manifest.webmanifest", "/icons/icon.svg", "/icons/apple-touch-icon.png", "/icons/author.jpg",
          "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png",
          "/icons/link-preview.png", "/sw.js",
          "/vendor/tabler/tabler-icons.min.css", "/vendor/tabler/fonts/tabler-icons.woff2"], (req, res) => {

@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610301155-6aa195fd";
+const APP_BUILD = "202610301239-70708b41";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -1244,8 +1244,17 @@ fitToVisibleArea();
    expected to; a tap inside — selecting the text — leaves it open.
 ══════════════════════════════════════════════ */
 
+/* The author's panel, at the top left, opens and closes the same way — and
+   opening one closes the other, since the tap that opens it is elsewhere.
+   Escape closes either. */
+const authorDropdown = document.getElementById("authorDropdown");
+const DROPDOWNS = [aboutDropdown, authorDropdown];
+
 document.addEventListener("click", (e) => {
-  if (aboutDropdown.open && !aboutDropdown.contains(e.target)) aboutDropdown.open = false;
+  for (const d of DROPDOWNS) if (d.open && !d.contains(e.target)) d.open = false;
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") for (const d of DROPDOWNS) d.open = false;
 });
 
 /** Both create buttons, always together — a second create while one is in
