@@ -324,7 +324,7 @@ test("the room is kept from creation, and let go when the chat starts, the room 
   assert.match(created, /saveHostRoom\(\);/);
   assert.match(between('    case "guest-joined":', "switchToChat("), /forgetHostRoom\(\);/);
   assert.match(between('case "session-expired": {', "currentSession = null;"), /forgetHostRoom\(\);/);
-  assert.match(between("leaveBtn.onclick = () => {", "wsSend("), /forgetHostRoom\(\);/);
+  assert.match(between("leaveBtn.onclick = (e) => {", "wsSend("), /forgetHostRoom\(\);/);
   assert.match(fn("loseWaitingRoom"), /forgetHostRoom\(\);/);
   assert.match(fn("returnToWaitingRoom"), /saveHostRoom\(\);/, "a code room's host waiting again is hosting a waiting room");
 });

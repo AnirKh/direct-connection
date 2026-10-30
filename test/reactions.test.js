@@ -393,7 +393,7 @@ test("every message both sides can name is made reactable — texts both ways, f
 test("a reaction is believed only sealed, and the bar goes with the chat", () => {
   assert.ok(!G.CLEAR_TYPES.includes("reaction"), "whoever carries the packets cannot add one");
   assert.match(between('    case "reaction":', "      break;"), /receiveReaction\(data\);/);
-  assert.match(between("leaveBtn.onclick = () => {", "keepScreenOn(false);"), /closeReactionBar\(\);/);
+  assert.match(between("leaveBtn.onclick = (e) => {", "keepScreenOn(false);"), /closeReactionBar\(\);/);
   assert.match(fn("switchToChat"), /closeReactionBar\(\);\s*\n\s*chatMessages\.replaceChildren\(\);/);
   assert.match(html, /<div id="reactionBar" class="reaction-bar hidden" role="toolbar" data-i18n-aria="react"/);
   for (const lang of ["mn", "en"]) {

@@ -92,11 +92,15 @@ function phone({ touched = true, activationApi = true } = {}) {
   const navigator = activationApi ? { userActivation: { get hasBeenActive() { return touched; } } } : {};
   const document = { getElementById: id => els[id], addEventListener: (t, f) => { docListeners[t] = f; } };
   const viewer = { open: false, closed: 0 };
+  const call = { full: false, mini: 0 };
   const api = new Function("G", "history", "window", "navigator", "document", "chatScreen", "chatMessages", "leaveBtn",
-    "viewingImage", "closeImageViewer",
-    `${BLOCK}\nreturn { armBackGuard, disarmBackGuard, warnBeforeUnload, armed: () => backGuardArmed };`
+    "viewingImage", "closeImageViewer", "callFillsScreen", "setCallMini",
+    `let inviteMovedAway = false;
+     ${BLOCK}\nreturn { armBackGuard, disarmBackGuard, warnBeforeUnload, chatLiveNow, armed: () => backGuardArmed,
+                       moveAway: () => { inviteMovedAway = true; } };`
   )(G, history, window, navigator, document, chatScreen, chatMessages, leaveBtn,
-    () => viewer.open, () => { viewer.open = false; viewer.closed++; });
+    () => viewer.open, () => { viewer.open = false; viewer.closed++; },
+    () => call.full, on => { if (on) { call.full = false; call.mini++; } });
   /* The browser's Back: move one entry back, and if it is still this page, tell it. */
   function pressBack() {
     if (index === 0) return;
@@ -105,7 +109,7 @@ function phone({ touched = true, activationApi = true } = {}) {
     winListeners.popstate && winListeners.popstate();
   }
   const enterChat = () => { api.armBackGuard(); window.addEventListener("beforeunload", api.warnBeforeUnload); };
-  return { ...api, log, pressBack, enterChat, els, chatScreen, ended, winListeners, docListeners, viewer,
+  return { ...api, log, pressBack, enterChat, els, chatScreen, ended, winListeners, docListeners, viewer, call,
            asking: () => !els.leaveChatOverlay.classList.contains("hidden"), entries, index: () => index,
            touch: () => { touched = true; docListeners.pointerdown(); } };
 }
@@ -134,6 +138,71 @@ test("Back with a picture open closes the picture — the chat stays, and the ne
   assert.equal(p.armed(), true, "held again");
   p.pressBack();
   assert.equal(p.asking(), true, "the next Back asks, as before");
+});
+
+/* ── During a call ──
+   Reported: Back in a call asked "Leave the chat?" over it, one tap from
+   ending the call and the chat together. */
+
+test("Back during a call that fills the screen makes it small, with the chat underneath — nothing asked, nothing ended", () => {
+  assert.equal(G.backPress({ chatOpen: true, chatEnded: false, asking: false, callFull: true }), "mini");
+  assert.equal(G.backPress({ chatOpen: true, callFull: "yes" }), "ask", "only a real yes");
+  const p = phone();
+  p.enterChat();
+  p.call.full = true;
+  p.pressBack();
+  assert.equal(p.call.mini, 1, "the call made small, as its own chat button does");
+  assert.equal(p.asking(), false, "not asked to leave");
+  assert.equal(p.log.left, 0);
+  assert.equal(p.log.leftPage, false);
+  assert.equal(p.armed(), true, "held again, for the next Back");
+});
+
+test("Back with the call already small: asked, as in any chat — the call goes on until Leave", () => {
+  const p = phone();
+  p.enterChat();
+  p.call.full = true;
+  p.pressBack();
+  p.pressBack();
+  assert.equal(p.call.mini, 1, "made small once");
+  assert.equal(p.asking(), true);
+  assert.equal(p.log.left, 0);
+});
+
+test("a picture open over the chat is still closed first; a call over the screen comes before an ended chat", () => {
+  assert.equal(G.backPress({ chatOpen: true, viewing: true, callFull: true }), "close");
+  assert.equal(G.backPress({ chatOpen: true, chatEnded: true, callFull: true }), "mini");
+});
+
+/* ── The X ── */
+
+test("the X asks only when pressed by hand in a chat that is on", () => {
+  assert.equal(G.leaveAsks({ byHand: true, chatLive: true }), true);
+  assert.equal(G.leaveAsks({ byHand: false, chatLive: true }), false, "the app's own click — the question's Leave — leaves");
+  assert.equal(G.leaveAsks({ byHand: true, chatLive: false }), false, "an ended chat: straight to the lobby");
+  assert.equal(G.leaveAsks({ byHand: "yes", chatLive: true }), false);
+  assert.equal(G.leaveAsks(undefined), false);
+});
+
+test("the X asks before anything is let go of, with the same question Back asks", () => {
+  const onclick = between("leaveBtn.onclick = (e) => {", "\n};");
+  const asked = onclick.indexOf("G.leaveAsks(");
+  assert.ok(asked > 0, "the X asks through G.leaveAsks");
+  assert.ok(asked < onclick.indexOf("closeImageViewer()"), "before the first thing it lets go of");
+  assert.match(onclick, /byHand: Boolean\(e && e\.isTrusted\)/, "a hand is a trusted click; the app's own are not");
+  assert.match(onclick, /leaveChatOverlay\.classList\.remove\("hidden"\);\s*return;/);
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.match(html, /id="leaveBtn"[\s\S]{0,200}?ti ti-x/, "an X, not an arrow");
+});
+
+test("opened in another browser: nothing left here to end — Back goes to the lobby without asking", () => {
+  const p = phone();
+  p.enterChat();
+  p.moveAway();
+  assert.equal(p.chatLiveNow(), false, "so the X leaves at once too");
+  p.pressBack();
+  assert.equal(p.asking(), false);
+  assert.equal(p.log.left, 1);
 });
 
 test("Back again answers the question: stay", () => {
@@ -255,7 +324,7 @@ test("the hold is taken when a chat opens, and given back however it is left —
   assert.match(open, /window\.addEventListener\("beforeunload", warnBeforeUnload\);/);
   /* Giving the entry back queues a Back. Should it land while the chat still
      showed, it would ask "Leave the chat?" of someone who already left. */
-  const leave = between("leaveBtn.onclick = () => {", "showLobbyTab(");
+  const leave = between("leaveBtn.onclick = (e) => {", "showLobbyTab(");
   const hide = 'chatScreen.classList.add("hidden")';
   assert.ok(leave.includes("disarmBackGuard()"), "Leave gives the entry back");
   assert.ok(leave.indexOf(hide) < leave.indexOf("disarmBackGuard()"), "Leave: chat hidden first");

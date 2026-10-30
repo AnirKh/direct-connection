@@ -732,6 +732,10 @@
    *   "ignore"  no chat on screen: it was ordinary navigation
    *   "close"   a picture is open over the chat: Back closes it, as it closes
    *             a picture in any app — the chat, ended or not, stays
+   *   "mini"    a call fills the screen: Back makes it small and shows the
+   *             chat, as the call's own chat button does — the call goes on.
+   *             Reported: Back in a call asked "Leave the chat?" over it,
+   *             one tap from ending the call and the chat together
    *   "lobby"   the chat has ended already: just go back to the lobby
    *   "stay"    the "Leave the chat?" question is up: Back answers it — stay
    *   "ask"     a chat that is on: ask before ending it
@@ -739,14 +743,30 @@
    * To a phone, Back means "leave this page", so it used to close the page and
    * the chat with it — for both people, in the middle of a sentence.
    *
-   * @param {{chatOpen: boolean, chatEnded: boolean, asking: boolean, viewing: boolean}} o
+   * @param {{chatOpen: boolean, chatEnded: boolean, asking: boolean, viewing: boolean, callFull: boolean}} o
    */
   function backPress(o) {
     if (!o || o.chatOpen !== true) return "ignore";
     if (o.viewing === true) return "close";
+    if (o.callFull === true) return "mini";
     if (o.chatEnded === true) return "lobby";
     if (o.asking === true) return "stay";
     return "ask";
+  }
+
+  /**
+   * The X at the top of the chat was pressed. Ask before leaving?
+   *
+   * Reported: the arrow that was there read as "back", not as "end the chat
+   * for both of us", and it left at once. Now it is an X and, pressed by
+   * hand in a chat that is on, asks first — the same question Back asks.
+   * The app's own clicks on it (the question's Leave, an ended chat's way
+   * back) are not hands: they leave, as before.
+   *
+   * @param {{byHand: boolean, chatLive: boolean}} o
+   */
+  function leaveAsks(o) {
+    return Boolean(o) && o.byHand === true && o.chatLive === true;
   }
 
   /* ══════════════════════════════════════════
@@ -1502,7 +1522,7 @@
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
     mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery,
     CHAT_REPAIR, chatRepair, unattended, tabTitle,
-    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, splitLinks,
+    waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, leaveAsks, splitLinks,
     REACTIONS, reactionKey, reactionValid, nextReaction, reactionBadge,
     HOST_ROOM_MAX_AGE_MS, restorableHostRoom,
     SAVED_SECRET, SAVED_ROOM, PERSON_NAME_MAX, SAVED_PEOPLE_MAX,

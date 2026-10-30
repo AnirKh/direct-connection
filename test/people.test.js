@@ -858,7 +858,7 @@ test("a tap while a PIN is being tried does nothing", () => {
 });
 
 test("leaving lets go of the person being met, and the lobby shows them as a name again", () => {
-  assert.match(between("leaveBtn.onclick = () => {", "\n};"),
+  assert.match(between("leaveBtn.onclick = (e) => {", "\n};"),
     /meeting = null;\s*\n\s*pendingMeet = null;\s*\n\s*knockSent = false;\s*\n\s*savedInChat = null;\s*\n\s*drawPeople\(\);/);
 });
 
@@ -866,7 +866,7 @@ test("after a chat joined from a link, the whole lobby works again — the name 
   /* Found checking this feature: a page that joined by link switched them off
      for the join, and nothing switched them on again after the chat. */
   assert.match(fn("checkAutoJoin"), /setLobbyButtons\(true\);/);
-  assert.match(between("leaveBtn.onclick = () => {", "\n};"), /setLobbyButtons\(false\);/);
+  assert.match(between("leaveBtn.onclick = (e) => {", "\n};"), /setLobbyButtons\(false\);/);
   assert.match(fn("setLobbyButtons"), /sessionIdInput\.disabled = disabled;\s*\n\s*refreshBtn\.disabled\s*= disabled;/);
 });
 

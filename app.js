@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610300647-e2894137";
+const APP_BUILD = "202610301114-5481478a";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -3649,7 +3649,7 @@ async function handleSignaling(data) {
          went there — to Safari or Chrome, most often, from the app the link was
          sent through. The chat goes on there; this copy stops, says so, and
          never joins again (inviteMovedAway). Nothing to offer here: the way
-         back to the lobby is the arrow, as always. */
+         back to the lobby is the X, which leaves at once here (chatEndedHere). */
       if (!roomEventIsOurs(data)) break;
       if (roomKind === "saved") { savedSeatTaken(); break; }
       if (isHost) break;
@@ -3874,8 +3874,12 @@ document.addEventListener("pointerdown", () => {
    with it — for both people, mid-sentence. While a chat is on screen the page
    now holds one history entry of its own, so Back lands on this page instead
    of leaving it, and asks "Leave the chat?" (G.backPress). Leaving still works
-   — the question's Leave, or the arrow at the top — and Home or the app
+   — the question's Leave, or the X at the top, which asks the same — and Home or the app
    switcher keep the chat going while another app is used.
+
+   During a call that fills the screen, Back makes the call small instead,
+   with the chat underneath — as the call's own chat button does. It used to
+   ask "Leave the chat?" over the call, one tap from ending both.
 
    Chrome skips a history entry a page added before the user had touched it,
    so Back would sail past it: a page opened from an invite link and connected
@@ -3887,10 +3891,17 @@ document.addEventListener("pointerdown", () => {
 const leaveChatOverlay = document.getElementById("leaveChatOverlay");
 let backGuardArmed = false;
 
+/** Over, here: ended — its way back to the lobby showing — or moved to
+    another browser (seat-taken), which offers "Continue here" instead and
+    has nothing left to end for anyone. */
+function chatEndedHere() {
+  return Boolean(chatMessages.querySelector(".reconnect-sys-wrap")) || inviteMovedAway;
+}
+
 function chatLiveNow() {
   return G.chatIsLive({
     chatOpen: !chatScreen.classList.contains("hidden"),
-    chatEnded: Boolean(chatMessages.querySelector(".reconnect-sys-wrap"))
+    chatEnded: chatEndedHere()
   });
 }
 
@@ -3921,13 +3932,15 @@ function disarmBackGuard() {
 window.addEventListener("popstate", () => {
   const action = G.backPress({
     chatOpen: !chatScreen.classList.contains("hidden"),
-    chatEnded: Boolean(chatMessages.querySelector(".reconnect-sys-wrap")),
+    chatEnded: chatEndedHere(),
     asking: !leaveChatOverlay.classList.contains("hidden"),
-    viewing: viewingImage()
+    viewing: viewingImage(),
+    callFull: callFillsScreen()
   });
   if (action === "ignore") return;
   backGuardArmed = false;                  // Back has just used our entry
   if (action === "close") { closeImageViewer(); armBackGuard(); return; }
+  if (action === "mini")  { setCallMini(true); armBackGuard(); return; }   // the chat, with the call small
   if (action === "lobby") { leaveBtn.click(); return; }
   armBackGuard();                          // still in the chat: hold the next Back too
   leaveChatOverlay.classList.toggle("hidden", action === "stay");
@@ -3991,7 +4004,14 @@ function switchToChat(sessionId, { keepMessages = false } = {}) {
   videoCallBtn.disabled = true;
 }
 
-leaveBtn.onclick = () => {
+leaveBtn.onclick = (e) => {
+  /* The X, pressed by hand in a chat that is on: the same question Back asks.
+     The app's own clicks — the question's Leave among them — are not
+     trusted events, and leave at once as they always did (G.leaveAsks). */
+  if (G.leaveAsks({ byHand: Boolean(e && e.isTrusted), chatLive: chatLiveNow() })) {
+    leaveChatOverlay.classList.remove("hidden");
+    return;
+  }
   closeImageViewer();               // its picture is about to be let go of
   closeReactionBar();
   keepScreenOn(false);
@@ -5781,6 +5801,11 @@ function setCallMini(on) {
   } else {
     showCallChrome();
   }
+}
+
+/** A call is on and fills the screen — not made small, not over. */
+function callFillsScreen() {
+  return !callOverlay.classList.contains("hidden") && !callMini;
 }
 
 /** The call is over: the next one starts full size, with nothing counted. */

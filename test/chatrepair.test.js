@@ -334,7 +334,7 @@ test("closing the chat's connection stops its repair", () => {
 test("the guest key is kept from the join, and forgotten on leaving or losing the seat", () => {
   const joined = between('    case "session-joined":', "      break;");
   assert.match(joined, /guestKey = /);
-  const leave = between("leaveBtn.onclick = () => {", "};");
+  const leave = between("leaveBtn.onclick = (e) => {", "};");
   assert.match(leave, /guestKey = null/);
   const taken = between('    case "seat-taken":', "      break;");
   assert.match(taken, /guestKey = null/);

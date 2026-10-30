@@ -143,7 +143,7 @@ test("a room expiring is also said as a toast to a host on another tab", () => {
 test("coming back from a chat lands on Rooms, with the status line cleared", () => {
   /* The Leave button's handler — a code room's host going back to waiting
      also shows the lobby, but stays on the Create tab, where its room is. */
-  const leave = app.slice(app.indexOf("leaveBtn.onclick = () => {"));
+  const leave = app.slice(app.indexOf("leaveBtn.onclick = (e) => {"));
   const back = leave.slice(leave.indexOf('lobbyScreen.classList.remove("hidden");'));
   const body = back.slice(0, back.indexOf("requestSessionList();"));
   assert.match(body, /showLobbyTab\("rooms"\)/);

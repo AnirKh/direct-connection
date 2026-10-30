@@ -164,7 +164,7 @@ test("✕ and Esc close it, letting go of the picture and giving the focus back"
 test("opened from both kinds of picture bubble; closed before a chat is left", () => {
   assert.match(fn("resolveImageNow"), /img\.onclick = \(\) => openImageViewer\(url, name\);/);
   assert.match(fn("resolveImagePlaceholder"), /img\.onload  = \(\) => \{ img\.onclick = \(\) => openImageViewer\(url, name\); \};/);
-  assert.match(between("leaveBtn.onclick = () => {", "keepScreenOn(false);"), /closeImageViewer\(\);/,
+  assert.match(between("leaveBtn.onclick = (e) => {", "keepScreenOn(false);"), /closeImageViewer\(\);/,
     "first, before the chat's pictures are let go of");
   const back = between('window.addEventListener("popstate", () => {', "\n});");
   assert.match(back, /viewing: viewingImage\(\)/);

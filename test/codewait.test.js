@@ -337,7 +337,7 @@ test("a channel that came up, or a chat no longer showing, gets no such note", (
 test("the watch starts with the chat screen, and stops when the chat works or is left", () => {
   assert.match(fn("switchToChat"), /watchConnecting\(\);/);
   assert.match(fn("e2eActivate"), /clearConnectWatch\(\);/);
-  assert.match(between("leaveBtn.onclick = () => {", "wsSend("), /clearConnectWatch\(\);/);
+  assert.match(between("leaveBtn.onclick = (e) => {", "wsSend("), /clearConnectWatch\(\);/);
   assert.match(fn("returnToWaitingRoom"), /clearConnectWatch\(\);/);
 });
 

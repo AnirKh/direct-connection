@@ -324,6 +324,6 @@ test("the screen is kept on for a waiting host and a chat, and let go when it en
   assert.match(fn("switchToChat"), /keepScreenOn\(true\)/);
   assert.match(between('case "session-created": {', "createInfo.style.textAlign"), /keepScreenOn\(true\)/);
   assert.match(between('case "session-expired": {', "currentSession = null;"), /keepScreenOn\(false\)/);
-  assert.match(between("leaveBtn.onclick = () => {", "wsSend("), /keepScreenOn\(false\)/);
+  assert.match(between("leaveBtn.onclick = (e) => {", "wsSend("), /keepScreenOn\(false\)/);
   assert.match(fn("showReconnectButton"), /keepScreenOn\(false\)/);
 });
