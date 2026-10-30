@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610301133-26b45b15";
+const APP_BUILD = "202610301155-6aa195fd";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -306,8 +306,10 @@ let _lastSessionList = [];  // cache for re-render on language change
    saveOffer   our offer to save each other, until they answer: { secret, name }
    saveAsked   their offer, while we are asked about it: { secret }
    saveDialog  the name dialog, while open: { mode, onConfirm, onCancel }
-   forgetting  the room of the person whose row asks "Forget?"          */
+   forgetting  the room of the person whose row asks "Forget?"
+   waitingForUs the rooms of those who tapped our name and wait for us now */
 let people      = [];
+let waitingForUs = new Set();
 let meeting     = null;
 let pendingMeet = null;
 let saveOffer   = null;
@@ -2048,8 +2050,14 @@ function personRow(p) {
   }
   const sub = document.createElement("span");
   sub.className = "person-sub";
-  /* Tapped: the room is being made, or made and waited in — and knocked on. */
-  sub.textContent = t(!here ? "personTap" : !currentSession ? "personConnecting" : knockSent ? "personKnocked" : "personWaiting");
+  /* Tapped: the room is being made, or made and waited in — and knocked on.
+     Or they tapped ours and wait for us: the row stands out (theyWait). */
+  const theyAreWaiting = !here && waitingForUs.has(p.room);
+  sub.textContent = t(theyAreWaiting ? "personWantsToTalk" : !here ? "personTap" : !currentSession ? "personConnecting" : knockSent ? "personKnocked" : "personWaiting");
+  if (theyAreWaiting) {
+    item.classList.add("knocking");
+    avatar.replaceChildren(tablerIcon("bell-ringing"));
+  }
   text.append(name, sub);
   open.append(avatar, text);
   open.onclick = () => meetPerson(p);
@@ -2088,6 +2096,7 @@ function meetPerson(p) {
   /* A room of our own still waiting for its guest is given up for this. */
   if (currentSession) leaveBtn.click();
   meeting = p;
+  waitingForUs.delete(p.room);        // tapped: coming, so no longer shown as waiting
   knockSent = false;
   isConnecting = true;
   roomKind = "saved"; pakeCode = null;
@@ -2618,6 +2627,25 @@ function mirrorForKnocks() {
   } catch (_) { /* storage off: a knock still comes, without the name */ }
 }
 
+/* ── Someone waiting for us, shown on their name ──
+   Asked for: when a saved person taps our name and waits, this lobby should
+   show it — the knock's notification was easy to miss with the app open, and
+   with alerts off there was none. While this page asks after the pair's
+   mailboxes, the server says who waits for us and when they stop
+   (meet-waiting): their row stands out — "wants to talk, tap to join" — and
+   it is said once, with the chime if nobody is looking. Every link that comes
+   up asks afresh (mailAtConnect), so nothing stays shown that has ended. */
+function theyWait(room, waiting) {
+  const p = people.find(q => q.room === room);
+  if (!p || waitingForUs.has(room) === waiting) return;
+  if (waiting) waitingForUs.add(room); else waitingForUs.delete(room);
+  if (waiting && !(meeting && meeting.room === room)) {
+    showToast(I18N[LANG].knockTitle(p.name), "info");
+    noticeArrival();
+  }
+  drawPeople();
+}
+
 /** Their knock was tapped: meet them — if this page is free; if it is busy,
     say who. */
 function answerKnock(room) {
@@ -2741,6 +2769,9 @@ function dropMail(p, item) {
 /** Each time the link comes up: ours the server has not said it kept, again
     (it keeps each once), and what waits for us, asked after. */
 function mailAtConnect() {
+  /* Who waits for us is asked afresh with the mailboxes: a wait that ended
+     while the link was down is not left showing. */
+  if (waitingForUs.size) { waitingForUs.clear(); drawPeople(); }
   for (const p of people) {
     for (const item of (mailStore.threads[p.room] || { items: [] }).items) {
       if (item.mine && item.state === "sending" && item.iv && item.ct) dropMail(p, item);
@@ -3642,6 +3673,11 @@ async function handleSignaling(data) {
 
     case "mail-waiting":
       fetchMail();
+      break;
+
+    case "meet-waiting":
+      /* A saved person waits for us in their room, or no longer (theyWait). */
+      if (typeof data.room === "string") theyWait(data.room, data.waiting === true);
       break;
 
     case "mail-dropped":

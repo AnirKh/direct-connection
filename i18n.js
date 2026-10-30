@@ -275,6 +275,7 @@ const I18N = {
     // Saved people
     peopleLabel:     "Хадгалсан хүмүүс",
     personTap:       "Дарж холбогдоно",
+    personWantsToTalk: "Тантай ярихыг хүсэж байна — дарж холбогдоно уу",
     personConnecting:"Холбогдож байна…",
     personWaiting:   "Хүлээж байна — тэр бас аппаа нээгээд таны нэрийг дарна",
     personCancel:    "Цуцлах",
@@ -578,6 +579,7 @@ const I18N = {
     // Saved people
     peopleLabel:     "Saved people",
     personTap:       "Tap to connect",
+    personWantsToTalk: "Wants to talk — tap to join",
     personConnecting:"Connecting…",
     personWaiting:   "Waiting — they open the app and tap your name",
     personCancel:    "Cancel",

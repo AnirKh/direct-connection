@@ -227,6 +227,64 @@ test("asking after a mailbox that is not one changes nothing", async () => {
   assert.deepEqual(b.inbox.filter(x => x.type !== "hello"), []);
 });
 
+/* ── Someone waiting for a saved person ──
+   Asked for: when someone taps a saved person's name and waits, that
+   person's open lobby shows it on their name. Their page already listens
+   under the room's name for its mailbox, so it is told there. */
+
+test("a saved person's open lobby hears when someone starts waiting for them, and when nobody does", async () => {
+  const room = box("waitfor");
+  const b = await client();
+  b.send_({ type: "mail-fetch", boxes: [{ box: room, side: "b" }] });
+  await sleep(150);
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  assert.ok(await waitFor(a, "session-created"));
+  assert.deepEqual(await waitFor(b, "meet-waiting"), { type: "meet-waiting", room, waiting: true });
+  b.inbox.length = 0;
+  a.send_({ type: "leave-session", sessionId: room });
+  assert.deepEqual(await waitFor(b, "meet-waiting"), { type: "meet-waiting", room, waiting: false }, "gave up: said too");
+});
+
+test("a lobby opened while someone already waits is told at once", async () => {
+  const room = box("already");
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "b" });
+  assert.ok(await waitFor(a, "session-created"));
+  const late = await client();
+  late.send_({ type: "mail-fetch", boxes: [{ box: room, side: "a" }] });
+  assert.deepEqual(await waitFor(late, "meet-waiting"), { type: "meet-waiting", room, waiting: true });
+});
+
+test("the one waited for comes: nobody waits now — said to its other devices as well", async () => {
+  const room = box("comes");
+  const phone = await client(), laptop = await client();
+  for (const d of [phone, laptop]) d.send_({ type: "mail-fetch", boxes: [{ box: room, side: "b" }] });
+  await sleep(150);
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  assert.ok(await waitFor(laptop, "meet-waiting"));
+  laptop.inbox.length = 0;
+  phone.send_({ type: "meet-session", sessionId: room, side: "b" });
+  assert.ok(await waitFor(phone, "session-joined"));
+  assert.deepEqual(await waitFor(laptop, "meet-waiting"), { type: "meet-waiting", room, waiting: false },
+    "the laptop stops showing it once the phone has answered");
+});
+
+test("only the side waited for is told — not the waiting side's own other devices, nor anyone else", async () => {
+  const room = box("onlythem");
+  const own = await client(), other = await client();
+  own.send_({ type: "mail-fetch", boxes: [{ box: room, side: "a" }] });
+  other.send_({ type: "mail-fetch", boxes: [{ box: box("elsewhere"), side: "b" }] });
+  await sleep(150);
+  const a = await client();
+  a.send_({ type: "meet-session", sessionId: room, side: "a" });
+  assert.ok(await waitFor(a, "session-created"));
+  await sleep(300);
+  assert.equal(own.inbox.some(m => m.type === "meet-waiting"), false, "its own other tab is the one waiting, not waited for");
+  assert.equal(other.inbox.some(m => m.type === "meet-waiting"), false);
+});
+
 test("a restart loses nothing waiting", async () => {
   const a = await client();
   const m = message();

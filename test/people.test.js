@@ -277,7 +277,7 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
   const ws = { readyState: wsOpen ? 1 : 3 };
   const tablerIcon = name => { const i = element("i"); i.className = `ti ti-${name}`; return i; };
   const api = new Function(...NAMES, `
-    let people = [], meeting = null, pendingMeet = null, saveOffer = null, saveAsked = null, saveDialog = null, forgetting = null;
+    let people = [], meeting = null, pendingMeet = null, saveOffer = null, saveAsked = null, saveDialog = null, forgetting = null, waitingForUs = new Set();
     let currentSession = null, isConnecting = false, listJoinId = null, pinJoinInFlight = false, isHost = false;
     let hostKey = null, reclaimPending = false, roomSecret = null, pendingRoomSecret = null, pakeCode = null;
     let roomKind = env.kind, guestKey = null, seatPending = false, dataChannel = null;
@@ -291,9 +291,9 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
       maybeOfferSave, startSaveOffer, receiveSaveOffer, receiveSaveAccept, receiveSaveDecline,
       renamePerson, askForget, forgetPerson, confirmSaveDialog, cancelSaveDialog,
       knockStateNow, knockKeyArrived, knocksOn, knocksOff, shareKnockAddress, sendKnockAddress, receiveKnockAddress,
-      knockAnswered, answerKnock, savedInChatNow,
+      knockAnswered, answerKnock, savedInChatNow, theyWait, mailAtConnect,
       openThread, closeThread, sendMail, receiveMail, mailAnswered, mailAtConnect, fetchMail, answerMail, sendFromThread,
-      get: () => ({ people, meeting, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
+      get: () => ({ people, meeting, waitingForUs, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
                     isConnecting, isHost, hostKey, roomSecret, pendingRoomSecret, roomKind, guestKey,
                     knockKey, knockSub, knockSent, knockShared, savedInChat, knockEarly, mailStore, mailOpenFor }),
       set: o => { for (const [k, v] of Object.entries(o)) switch (k) {
@@ -750,6 +750,66 @@ test("renamed here, and only here", async () => {
   assert.equal(p.stored().people[0].secret, anu.secret);
   assert.equal(p.rows()[0].querySelector(".person-name").textContent, "Anu (phone)");
   assert.deepEqual(p.log.sealed, [], "nothing sent anywhere");
+});
+
+/* ── Someone waiting for us ──
+   Asked for: when a saved person taps our name and waits, this lobby shows
+   it on their name — the knock's notification was easy to miss. */
+
+test("they tap our name and wait: their row stands out — wants to talk, tap to join — and it is said once", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  p.api.theyWait(anu.room, true);
+  const row = p.rows()[0];
+  assert.ok(row.classList.contains("knocking"), "the row stands out");
+  assert.ok(row.textContent.includes(I18N.mn.personWantsToTalk));
+  assert.ok(!p.rows()[1].classList.contains("knocking"), "only theirs");
+  assert.deepEqual(p.log.toasts, [I18N.mn.knockTitle("Anu")]);
+  assert.equal(p.log.noticed, 1, "the chime and the count, if nobody is looking");
+  p.api.theyWait(anu.room, true);
+  assert.equal(p.log.toasts.length, 1, "said once, not at every word of it");
+});
+
+test("they stop waiting — left, or the wait ran out: their row is a name again, and nothing more is said", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu] });
+  p.api.theyWait(anu.room, true);
+  p.api.theyWait(anu.room, false);
+  assert.ok(!p.rows()[0].classList.contains("knocking"));
+  assert.ok(p.rows()[0].textContent.includes(I18N.mn.personTap));
+  assert.equal(p.log.toasts.length, 1);
+});
+
+test("a tap on their waiting name joins them, and the row is no longer shown as waiting", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu] });
+  p.api.theyWait(anu.room, true);
+  p.api.meetPerson(anu);
+  assert.deepEqual(p.log.ws.at(-1), { type: "meet-session", sessionId: anu.room, side: anu.side });
+  assert.equal(p.api.get().waitingForUs.has(anu.room), false);
+  assert.ok(!p.rows()[0].classList.contains("knocking"));
+});
+
+test("word about a room that is nobody saved here is ignored", async () => {
+  const anu = await person("Anu"), stranger = await person("Someone");
+  const p = page({ saved: [anu] });
+  p.api.theyWait(stranger.room, true);
+  assert.equal(p.api.get().waitingForUs.size, 0);
+  assert.deepEqual(p.log.toasts, []);
+});
+
+test("each link that comes up asks afresh: a wait that ended while it was down is not left showing", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu] });
+  p.api.theyWait(anu.room, true);
+  p.api.mailAtConnect();
+  assert.ok(!p.rows()[0].classList.contains("knocking"));
+  assert.deepEqual(p.log.ws.at(-1), { type: "mail-fetch", boxes: [{ box: anu.room, side: anu.side }] },
+    "and asked again, with the mailboxes — the server says again who still waits");
+});
+
+test("the server's word that someone waits is taken by the message switch", () => {
+  assert.match(between('    case "meet-waiting":', "      break;"), /theyWait\(data\.room, data\.waiting === true\)/);
 });
 
 test("forget asks first, in the row; Keep keeps; Forget takes them off this device", async () => {

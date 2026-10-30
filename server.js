@@ -625,7 +625,7 @@ function expireAway(sessionId, side) {
     session.host.send(JSON.stringify({ type: "peer-disconnected", sessionId }));
   }
   clearTimeout(session.hostAwayTimer);
-  sessions.delete(sessionId);
+  removeSession(sessionId);
   console.log(`Session ${sessionLogId(sessionId)} removed — its guest did not come back`);
   broadcastSessionList();
 }
@@ -643,8 +643,39 @@ function dropSession(sessionId, session) {
   }
   clearTimeout(session.hostAwayTimer);
   clearTimeout(session.guestAwayTimer);
-  sessions.delete(sessionId);
+  removeSession(sessionId);
   console.log(`Session ${sessionLogId(sessionId)} removed`);
+}
+
+/** Every room goes through here, so a saved person's open lobby always
+    hears that nobody waits for it any more (tellSavedWaiting). */
+function removeSession(sessionId) {
+  const session = sessions.get(sessionId);
+  sessions.delete(sessionId);
+  if (session) tellSavedWaiting(sessionId, session, false);
+}
+
+/* ── Someone waiting for a saved person ─────
+   Asked for: when someone taps a saved person's name and waits, that
+   person's lobby should show it on their name. The knock's notification was
+   easy to miss with the app open, and with alerts off there was none. Their
+   page, while open, already asks after the pair's mailbox under the room's
+   own name and the side it is (mail-fetch), so it is told there — nothing
+   the server did not know: meet-waiting, true while someone waits in the
+   room for them, false once nobody does. */
+function tellSavedWaiting(sessionId, session, waiting) {
+  if (!session || session.kind !== "saved") return;
+  const forSide = session.hostSide === "a" ? "b" : "a";
+  for (const l of mailListeners.get(`${sessionId}:${forSide}`) || []) {
+    if (l.readyState === WebSocket.OPEN) l.send(JSON.stringify({ type: "meet-waiting", room: sessionId, waiting }));
+  }
+}
+
+/** Someone is in it waiting for the other side — here or with its link
+    dropped for a moment — and nobody has come. */
+function savedRoomWaiting(session) {
+  return Boolean(session) && session.kind === "saved" && !session.guest && !session.guestAwaySince &&
+    Boolean(session.host || session.hostAwaySince);
 }
 /** Unknown message types logged per socket before going quiet. */
 const UNKNOWN_TYPE_LOG_MAX = 5;
@@ -830,6 +861,7 @@ function cleanupClient(ws, { dropped = false } = {}) {
       session.paired = false;
       session.guestKey = null;
       session.waitingSince = Date.now();
+      if (savedRoomWaiting(session)) tellSavedWaiting(sessionId, session, true);
       broadcastSessionList();
       continue;
     }
@@ -848,7 +880,7 @@ function cleanupClient(ws, { dropped = false } = {}) {
       if (other && other.readyState === WebSocket.OPEN) {
         other.send(JSON.stringify({ type: "peer-disconnected", sessionId }));
       }
-      sessions.delete(sessionId);
+      removeSession(sessionId);
       console.log(`Session ${sessionLogId(sessionId)} removed`);
       broadcastSessionList();
     }
@@ -1234,6 +1266,7 @@ wss.on("connection", (ws, req) => {
             joinLockedUntil: 0, failedJoinWindowStart: 0, failedJoinCount: 0
           });
           ws.send(JSON.stringify({ type: "session-created", sessionId, pin: null, token: null, hostKey, open: false, kind: "saved" }));
+          tellSavedWaiting(sessionId, sessions.get(sessionId), true);   // their lobby, if open, shows it on our name
           console.log(`Session ${sessionLogId(sessionId)} made for a saved person`);
           break;
         }
@@ -1262,6 +1295,7 @@ wss.on("connection", (ws, req) => {
             room.paired = false;
           }
           adoptRoom(ws, sessionId, room, { restart });
+          if (savedRoomWaiting(room)) tellSavedWaiting(sessionId, room, true);
           break;
         }
 
@@ -1278,6 +1312,7 @@ wss.on("connection", (ws, req) => {
         if (replaced && replaced.readyState === WebSocket.OPEN) {
           replaced.send(JSON.stringify({ type: "seat-taken", sessionId }));
         }
+        tellSavedWaiting(sessionId, room, false);  // come: nobody waits now, on any of its devices
         const hostHere = room.host?.readyState === WebSocket.OPEN;
         room.paired = hostHere;
         ws.send(JSON.stringify({ type: "session-joined", sessionId, hostAway: !hostHere, guestKey: room.guestKey }));
@@ -1368,6 +1403,12 @@ wss.on("connection", (ws, req) => {
           mailFetchedAt.set(key, Date.now());
           const items = mail.take(b.box, b.side);
           if (items.length) ws.send(JSON.stringify({ type: "mail", box: b.box, side: b.side, items }));
+          /* Someone already waiting in the room for this side: said now, not
+             only when the next one starts (see tellSavedWaiting). */
+          const waitingRoom = sessions.get(b.box);
+          if (savedRoomWaiting(waitingRoom) && waitingRoom.hostSide !== b.side) {
+            ws.send(JSON.stringify({ type: "meet-waiting", room: b.box, waiting: true }));
+          }
         }
         break;
       }
@@ -1567,7 +1608,7 @@ setInterval(() => {
       if (s.host?.readyState === WebSocket.OPEN) {
         s.host.send(JSON.stringify({ type: "session-expired", sessionId: id }));
       }
-      sessions.delete(id);
+      removeSession(id);
       pruned++;
     }
   }

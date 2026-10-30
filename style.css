@@ -510,6 +510,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .person-item.waiting .person-avatar { animation: person-wait 1.6s ease-in-out infinite; }
 @keyframes person-wait { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .person-item.waiting .person-avatar { animation: none; } }
+/* Someone waiting for us: the row stands out — a green edge, the line in
+   green, and the circle, a ringing bell, swells. */
+.person-item.knocking { box-shadow: inset 0 0 0 2px var(--green); }
+.person-item.knocking .person-sub { color: var(--green); font-weight: 600; }
+.person-item.knocking .person-avatar { background: var(--green); animation: person-ring 1.2s ease-in-out infinite; }
+@keyframes person-ring { 50% { transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) { .person-item.knocking .person-avatar { animation: none; } }
 .person-tool {
   width: 38px; height: 38px; min-height: unset; margin: 0; padding: 0; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
