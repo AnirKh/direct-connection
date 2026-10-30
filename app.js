@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610300642-c9843e1d";
+const APP_BUILD = "202610300647-e2894137";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
