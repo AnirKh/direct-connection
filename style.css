@@ -1058,7 +1058,33 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .call-overlay.chrome-waking .call-controls { pointer-events: none; }
 /* The "away" note sits where the figures do; with figures showing, it goes
    under them rather than over them. */
-.call-stats:not(:empty) ~ .call-pause-note { top: calc(104px + var(--safe-top)); }
+.call-stats:not(:empty) ~ .call-pause-note { top: calc(122px + var(--safe-top)); }
+/* This side's microphone, paused by the phone and not coming back: a pill
+   above the controls, to tap and try again. */
+.call-mic-note {
+  position: absolute; z-index: 11;
+  bottom: calc(118px + var(--safe-bottom));
+  left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: calc(100% - 40px); min-height: 0; margin: 0;
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 16px; border-radius: 14px;
+  background: rgba(0,0,0,0.75); color: #fff; border: 1px solid var(--orange);
+  font-size: 14px; font-weight: 600; line-height: 1.4; text-align: left;
+}
+.call-mic-note i { font-size: 20px; flex-shrink: 0; color: var(--orange); }
+/* The phone would not start their sound without a tap: in the middle, where
+   it cannot be missed. */
+.call-tap-hear {
+  position: absolute; z-index: 12;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: max-content; max-width: calc(100% - 40px); min-height: 0; margin: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 22px; border-radius: 16px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 16px; font-weight: 700;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+.call-tap-hear i { font-size: 24px; }
 .call-controls {
   position: absolute; bottom: calc(32px + var(--safe-bottom));
   display: flex; gap: 18px; z-index: 10;
@@ -1114,6 +1140,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .call-overlay.mini .call-status-label,
 .call-overlay.mini .call-stats,
 .call-overlay.mini .call-pause-note,
+.call-overlay.mini .call-mic-note,
 .call-overlay.mini .call-controls { display: none; }
 /* Theirs, then you beside it — not over it — each filling its tile, trimmed
    at the edges rather than shrunk inside black bars. Yours is the same

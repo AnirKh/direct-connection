@@ -88,3 +88,62 @@ test("a call reads its figures while it lasts, and stops when it ends", () => {
   assert.match(fn("stopCallMedia"), /watchCallStats\(false\);/);
   assert.match(fn("updateCallStats"), /DCS\.callVideoStats\(report, callStatsLast\)/);
 });
+
+/* ══════════════════════════════════════════
+   The sound
+   ──────────────────────────────────────────
+   Added when an Android phone heard nothing from an iPhone: the rate each way
+   says whether sound is sent and arrives, the level whether it is sound or
+   silence — exactly 0 being a microphone sending zeros.
+══════════════════════════════════════════ */
+
+test("sound both ways: the rate, and the level the stats give", () => {
+  const first = DCS.callAudioStats(report([
+    { id: "i", type: "inbound-rtp", kind: "audio", bytesReceived: 10_000, audioLevel: 0.12, timestamp: 1000 },
+    { id: "o", type: "outbound-rtp", kind: "audio", bytesSent: 8_000, timestamp: 1000 },
+    { id: "m", type: "media-source", kind: "audio", audioLevel: 0.3, timestamp: 1000 }
+  ]), null);
+  assert.equal(first.in.kbps, null, "no rate before a second reading");
+  assert.equal(first.in.level, 0.12);
+  assert.equal(first.out.level, 0.3, "out, the microphone's own level");
+  const next = DCS.callAudioStats(report([
+    { id: "i", type: "inbound-rtp", kind: "audio", bytesReceived: 18_000, audioLevel: 0.1, timestamp: 3000 },
+    { id: "o", type: "outbound-rtp", kind: "audio", bytesSent: 16_000, timestamp: 3000 },
+    { id: "m", type: "media-source", kind: "audio", audioLevel: 0, timestamp: 3000 }
+  ]), first);
+  assert.equal(next.in.kbps, 32);
+  assert.equal(next.out.kbps, 32);
+  assert.equal(next.out.level, 0, "exactly 0: a microphone sending zeros");
+});
+
+test("a browser without audioLevel: the level from the energy since last time", () => {
+  const first = DCS.callAudioStats(report([
+    { id: "i", type: "inbound-rtp", kind: "audio", bytesReceived: 0, totalAudioEnergy: 1, totalSamplesDuration: 10, timestamp: 1000 }
+  ]), null);
+  assert.equal(first.in.level, null, "nothing to compare with yet");
+  const next = DCS.callAudioStats(report([
+    { id: "i", type: "inbound-rtp", kind: "audio", bytesReceived: 4000, totalAudioEnergy: 1.04, totalSamplesDuration: 11, timestamp: 2000 }
+  ]), first);
+  assert.ok(Math.abs(next.in.level - 0.2) < 1e-9, "the square root of energy over time: 0.04 a second is 0.2");
+});
+
+test("no sound either way, a video track, or nothing to read: null, and no error", () => {
+  const none = DCS.callAudioStats(report([
+    { id: "v", type: "inbound-rtp", kind: "video", bytesReceived: 5000, timestamp: 1 }
+  ]), null);
+  assert.equal(none.in, null);
+  assert.equal(none.out, null);
+  assert.deepEqual(DCS.callAudioStats(null, null), { in: null, out: null, at: 0 });
+  const older = DCS.callAudioStats(report([{ id: "i", type: "inbound-rtp", mediaType: "audio", bytesReceived: 1, timestamp: 1 }]), null);
+  assert.ok(older.in, "older browsers that say mediaType are read too");
+});
+
+test("the call's figures carry a line for the sound, in a voice call too, and feed the microphone check", () => {
+  const fn = name => (app.match(new RegExp(`^(?:async )?function ${name}\\([^)]*\\)\\s*\\{[\\s\\S]*?^\\}`, "m")) || [])[0];
+  const update = fn("updateCallStats");
+  assert.match(update, /DCS\.callAudioStats\(report, callAudioLast\)/);
+  assert.match(update, /if \(sound\.in \|\| sound\.out\) lines\.push\(/, "a line of its own, whether or not there is video");
+  assert.match(update, /noteMicLevel\(sound\.out\);/);
+  const describe = fn("describeCallSound");
+  assert.match(describe, /side\.level > 0 && side\.level < 0\.01 \? "<1%"/, "a quiet room is not shown as the zero of a paused microphone");
+});

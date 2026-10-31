@@ -108,7 +108,8 @@ test("both the offer and the answer go through it", () => {
 });
 
 test("with the figures showing, the away note sits under them, not on top", () => {
-  assert.match(css, /\.call-stats:not\(:empty\) ~ \.call-pause-note\s*\{\s*top:\s*calc\(104px \+ var\(--safe-top\)\)/);
+  /* Lower than it was: the figures have a third line now, for the sound. */
+  assert.match(css, /\.call-stats:not\(:empty\) ~ \.call-pause-note\s*\{\s*top:\s*calc\(122px \+ var\(--safe-top\)\)/);
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   assert.ok(html.indexOf('id="callStats"') < html.indexOf('id="callPauseNote"'), "the ~ only reaches a note that comes after the figures");
 });

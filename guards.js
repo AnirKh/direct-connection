@@ -1049,7 +1049,48 @@
     /* "failed" too: a failed call link is now worked on (callRecovery), not
        simply ended, so it is reconnecting as much as a disconnected one. */
     if (o.linkState === "disconnected" || o.linkState === "failed") return "reconnecting";
+    /* Their phone paused their microphone and could not wake it (micCheck):
+       said here, so silence is not taken for a fault at this end. */
+    if (o.peerMicSilent === true) return "mic";
     return null;
+  }
+
+  /**
+   * Is this side's microphone really sending sound in the call — and if not,
+   * what now?
+   *
+   * Reported: an Android phone heard nothing at all from an iPhone, from the
+   * start of the call, voice or video, now and then — while the iPhone heard
+   * the Android phone. A phone can pause a page's microphone without ending
+   * it: the track says it is muted (by the phone, not by the person), or it
+   * stays live and sends nothing but zeros. Only a microphone that ended was
+   * ever started again. Now one paused for a moment is opened again, and one
+   * that will not come back is said on both sides.
+   *
+   *   "ok"      sending, or nothing to check: no call, no microphone, muted by
+   *             the person themselves (silence they chose)
+   *   "wait"    paused, but not for long yet — or the page is hidden, where a
+   *             phone pauses capture for its own reasons
+   *   "reopen"  open the microphone again (at most MIC_CHECK.reopens times)
+   *   "tell"    still paused after that: say so, here and to the other side
+   *
+   * `pausedBy`: "phone" (the track's muted flag) or "zeros" (its level read
+   * exactly 0 in the call's stats — a real microphone in a quiet room still
+   * reads above 0 — and only until the microphone has sent any sound at all:
+   * the fault was silence from the start, and once heard, quiet is someone
+   * being quiet). Each has its own wait: the flag is the phone saying so,
+   * zeros need longer to be sure.
+   *
+   * @param {{inCall: boolean, hasMic: boolean, userMuted: boolean, visible: boolean,
+   *          pausedBy: "phone"|"zeros"|null, pausedFor: number, reopens: number}} o
+   */
+  const MIC_CHECK = Object.freeze({ phoneMs: 1500, zerosMs: 4000, reopens: 2 });
+  function micCheck(o) {
+    if (!o || o.inCall !== true || o.hasMic !== true || o.userMuted === true) return "ok";
+    if (o.pausedBy !== "phone" && o.pausedBy !== "zeros") return "ok";
+    if (o.visible !== true || !(o.pausedFor >= 0)) return "wait";
+    if (o.pausedFor < (o.pausedBy === "phone" ? MIC_CHECK.phoneMs : MIC_CHECK.zerosMs)) return "wait";
+    return o.reopens < MIC_CHECK.reopens ? "reopen" : "tell";
   }
 
   /**
@@ -1545,7 +1586,7 @@
     isAppleTouchDevice, installOffer,
     LINK_ALIVE, serverLeaveEndsChat, linkLostForGood,
     tracksToRestart, mayFlipCamera, flipCameraOffered, mayMoveMic, micChangeAction, speakerOffered,
-    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, CALL_RECOVER, callRecovery,
+    mayShareScreen, shareOffered, callChromeMayHide, callPauseNote, MIC_CHECK, micCheck, CALL_RECOVER, callRecovery,
     CHAT_REPAIR, chatRepair, unattended, tabTitle,
     waitingRoomLost, isOwnRoom, connectStalled, chatIsLive, backPress, leaveAsks, callWhenChatCloses, splitLinks,
     REACTIONS, reactionKey, reactionValid, nextReaction, reactionBadge,

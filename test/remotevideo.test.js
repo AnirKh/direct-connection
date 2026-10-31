@@ -45,11 +45,16 @@ class MediaStream {
 }
 
 /** Starts a call's connection with the real code and hands back the controls. */
-function call({ inCall = true } = {}) {
+function call({ inCall = true, refusePlay = null } = {}) {
   const video = {
-    srcObject: "left over from the last call", videoWidth: 0, plays: 0, attached: [],
-    play() { this.plays++; return Promise.resolve(); }
+    srcObject: "left over from the last call", videoWidth: 0, plays: 0, attached: [], refusePlay,
+    play() {
+      this.plays++;
+      return this.refusePlay ? Promise.reject(Object.assign(new Error("refused"), { name: this.refusePlay })) : Promise.resolve();
+    }
   };
+  const hidden = new Set(["hidden"]);
+  const tapToHear = { classList: { add: c => hidden.add(c), remove: c => hidden.delete(c), contains: c => hidden.has(c) } };
   /* Record every stream the picture is given, in order. */
   let current = video.srcObject;
   Object.defineProperty(video, "srcObject", {
@@ -62,15 +67,15 @@ function call({ inCall = true } = {}) {
 
   const run = new Function(
     "MediaStream", "RTCPeerConnection", "remoteVideo", "callStatusLabel", "t",
-    "ICE_CONFIG", "currentSession", "dcSendCallSignal", "endCall", "inCall",
-    `let callPc = null, remoteCallStream = null;\nconst stopCallRecovery = () => {}, watchCallLink = () => {};\n${SOURCE}\ncreateCallPeerConnection();`
+    "ICE_CONFIG", "currentSession", "dcSendCallSignal", "endCall", "inCall", "callTapToHear",
+    `let callPc = null, remoteCallStream = null;\nconst stopCallRecovery = () => {}, watchCallLink = () => {};\n${SOURCE}\ncreateCallPeerConnection();\nreturn { playRemoteCallMedia };`
   );
-  run(MediaStream, RTCPeerConnection, video, { textContent: "" }, key => key,
-      {}, null, () => {}, () => {}, inCall);
+  const api = run(MediaStream, RTCPeerConnection, video, { textContent: "" }, key => key,
+      {}, null, () => {}, () => {}, inCall, tapToHear);
 
   const track = kind => ({ kind, id: `${kind}-1` });
   const arrive = t => connection.ontrack({ track: t });
-  return { video, track, arrive };
+  return { video, track, arrive, ...api, tapShown: () => !hidden.has("hidden") };
 }
 
 const kinds = stream => stream.getTracks().map(t => t.kind);
@@ -149,4 +154,36 @@ test("tracks that arrive before the call is accepted are held, not played", () =
   assert.equal(c.video.plays, 0);
   assert.equal(c.video._pendingPlay, true);
   assert.deepEqual(kinds(c.video.srcObject), ["audio"], "attached, so it is ready the moment the call is");
+});
+
+/* ── A phone that will not start the sound by itself ──
+   Reported: an Android phone heard nothing from an iPhone, from the start.
+   A refused play() was swallowed: a call that connected in silence, with
+   nothing to press. */
+
+const settled = () => new Promise(r => setImmediate(r));
+
+test("a phone that will not start the sound without a tap: Tap to hear appears, and goes once it plays", async () => {
+  const c = call({ refusePlay: "NotAllowedError" });
+  c.arrive(c.track("audio"));
+  await settled();
+  assert.equal(c.tapShown(), true);
+  c.video.refusePlay = null;                 // the tap is the phone's permission
+  c.playRemoteCallMedia();
+  await settled();
+  assert.equal(c.tapShown(), false);
+});
+
+test("a play interrupted by a fresh stream is not that: nothing to tap", async () => {
+  const c = call({ refusePlay: "AbortError" });
+  c.arrive(c.track("audio"));
+  await settled();
+  assert.equal(c.tapShown(), false);
+});
+
+test("sound that starts by itself: nothing to tap", async () => {
+  const c = call();
+  c.arrive(c.track("audio"));
+  await settled();
+  assert.equal(c.tapShown(), false);
 });

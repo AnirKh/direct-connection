@@ -83,11 +83,13 @@ class Track {
 class MediaStream {
   constructor(tracks = []) { this.tracks = [...tracks]; }
   getTracks() { return [...this.tracks]; }
+  getAudioTracks() { return this.tracks.filter(t => t.kind === "audio"); }
 }
 
 function call({ video = true, inCall = true, refuse = false, muted = false, camOff = false } = {}) {
   const listeners = {};
-  const log = { asked: [], sent: [], toasts: [], replaced: [], attached: [], played: 0, opened: [] };
+  const log = { asked: [], sent: [], toasts: [], replaced: [], attached: [], played: 0, opened: [], restarted: 0, micSent: [] };
+  const clock = { now: 1_000_000 };
   let gate = null;
   const mic = new Track("audio"), cam = video ? new Track("video") : null;
   const senders = [mic, cam].filter(Boolean).map(t => ({ track: t, replaceTrack(n) { log.replaced.push([this.track.kind, n]); this.track = n; return Promise.resolve(); } }));
@@ -106,7 +108,13 @@ function call({ video = true, inCall = true, refuse = false, muted = false, camO
     console: { error() {}, log() {} },
     showToast: m => log.toasts.push(m),
     dcReady: () => true,
-    dcSendCallSignal: m => { log.sent.push(m.type); return Promise.resolve(); },
+    dcSendCallSignal: m => { log.sent.push(m.type); if (m.type === "call-mic") log.micSent.push(m.silent); return Promise.resolve(); },
+    Date: { now: () => clock.now },
+    setTimeout: () => 0,
+    callMicNote: { classList: classes(["hidden"]), onclick: null },
+    callTapToHear: { classList: classes(["hidden"]), onclick: null },
+    remoteVideo: { play: () => Promise.resolve() },
+    restartLikeCallStart: () => { log.restarted++; },
     attachCallTrack: async t => { log.attached.push(t); },
     callVideo: () => ({ facingMode: "user" }),
     state: { inCall, callPc: { connectionState: "connected", getSenders: () => senders },
@@ -119,7 +127,9 @@ function call({ video = true, inCall = true, refuse = false, muted = false, camO
     let { inCall, callPc, localStream, isMuted, isCamOff, localVideo, sharingScreen = false } = state;
     ${BLOCK}
     return {
-      restartEndedCallMedia, updateCallPauseNote, watchCallTrack,
+      restartEndedCallMedia, updateCallPauseNote, watchCallTrack, checkMic, noteMicLevel, resetMicCheck,
+      micNote: () => !callMicNote.classList.contains("hidden"), tapMicNote: () => callMicNote.onclick(),
+      setPeerMic: v => { peerMicSilent = v; },
       note: () => (callPauseNote.classList.contains("hidden") ? null : callPauseText.textContent),
       setAway: v => { peerAway = v; },
       setInCall: v => { inCall = v; },
@@ -133,12 +143,13 @@ function call({ video = true, inCall = true, refuse = false, muted = false, camO
     listeners.visibilitychange();
     await new Promise(r => setImmediate(r));
   };
-  return { ...api, log, mic, cam, senders, show, env,
+  return { ...api, log, mic, cam, senders, show, env, clock,
            hold: () => { let open; gate = new Promise(r => { open = r; }); return () => { gate = null; open(); }; } };
 }
 function classes() {
   const set = new Set(["hidden"]);
-  return { toggle: (c, on) => (on ? set.add(c) : set.delete(c)), contains: c => set.has(c) };
+  return { toggle: (c, on) => (on ? set.add(c) : set.delete(c)), contains: c => set.has(c),
+           add: c => set.add(c), remove: c => set.delete(c) };
 }
 
 test("the screen going off tells the other side; coming back tells it again", async () => {
@@ -265,6 +276,136 @@ test("the note: away, reconnecting, and gone again", () => {
 /* ══════════════════════════════════════════
    The wiring
 ══════════════════════════════════════════ */
+
+/* ══════════════════════════════════════════
+   A microphone the phone has paused
+   ──────────────────────────────────────────
+   Reported: an Android phone heard nothing at all from an iPhone, from the
+   start, voice or video, now and then — while the iPhone heard it.
+══════════════════════════════════════════ */
+
+const mic = o => G.micCheck({ inCall: true, hasMic: true, userMuted: false, visible: true, pausedBy: "phone", pausedFor: 0, reopens: 0, ...o });
+
+test("the rule: a microphone paused a moment is opened again, twice at most; then said", () => {
+  assert.equal(mic({ pausedBy: null }), "ok", "sending");
+  assert.equal(mic({ pausedFor: 1000 }), "wait", "the phone's flag, a moment");
+  assert.equal(mic({ pausedFor: G.MIC_CHECK.phoneMs }), "reopen");
+  assert.equal(mic({ pausedFor: 5000, reopens: 1 }), "reopen");
+  assert.equal(mic({ pausedFor: 5000, reopens: 2 }), "tell");
+  assert.equal(mic({ pausedBy: "zeros", pausedFor: 2000 }), "wait", "zeros take longer to be sure of");
+  assert.equal(mic({ pausedBy: "zeros", pausedFor: G.MIC_CHECK.zerosMs }), "reopen");
+});
+
+test("the rule: silence the person chose, a hidden page, no call or no microphone — nothing to do", () => {
+  assert.equal(mic({ userMuted: true, pausedFor: 9999 }), "ok", "their own mute");
+  assert.equal(mic({ visible: false, pausedFor: 9999 }), "wait", "a phone pauses a hidden page's capture for its own reasons");
+  assert.equal(mic({ inCall: false, pausedFor: 9999 }), "ok");
+  assert.equal(mic({ hasMic: false, pausedFor: 9999 }), "ok");
+  assert.equal(mic({ pausedFor: NaN }), "wait");
+  assert.equal(G.micCheck(undefined), "ok");
+});
+
+test("paused by the phone: opened again as a call starts it, twice — then said here, and told to the other side", () => {
+  const c = call();
+  c.mic.muted = true;
+  c.checkMic();
+  assert.equal(c.log.restarted, 0, "a moment: wait");
+  const later = () => { c.clock.now += G.MIC_CHECK.phoneMs; c.checkMic(); };
+  later();
+  assert.equal(c.log.restarted, 1, "opened again, with the camera — so an iPhone keeps the loudspeaker");
+  later();                                   // the new microphone, paused too: its own moment first
+  assert.equal(c.log.restarted, 1);
+  later();
+  assert.equal(c.log.restarted, 2);
+  later();
+  assert.equal(c.micNote(), false, "its own moment, again");
+  later();
+  assert.equal(c.log.restarted, 2, "twice at most");
+  assert.equal(c.micNote(), true, "\"Your microphone isn't picking up sound — tap to try again\"");
+  assert.deepEqual(c.log.micSent, [true], "the other side told, once");
+  c.checkMic();
+  assert.deepEqual(c.log.micSent, [true]);
+});
+
+test("back by itself: the note goes, the other side is told, and a later pause may be tried again", () => {
+  const c = call();
+  c.mic.muted = true;
+  c.checkMic();
+  for (let i = 0; i < 6; i++) { c.clock.now += G.MIC_CHECK.phoneMs; c.checkMic(); }
+  assert.equal(c.micNote(), true);
+  c.mic.muted = false;
+  c.checkMic();
+  assert.equal(c.micNote(), false);
+  assert.deepEqual(c.log.micSent, [true, false]);
+  c.mic.muted = true;
+  c.clock.now += 1;
+  c.checkMic();
+  c.clock.now += G.MIC_CHECK.phoneMs;
+  c.checkMic();
+  assert.equal(c.log.restarted, 3, "tried again: the count started afresh");
+});
+
+test("the note tapped: tried again at once", () => {
+  const c = call();
+  c.mic.muted = true;
+  c.checkMic();
+  for (let i = 0; i < 6; i++) { c.clock.now += G.MIC_CHECK.phoneMs; c.checkMic(); }
+  const before = c.log.restarted;
+  c.tapMicNote();
+  assert.equal(c.log.restarted, before + 1);
+  assert.equal(c.micNote(), false);
+});
+
+test("zeros from the start: taken as paused — but never once the microphone has been heard", () => {
+  const c = call();
+  c.noteMicLevel({ level: 0 });
+  c.clock.now += G.MIC_CHECK.zerosMs;
+  c.noteMicLevel({ level: 0 });
+  assert.equal(c.log.restarted, 1, "nothing but zeros since it opened");
+
+  const heard = call();
+  heard.noteMicLevel({ level: 0.02 });                 // they said hello
+  heard.noteMicLevel({ level: 0 });
+  heard.clock.now += 60_000;
+  heard.noteMicLevel({ level: 0 });
+  assert.equal(heard.log.restarted, 0, "a quiet person, not a paused microphone");
+
+  const quiet = call();
+  quiet.noteMicLevel({ level: 0.0004 });               // a quiet room still reads above 0
+  quiet.clock.now += 60_000;
+  quiet.noteMicLevel({ level: 0.0004 });
+  assert.equal(quiet.log.restarted, 0);
+});
+
+test("muted by the person: their zeros are their own", () => {
+  const c = call({ muted: true });
+  c.mic.enabled = false;
+  c.noteMicLevel({ level: 0 });
+  c.clock.now += 60_000;
+  c.noteMicLevel({ level: 0 });
+  assert.equal(c.log.restarted, 0);
+  assert.equal(c.micNote(), false);
+});
+
+test("their microphone silent, by their word: said on this side's call, after their being away or the link", () => {
+  assert.equal(G.callPauseNote({ inCall: true, peerMicSilent: true, linkState: "connected" }), "mic");
+  assert.equal(G.callPauseNote({ inCall: true, peerAway: true, peerMicSilent: true }), "away", "a hidden page says more");
+  assert.equal(G.callPauseNote({ inCall: true, peerMicSilent: true, linkState: "failed" }), "reconnecting");
+  const c = call();
+  c.setPeerMic(true);
+  c.updateCallPauseNote();
+  assert.equal(c.note(), "callPeerMicSilent");
+  c.setPeerMic(false);
+  c.updateCallPauseNote();
+  assert.equal(c.note(), null);
+});
+
+test("the paused microphone is watched from the track, and its word heard only in a call", () => {
+  assert.match(fn("watchCallTrack"), /addEventListener\("mute"[\s\S]*addEventListener\("unmute", checkMic\)/);
+  const CASES = between('    case "call-mic":', "      break;");
+  assert.match(CASES, /if \(!inCall\) break;\s*\n\s*peerMicSilent = data\.silent === true;\s*\n\s*updateCallPauseNote\(\);/);
+  assert.match(fn("watchCallStats"), /resetMicCheck\(\);/, "every call starts with nothing paused, and ends so");
+});
 
 test("the other side's word is heard only during a call", () => {
   const CASES = between('    case "call-away":', "  }\n}");

@@ -318,6 +318,58 @@
     };
   }
 
+  /**
+   * What a call's sound is doing, from the call's own stats: the rate each
+   * way, and how loud — so "nothing sent", "sent but silent" and "arriving
+   * but not heard" can be told apart.
+   *
+   * Added when an Android phone heard nothing from an iPhone: the figures on
+   * both phones say which of those it is. `level` is 0–1: what the stats say
+   * (audioLevel), or worked out from the energy since last time; null when
+   * the browser gives neither. Out, it is the microphone's own level (the
+   * media source), which reads exactly 0 only when the phone sends nothing
+   * but zeros. Each side is null when there is no sound that way.
+   *
+   * @returns {{in: object|null, out: object|null, at: number}}
+   *          each side {bytes, kbps, level, energy, seconds}
+   */
+  function callAudioStats(stats, prev) {
+    let inbound = null, outbound = null, source = null, at = 0;
+    if (stats && typeof stats.forEach === "function") {
+      stats.forEach(r => {
+        if (!r || (r.kind || r.mediaType) !== "audio") return;
+        if (r.type === "inbound-rtp") inbound = r;
+        if (r.type === "outbound-rtp" && (!outbound || (r.bytesSent || 0) > (outbound.bytesSent || 0))) outbound = r;
+        if (r.type === "media-source") source = r;
+        if (r.timestamp > at) at = r.timestamp;
+      });
+    }
+    const level = (r, before) => {
+      if (r && typeof r.audioLevel === "number" && isFinite(r.audioLevel)) return Math.max(0, Math.min(1, r.audioLevel));
+      const energy = r && r.totalAudioEnergy, seconds = r && r.totalSamplesDuration;
+      if (!(typeof energy === "number" && typeof seconds === "number" && before && seconds > before.seconds)) return null;
+      return Math.max(0, Math.min(1, Math.sqrt(Math.max(0, energy - before.energy) / (seconds - before.seconds))));
+    };
+    const side = (r, bytesKey, levelFrom, before) => {
+      if (!r) return null;
+      const bytes = r[bytesKey] || 0;
+      const ms = before && r.timestamp > before.at ? r.timestamp - before.at : 0;
+      return {
+        bytes,
+        kbps:    ms ? Math.max(0, Math.round(((bytes - before.bytes) * 8) / ms)) : null,
+        level:   level(levelFrom, before),
+        energy:  levelFrom && typeof levelFrom.totalAudioEnergy === "number" ? levelFrom.totalAudioEnergy : 0,
+        seconds: levelFrom && typeof levelFrom.totalSamplesDuration === "number" ? levelFrom.totalSamplesDuration : 0
+      };
+    };
+    const was = (s, p) => s && p && { at: p.at, bytes: s.bytes, energy: s.energy, seconds: s.seconds };
+    return {
+      in:  side(inbound,  "bytesReceived", inbound,          was(prev && prev.in,  prev)),
+      out: side(outbound, "bytesSent",     source || outbound, was(prev && prev.out, prev)),
+      at
+    };
+  }
+
   function fmtBytes(b) {
     if (typeof b !== "number" || !isFinite(b) || b < 0) return "0B";
     if (b < 1024)    return `${b}B`;
@@ -338,6 +390,6 @@
     selectedCandidatePair, describePath,
     usableAddress, pathAddresses,
     OS_NAMES, BROWSER_NAMES, describeDevice, deviceLabel,
-    qualityFromRtt, trafficTotals, callVideoStats, fmtBytes, timeAgo
+    qualityFromRtt, trafficTotals, callVideoStats, callAudioStats, fmtBytes, timeAgo
   };
 });

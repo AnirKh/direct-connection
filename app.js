@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610301247-e509f9b6";
+const APP_BUILD = "202610310427-81a8bf37";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -216,6 +216,8 @@ const flipCamBtn       = document.getElementById("flipCamBtn");
 const speakerBtn       = document.getElementById("speakerBtn");
 const shareBtn         = document.getElementById("shareBtn");
 const callStats        = document.getElementById("callStats");
+const callMicNote      = document.getElementById("callMicNote");      // see "A microphone the phone has paused"
+const callTapToHear    = document.getElementById("callTapToHear");    // see playRemoteCallMedia
 const endCallBtn       = document.getElementById("endCallBtn");
 const senderName       = document.getElementById("senderName");
 const leaveMessage     = document.getElementById("leaveMessage");
@@ -3092,9 +3094,16 @@ function showRemoteTracks() {
   remoteVideo.srcObject = new MediaStream(remoteCallStream.getTracks());
 }
 
+/* A phone may refuse to start the other person's sound without a tap of its
+   own. That used to be swallowed: a call that connected in silence, with
+   nothing to press. Now "Tap to hear" appears — the tap is the phone's
+   permission — and goes once the sound plays. A play interrupted by a fresh
+   stream (AbortError) is not that, and the next play() follows anyway. */
 function playRemoteCallMedia() {
   if (!remoteVideo.srcObject) showRemoteTracks();
-  remoteVideo.play().catch(() => {});
+  remoteVideo.play()
+    .then(() => callTapToHear.classList.add("hidden"))
+    .catch(err => { if (err && err.name === "NotAllowedError") callTapToHear.classList.remove("hidden"); });
 }
 
 function closeCallPeerConnection() {
@@ -4504,6 +4513,14 @@ function handleTextMessage(data, sealed = false) {
       peerAway = data.type === "call-away";
       updateCallPauseNote();
       break;
+
+    case "call-mic":
+      /* Their phone paused their microphone and could not wake it — or it is
+         back (see "A microphone the phone has paused"). */
+      if (!inCall) break;
+      peerMicSilent = data.silent === true;
+      updateCallPauseNote();
+      break;
   }
 }
 
@@ -5165,22 +5182,43 @@ function describeCallVideo(side, none) {
   return parts.join(" · ");
 }
 
+/* And the sound, on a line of its own — in a voice call too. Added when an
+   Android phone heard nothing from an iPhone: the rate each way says whether
+   sound is sent and arrives at all, and the level whether it is sound or
+   silence. A level of exactly 0 is a microphone sending zeros; "<1%" a quiet
+   room. */
+let callAudioLast = null;
+
+function describeCallSound(side) {
+  if (!side) return "—";
+  const parts = [];
+  if (side.kbps !== null) parts.push(`${side.kbps} kb/s`);
+  if (side.level !== null) parts.push(side.level > 0 && side.level < 0.01 ? "<1%" : `${Math.round(side.level * 100)}%`);
+  return parts.join(" ") || "…";
+}
+
 async function updateCallStats() {
   if (!inCall || !callPc) return;
   let report;
   try { report = await callPc.getStats(); } catch (_) { return; }
   const video = DCS.callVideoStats(report, callStatsLast);
+  const sound = DCS.callAudioStats(report, callAudioLast);
   callStatsLast = video;
-  callStats.textContent = video.in || video.out
-    ? `↓ ${describeCallVideo(video.in, t("callVideoNone"))}\n↑ ${describeCallVideo(video.out, "—")}`
-    : "";
+  callAudioLast = sound;
+  const lines = [];
+  if (video.in || video.out) lines.push(`↓ ${describeCallVideo(video.in, t("callVideoNone"))}`, `↑ ${describeCallVideo(video.out, "—")}`);
+  if (sound.in || sound.out) lines.push(`${t("callSound")} ↓ ${describeCallSound(sound.in)} · ↑ ${describeCallSound(sound.out)}`);
+  callStats.textContent = lines.join("\n");
+  noteMicLevel(sound.out);
 }
 
 function watchCallStats(on) {
   clearInterval(callStatsTimer);
   callStatsTimer = null;
   callStatsLast = null;
+  callAudioLast = null;
   callStats.textContent = "";
+  resetMicCheck();                          // a call starting, or over: nothing paused yet
   if (on) callStatsTimer = setInterval(updateCallStats, 2000);
 }
 
@@ -6519,10 +6557,97 @@ let callMediaRestarts = 0;
 const CALL_MEDIA_RESTART_MAX = 5;      // a device that keeps failing is not retried for ever
 
 function updateCallPauseNote() {
-  const note = G.callPauseNote({ inCall, peerAway, linkState: callPc?.connectionState });
-  callPauseText.textContent = note === "away" ? t("callPeerAway") : note === "reconnecting" ? t("reconnecting") : "";
+  const note = G.callPauseNote({ inCall, peerAway, peerMicSilent, linkState: callPc?.connectionState });
+  callPauseText.textContent = note === "away" ? t("callPeerAway") : note === "reconnecting" ? t("reconnecting")
+                            : note === "mic" ? t("callPeerMicSilent") : "";
   callPauseNote.classList.toggle("hidden", !note);
 }
+
+/* ── A microphone the phone has paused ──────
+   Reported: an Android phone heard nothing at all from an iPhone — from the
+   start of the call, voice or video, now and then — while the iPhone heard
+   the Android phone, in Safari. A phone can pause a page's microphone without
+   ending it: the track says it is muted (by the phone — the person's own
+   mute only switches it off), or it stays live and sends nothing but zeros.
+   Only a microphone that ended was ever started again (watchCallTrack).
+
+   Now both are watched (G.micCheck): the track's mute and unmute, and its
+   level in the call's stats every two seconds. Paused a moment, the
+   microphone is opened again as a call starts it — with the camera in a
+   video call, so an iPhone keeps the loudspeaker (restartLikeCallStart).
+   Still paused after two tries, this side says "Your microphone isn't
+   picking up sound — tap to try again" (the tap tries again), and the other
+   is told (call-mic, sealed like all call signalling), so its silence is
+   not taken for a fault at that end.                                       */
+let micZeroSince  = 0;        // our microphone has read exactly 0 in the stats since
+let micMutedSince = 0;        // the phone has had our microphone muted since
+let micHeard      = false;    // this microphone has sent sound — anything above 0 — at least once
+let micReopens    = 0;
+let micToldSilent = false;    // the other side has been told our microphone is silent
+let peerMicSilent = false;    // theirs is, by their word
+
+function resetMicCheck() {
+  micZeroSince = micMutedSince = micReopens = 0;
+  micHeard = micToldSilent = peerMicSilent = false;
+  callMicNote.classList.add("hidden");
+  callTapToHear.classList.add("hidden");
+}
+
+/** The microphone's level from the call's stats. Exactly 0, while it is on
+    and not muted by the person, starts the clock on "zeros" — but only until
+    it has sent any sound at all. The fault reported was silence from the
+    start; once a microphone has been heard, quiet is someone being quiet,
+    whatever a phone's noise filter makes of it. */
+function noteMicLevel(out) {
+  const mic = localStream?.getAudioTracks()[0];
+  if (out && out.level > 0) micHeard = true;
+  if (micHeard || !out || out.level !== 0 || !mic || !mic.enabled) micZeroSince = 0;
+  else if (!micZeroSince) micZeroSince = Date.now();
+  checkMic();
+}
+
+function checkMic() {
+  const mic = localStream?.getAudioTracks()[0];
+  const now = Date.now();
+  if (mic && mic.muted) { if (!micMutedSince) micMutedSince = now; }
+  else micMutedSince = 0;
+  const since = micMutedSince || micZeroSince;
+  const action = G.micCheck({
+    inCall, hasMic: Boolean(mic), userMuted: isMuted || Boolean(mic && !mic.enabled),
+    visible: document.visibilityState === "visible",
+    pausedBy: micMutedSince ? "phone" : micZeroSince ? "zeros" : null,
+    pausedFor: since ? now - since : -1, reopens: micReopens
+  });
+  if (action === "ok") { micReopens = 0; tellMicSilent(false); return; }
+  if (action === "wait") return;
+  if (action === "reopen") {
+    micReopens++;
+    micZeroSince = micMutedSince = 0;       // the new microphone's own clock, and not heard yet
+    micHeard = false;
+    restartLikeCallStart();
+    return;
+  }
+  tellMicSilent(true);
+}
+
+function tellMicSilent(silent) {
+  callMicNote.classList.toggle("hidden", !silent);
+  if (silent === micToldSilent || !dcReady()) return;
+  micToldSilent = silent;
+  dcSendCallSignal({ type: "call-mic", silent }).catch(() => {});
+}
+
+callMicNote.onclick = () => {
+  micReopens = 0;
+  micZeroSince = micMutedSince = 0;
+  micHeard = false;
+  callMicNote.classList.add("hidden");
+  restartLikeCallStart();
+};
+
+callTapToHear.onclick = () => {
+  remoteVideo.play().then(() => callTapToHear.classList.add("hidden")).catch(() => {});
+};
 
 /** A call track that ends while the page is showing — the phone took the
     camera, say — is started again at once; one that ends while hidden waits
@@ -6531,6 +6656,10 @@ function watchCallTrack(track) {
   track.addEventListener("ended", () => {
     if (document.visibilityState === "visible") restartEndedCallMedia();
   });
+  /* Paused by the phone, not ended: see "A microphone the phone has paused". */
+  if (track.kind !== "audio") return;
+  track.addEventListener("mute", () => setTimeout(checkMic, G.MIC_CHECK.phoneMs + 100));
+  track.addEventListener("unmute", checkMic);
 }
 
 async function restartEndedCallMedia() {
