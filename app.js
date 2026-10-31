@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610310427-81a8bf37";
+const APP_BUILD = "202610310452-02dd6b12";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -309,9 +309,14 @@ let _lastSessionList = [];  // cache for re-render on language change
    saveAsked   their offer, while we are asked about it: { secret }
    saveDialog  the name dialog, while open: { mode, onConfirm, onCancel }
    forgetting  the room of the person whose row asks "Forget?"
-   waitingForUs the rooms of those who tapped our name and wait for us now */
+   waitingForUs the rooms of those who tapped our name and wait for us now
+   personMenuFor the room whose row shows Rename and Forget (personMenu)
+   heldOpen    a long press opened that menu: the click its release may send
+               is not a tap on the name */
 let people      = [];
 let waitingForUs = new Set();
+let personMenuFor = null;
+let heldOpen    = false;
 let meeting     = null;
 let pendingMeet = null;
 let saveOffer   = null;
@@ -2071,7 +2076,11 @@ function personRow(p) {
   }
   text.append(name, sub);
   open.append(avatar, text);
-  open.onclick = () => meetPerson(p);
+  open.onclick = () => {
+    if (heldOpen) return;                // the release of a long press, not a tap (the page's click handler clears it)
+    meetPerson(p);
+  };
+  open.title = t("personMenuHint");
   item.appendChild(open);
 
   /* Messages for them, or from them — also while waiting for them: a word
@@ -2087,19 +2096,85 @@ function personRow(p) {
     item.appendChild(cancel);
     return item;
   }
-  for (const [icon, label, act] of [["pencil", "personRename", renamePerson], ["trash", "personForget", askForget]]) {
-    const tool = document.createElement("button");
-    tool.type = "button";
-    tool.className = "person-tool";
-    tool.disabled = Boolean(meeting);
-    tool.setAttribute("aria-label", `${t(label)}: ${p.name}`);
-    tool.title = t(label);
-    tool.appendChild(tablerIcon(icon));
-    tool.onclick = () => act(p);
-    item.appendChild(tool);
-  }
+  /* Rename and forget are kept out of sight: a right click, a long press on
+     a phone, or the keyboard's menu key opens them on the row (personMenu).
+     Asked for: the pencil and the bin on every row were more than needed. */
+  item.oncontextmenu = e => { e.preventDefault(); openPersonMenu(p); };
+  holdForMenu(item, p);
+  if (personMenuFor === p.room) item.appendChild(personMenu(p));
   return item;
 }
+
+/* ── Rename and forget, on request ──────────
+   A right click opens them, and the keyboard's menu key — both are the
+   browser's "contextmenu". Android sends that on a long press as well; an
+   iPhone does not, so a press held for half a second opens them too (a
+   finger that moves is scrolling, and lets go of it). The click a long
+   press's release can send is not taken for a tap on the name. A tap
+   anywhere else, or Escape, closes them; nothing opens while someone is
+   being met. */
+const HOLD_MS = 500;
+
+function openPersonMenu(p) {
+  if (meeting || forgetting) return;
+  personMenuFor = p.room;
+  drawPeople();
+  const first = peopleList.querySelector(".person-menu-item");
+  if (first) first.focus();                // for the keyboard: straight to Rename
+}
+
+function closePersonMenu() {
+  if (personMenuFor === null) return;
+  personMenuFor = null;
+  drawPeople();
+}
+
+function holdForMenu(item, p) {
+  let timer = null, from = null;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  item.addEventListener("pointerdown", e => {
+    if (e.pointerType !== "touch") return;
+    from = { x: e.clientX, y: e.clientY };
+    cancel();
+    timer = setTimeout(() => { timer = null; heldOpen = true; openPersonMenu(p); }, HOLD_MS);
+  });
+  item.addEventListener("pointermove", e => {
+    if (timer && from && Math.hypot(e.clientX - from.x, e.clientY - from.y) > 10) cancel();
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) item.addEventListener(type, cancel);
+}
+
+function personMenu(p) {
+  const menu = document.createElement("div");
+  menu.className = "person-menu";
+  menu.setAttribute("role", "menu");
+  for (const [icon, label, act, kind] of [["pencil", "personRename", renamePerson, ""], ["trash", "personForget", askForget, " danger"]]) {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = `person-menu-item${kind}`;
+    choice.setAttribute("role", "menuitem");
+    choice.setAttribute("aria-label", `${t(label)}: ${p.name}`);
+    const words = document.createElement("span");
+    words.textContent = t(label);
+    choice.append(tablerIcon(icon), words);
+    choice.onclick = () => { personMenuFor = null; act(p); };
+    menu.appendChild(choice);
+  }
+  return menu;
+}
+
+/* A long press whose release sent no click (Android's does not) leaves
+   nothing behind: the next touch starts afresh. */
+document.addEventListener("pointerdown", () => { heldOpen = false; });
+document.addEventListener("click", e => {
+  /* The long press's own release: it neither meets (the name's click lets it
+     pass) nor closes what it just opened. Cleared here, after the name's
+     click, which runs first. Found trying it: cleared there, this closed the
+     menu as its own release came up. */
+  if (heldOpen) { heldOpen = false; return; }
+  if (personMenuFor !== null && !(e.target && e.target.closest && e.target.closest(".person-menu"))) closePersonMenu();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePersonMenu(); });
 
 /** A tap on their name: make our room, or join theirs if they are waiting. */
 function meetPerson(p) {

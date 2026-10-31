@@ -164,7 +164,7 @@ const NAMES = ["G", "DC", "I18N", "LANG", "t", "localStorage", "window", "docume
   "saveCancelBtn", "saveConfirmBtn", "leaveBtn", "lobbyStatus", "voiceCallBtn", "videoCallBtn", "statsBar", "chatScreen",
   "tablerIcon", "showToast", "keepScreenOn", "scrollBottom", "dcSendE2e", "wsSend", "ws", "WebSocket",
   "clearConnectWatch", "endCall", "closePeerConnection", "setQuality", "appendSys", "showReconnectButton",
-  "setTimeout", "knockBtn", "knockIcon", "knockLabel", "Notification", "navigator", "location", "history", "indexedDB",
+  "setTimeout", "clearTimeout", "knockBtn", "knockIcon", "knockLabel", "Notification", "navigator", "location", "history", "indexedDB",
   "APP_BUILD", "installOverlay", "showLobbyTab", "runningInstalled",
   "mailOverlay", "mailTitle", "mailHint", "mailList", "mailInput", "mailSendBtn", "mailCloseBtn", "mailClearBtn",
   "fillMessage", "noticeArrival", "typingWithFinger", "env"];
@@ -238,7 +238,7 @@ function fakeIndexedDB(idb) {
  * (neither read nor written).
  */
 function page({ saved = [], storage = "works", connected = true, checked = true, kind = "pin", wsOpen = true, inChat = false, lang = "mn",
-                 knock = {}, mail = null, hash = "" } = {}) {
+                 knock = {}, mail = null, hash = "", timers = null } = {}) {
   const log = { ws: [], sealed: [], toasts: [], sys: [], screen: [], left: 0, quality: [], reconnect: 0, closed: 0,
                 asked: 0, registered: [], subscribed: [], unsubscribed: 0, replaced: [], tabs: [], noticed: 0 };
   const store = new Map();
@@ -255,7 +255,9 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
   const indexedDB = fakeIndexedDB(idb);
   const window = { indexedDB, addEventListener: (type, f) => { (winListeners[type] = winListeners[type] || []).push(f); } };
   const push = pushBrowser(knock, log);
-  const document = { createElement: element, createTextNode: s => ({ tag: "#text", textContent: String(s), children: [] }) };
+  const docListeners = {};
+  const document = { createElement: element, createTextNode: s => ({ tag: "#text", textContent: String(s), children: [] }),
+                     addEventListener: (type, f) => { (docListeners[type] = docListeners[type] || []).push(f); } };
   const els = {};
   for (const n of ["chatMessages", "peopleSection", "peopleList", "saveOverlay", "saveTitle", "saveHint", "saveNameInput",
                    "saveCancelBtn", "saveConfirmBtn", "leaveBtn", "lobbyStatus", "voiceCallBtn", "videoCallBtn", "statsBar", "chatScreen",
@@ -277,7 +279,7 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
   const ws = { readyState: wsOpen ? 1 : 3 };
   const tablerIcon = name => { const i = element("i"); i.className = `ti ti-${name}`; return i; };
   const api = new Function(...NAMES, `
-    let people = [], meeting = null, pendingMeet = null, saveOffer = null, saveAsked = null, saveDialog = null, forgetting = null, waitingForUs = new Set();
+    let people = [], meeting = null, pendingMeet = null, saveOffer = null, saveAsked = null, saveDialog = null, forgetting = null, waitingForUs = new Set(), personMenuFor = null, heldOpen = false;
     let currentSession = null, isConnecting = false, listJoinId = null, pinJoinInFlight = false, isHost = false;
     let hostKey = null, reclaimPending = false, roomSecret = null, pendingRoomSecret = null, pakeCode = null;
     let roomKind = env.kind, guestKey = null, seatPending = false, dataChannel = null;
@@ -291,9 +293,9 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
       maybeOfferSave, startSaveOffer, receiveSaveOffer, receiveSaveAccept, receiveSaveDecline,
       renamePerson, askForget, forgetPerson, confirmSaveDialog, cancelSaveDialog,
       knockStateNow, knockKeyArrived, knocksOn, knocksOff, shareKnockAddress, sendKnockAddress, receiveKnockAddress,
-      knockAnswered, answerKnock, savedInChatNow, theyWait, mailAtConnect,
+      knockAnswered, answerKnock, savedInChatNow, theyWait, mailAtConnect, openPersonMenu, closePersonMenu,
       openThread, closeThread, sendMail, receiveMail, mailAnswered, mailAtConnect, fetchMail, answerMail, sendFromThread,
-      get: () => ({ people, meeting, waitingForUs, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
+      get: () => ({ people, meeting, waitingForUs, personMenuFor, heldOpen, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
                     isConnecting, isHost, hostKey, roomSecret, pendingRoomSecret, roomKind, guestKey,
                     knockKey, knockSub, knockSent, knockShared, savedInChat, knockEarly, mailStore, mailOpenFor }),
       set: o => { for (const [k, v] of Object.entries(o)) switch (k) {
@@ -317,7 +319,7 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
     async m => { if (!env.connected) return false; log.sealed.push(JSON.parse(JSON.stringify(m))); return true; },
     m => log.ws.push(JSON.parse(JSON.stringify(m))), ws, { OPEN: 1 },
     () => {}, () => {}, () => { log.closed++; }, q => log.quality.push(q), s => log.sys.push(s), () => { log.reconnect++; },
-    f => f(), els.knockBtn, els.knockIcon, els.knockLabel, push.Notification, push.navigator, location, history, indexedDB,
+    timers ? f => timers.push(f) : f => f(), id => { if (timers && id) timers[id - 1] = null; }, els.knockBtn, els.knockIcon, els.knockLabel, push.Notification, push.navigator, location, history, indexedDB,
     "202610290000-abcdef12", els.installOverlay, n => log.tabs.push(n), () => Boolean(knock.standalone),
     els.mailOverlay, els.mailTitle, els.mailHint, els.mailList, els.mailInput, els.mailSendBtn, els.mailCloseBtn, els.mailClearBtn,
     (el, text) => { el.textContent = text; }, () => { log.noticed++; }, () => false, env);
@@ -326,7 +328,8 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
   const stored = () => JSON.parse(store.get("dc-people") || "null");
   const storageEvent = () => (winListeners.storage || []).forEach(f => f({ key: "dc-people" }));
   const type = text => { els.saveNameInput.value = text; };
-  return { api, log, els, env, ws, store, rows, button, stored, storageEvent, type, idb, push };
+  const doc = (type, e) => (docListeners[type] || []).forEach(f => f(e));
+  return { api, log, els, env, ws, store, rows, button, stored, storageEvent, type, idb, push, doc, timers };
 }
 
 const settle = () => new Promise(r => setTimeout(r, 0));
@@ -356,10 +359,17 @@ test("everyone saved is a name to tap — with nothing of their secret or room o
   assert.ok(all.includes(I18N.mn.personTap));
   for (const x of [anu.secret, anu.room, bat.secret, bat.room]) assert.ok(!all.includes(x));
   const tools = p.rows()[0].children.filter(c => c.classList.contains("person-tool"));
-  assert.deepEqual(tools.map(c => c.attrs["aria-label"]),
-    [`${I18N.mn.personMail}: Anu`, `${I18N.mn.personRename}: Anu`, `${I18N.mn.personForget}: Anu`],
-    "the small buttons say what they do, and to whom");
+  assert.deepEqual(tools.map(c => c.attrs["aria-label"]), [`${I18N.mn.personMail}: Anu`],
+    "only the envelope on the row: rename and forget are out of sight until asked for");
+  assert.equal(p.rows()[0].querySelector(".person-open").title, I18N.mn.personMenuHint, "and how to ask for them is said on the name");
 });
+
+/** Rename or Forget (`what`, an i18n key), from the row's menu — opened as a right click would. */
+const menuChoice = (p, i, what) => {
+  p.rows()[i].oncontextmenu({ preventDefault() {} });
+  const menu = p.rows()[i].querySelector(".person-menu");
+  return menu && menu.children.find(c => c.textContent === I18N.mn[what]);
+};
 
 /** The row's small button that does `what` (an i18n key), found by its label. */
 const toolFor = (row, what) => row.children.find(c => c.classList.contains("person-tool") && String(c.attrs["aria-label"]).startsWith(I18N.mn[what]));
@@ -741,7 +751,7 @@ test("fifty at most", async () => {
 test("renamed here, and only here", async () => {
   const anu = await person("Anu"), bat = await person("Bat");
   const p = page({ saved: [anu, bat] });
-  toolFor(p.rows()[0], "personRename").click();
+  menuChoice(p, 0, "personRename").click();
   assert.equal(p.els.saveTitle.textContent, I18N.mn.renameTitle);
   assert.equal(p.els.saveNameInput.value, "Anu", "the old name to change");
   p.type("Anu (phone)");
@@ -815,7 +825,7 @@ test("the server's word that someone waits is taken by the message switch", () =
 test("forget asks first, in the row; Keep keeps; Forget takes them off this device", async () => {
   const anu = await person("Anu"), bat = await person("Bat");
   const p = page({ saved: [anu, bat] });
-  toolFor(p.rows()[0], "personForget").click();
+  menuChoice(p, 0, "personForget").click();
   assert.ok(p.rows()[0].classList.contains("asking"));
   assert.ok(p.rows()[0].textContent.includes(I18N.mn.forgetAsk("Anu")));
   p.rows()[0].children.find(c => c.textContent === I18N.mn.forgetNo).click();
@@ -827,11 +837,94 @@ test("forget asks first, in the row; Keep keeps; Forget takes them off this devi
   assert.equal(p.rows().length, 1);
 });
 
+/* ── Rename and forget, on request ──
+   Asked for: the pencil and the bin on every row were more than needed. A
+   right click — or a long press on a phone — opens them instead. */
+
+const menuOf = (p, i) => p.rows()[i].querySelector(".person-menu");
+const touch = (x = 10, y = 10) => ({ pointerType: "touch", clientX: x, clientY: y });
+
+test("a right click on a name opens Rename and Forget on that row alone; choosing one closes it", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  assert.equal(menuOf(p, 0), null, "out of sight until asked for");
+  let prevented = false;
+  p.rows()[1].oncontextmenu({ preventDefault() { prevented = true; } });
+  assert.ok(prevented, "not the browser's own menu");
+  assert.equal(menuOf(p, 0), null);
+  const menu = menuOf(p, 1);
+  assert.deepEqual(menu.children.map(c => c.textContent), [I18N.mn.personRename, I18N.mn.personForget]);
+  assert.deepEqual(menu.children.map(c => c.attrs["aria-label"]), [`${I18N.mn.personRename}: Bat`, `${I18N.mn.personForget}: Bat`]);
+  assert.ok(menu.children[1].classList.contains("danger"));
+  menu.children[0].click();
+  assert.equal(p.els.saveTitle.textContent, I18N.mn.renameTitle, "Rename: the name dialog");
+  assert.equal(p.els.saveNameInput.value, "Bat");
+  assert.equal(p.api.get().personMenuFor, null);
+});
+
+test("a tap anywhere else, or Escape, closes it; a tap inside it does not", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu] });
+  p.rows()[0].oncontextmenu({ preventDefault() {} });
+  const inside = menuOf(p, 0).children[0];
+  p.doc("click", { target: { closest: sel => (sel === ".person-menu" ? {} : null) } });
+  assert.ok(menuOf(p, 0), "inside: left open");
+  p.doc("click", { target: { closest: () => null } });
+  assert.equal(menuOf(p, 0), null);
+  p.rows()[0].oncontextmenu({ preventDefault() {} });
+  p.doc("keydown", { key: "Escape" });
+  assert.equal(menuOf(p, 0), null);
+  assert.ok(inside);
+});
+
+test("a long press on a phone opens it after half a second — and its release is not a tap on the name", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], timers: [] });
+  p.rows()[0].fire("pointerdown", touch());
+  assert.equal(menuOf(p, 0), null, "not yet");
+  p.timers.filter(Boolean).forEach(f => f());
+  assert.ok(menuOf(p, 0), "held: open");
+  p.rows()[0].querySelector(".person-open").click();       // the release's click, on the name…
+  p.doc("click", { target: { closest: () => null } });      // …and on up to the page
+  assert.equal(p.log.ws.filter(m => m.type === "meet-session").length, 0, "nobody is met by the press that opened the menu");
+  assert.ok(menuOf(p, 0), "nor does its release close what it opened — found trying it in a browser");
+  p.doc("pointerdown", {});                                  // the next touch starts afresh
+  p.rows()[0].querySelector(".person-open").click();
+  assert.equal(p.log.ws.filter(m => m.type === "meet-session").length, 1, "a tap after it meets them, as ever");
+});
+
+test("a short tap, a finger that moves (scrolling), or a mouse: no menu", async () => {
+  const anu = await person("Anu");
+  const tap = page({ saved: [anu], timers: [] });
+  tap.rows()[0].fire("pointerdown", touch());
+  tap.rows()[0].fire("pointerup", {});
+  tap.timers.filter(Boolean).forEach(f => f());
+  assert.equal(menuOf(tap, 0), null, "let go before half a second");
+
+  const scroll = page({ saved: [anu], timers: [] });
+  scroll.rows()[0].fire("pointerdown", touch(10, 10));
+  scroll.rows()[0].fire("pointermove", touch(10, 40));
+  scroll.timers.filter(Boolean).forEach(f => f());
+  assert.equal(menuOf(scroll, 0), null, "a finger that moves is scrolling");
+
+  const mouse = page({ saved: [anu], timers: [] });
+  mouse.rows()[0].fire("pointerdown", { pointerType: "mouse", clientX: 0, clientY: 0 });
+  assert.equal(mouse.timers.length, 0, "a mouse has its right button");
+});
+
+test("no menu while a row asks \"Forget?\"", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat] });
+  p.api.askForget(anu);
+  p.rows()[1].oncontextmenu({ preventDefault() {} });
+  assert.equal(menuOf(p, 1), null);
+});
+
 test("while one is being met, nobody can be renamed or forgotten", async () => {
   const anu = await person("Anu"), bat = await person("Bat");
   const p = page({ saved: [anu, bat] });
   p.api.meetPerson(anu);
-  assert.ok(["personRename", "personForget"].every(what => toolFor(p.rows()[1], what).disabled));
+  assert.equal(menuChoice(p, 1, "personRename"), null, "no menu opens while someone is being met");
   assert.equal(toolFor(p.rows()[1], "personMail").disabled, false, "a message can still be written");
   assert.ok(toolFor(p.rows()[0], "personMail"), "to the one being waited for too");
 });
