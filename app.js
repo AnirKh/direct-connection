@@ -27,7 +27,7 @@
 
    APP_BUILD is written by tools/sync-build.js and by nothing else.
 ══════════════════════════════════════════════ */
-const APP_BUILD = "202610310452-02dd6b12";
+const APP_BUILD = "202610310503-73e7c67b";
 
 function refuseToRunInAStalePage() {
   let builtFor = null;
@@ -312,11 +312,14 @@ let _lastSessionList = [];  // cache for re-render on language change
    waitingForUs the rooms of those who tapped our name and wait for us now
    personMenuFor the room whose row shows Rename and Forget (personMenu)
    heldOpen    a long press opened that menu: the click its release may send
-               is not a tap on the name */
+               is not a tap on the name
+   quickCall   a call asked for from the row — { room, video } — placed once
+               the chat with them is up (placeQuickCall) */
 let people      = [];
 let waitingForUs = new Set();
 let personMenuFor = null;
 let heldOpen    = false;
+let quickCall   = null;
 let meeting     = null;
 let pendingMeet = null;
 let saveOffer   = null;
@@ -788,6 +791,7 @@ function e2eActivate(key, secure) {
      panel. */
   appendSys(t("sysConnected"));
   maybeOfferSave();
+  placeQuickCall();                // a call asked for from a saved person's row
 
   /* The guest introduces itself; the host answers when that arrives (see the
      peer-info case). Not both at once: the host reaches this line before it
@@ -2069,7 +2073,9 @@ function personRow(p) {
   /* Tapped: the room is being made, or made and waited in — and knocked on.
      Or they tapped ours and wait for us: the row stands out (theyWait). */
   const theyAreWaiting = !here && waitingForUs.has(p.room);
-  sub.textContent = t(theyAreWaiting ? "personWantsToTalk" : !here ? "personTap" : !currentSession ? "personConnecting" : knockSent ? "personKnocked" : "personWaiting");
+  const callingThem = here && Boolean(quickCall) && quickCall.room === p.room;
+  sub.textContent = t(theyAreWaiting ? "personWantsToTalk" : !here ? "personTap" : !currentSession ? "personConnecting"
+                    : callingThem ? "personCallWaiting" : knockSent ? "personKnocked" : "personWaiting");
   if (theyAreWaiting) {
     item.classList.add("knocking");
     avatar.replaceChildren(tablerIcon("bell-ringing"));
@@ -2083,6 +2089,21 @@ function personRow(p) {
   open.title = t("personMenuHint");
   item.appendChild(open);
 
+  /* A call straight from the row: their chat, and the call as soon as it is
+     up (quickCallPerson). Not while someone is being met. */
+  if (!here) {
+    for (const [icon, label, video] of [["phone", "voiceCall", false], ["video", "videoCall", true]]) {
+      const tool = document.createElement("button");
+      tool.type = "button";
+      tool.className = "person-tool call";
+      tool.disabled = Boolean(meeting);
+      tool.setAttribute("aria-label", `${t(label)}: ${p.name}`);
+      tool.title = t(label);
+      tool.appendChild(tablerIcon(icon));
+      tool.onclick = () => quickCallPerson(p, video);
+      item.appendChild(tool);
+    }
+  }
   /* Messages for them, or from them — also while waiting for them: a word
      left instead. */
   item.appendChild(mailTool(p));
@@ -2103,6 +2124,56 @@ function personRow(p) {
   holdForMenu(item, p);
   if (personMenuFor === p.room) item.appendChild(personMenu(p));
   return item;
+}
+
+/* ── A call straight from the row ───────────
+   Asked for: a voice or video call from a saved person's row, beside the
+   envelope. It meets them as a tap on the name does — their room, a knock
+   if they turned alerts on — and once the chat with them is up, places the
+   call as the chat's own button would (requestCall): they are asked, as for
+   any call. If they are not there yet, the row says the call will start when
+   they connect; cancelling, or leaving, drops it.
+
+   Both may press call at once. Two requests crossing would each turn the
+   other away, so the host calls first and the guest a moment later — and
+   not at all if the host's call is already ringing there: one tap answers
+   it.
+
+   The host calls once the guest has introduced itself (peer-info), not the
+   moment its own key is agreed. Found trying it: the host is ready first,
+   and a call sent then overtook the confirmation that makes the guest ready
+   — dropped on arrival, so the host rang and the guest never heard it. The
+   guest introduces itself only once it is ready. */
+const QUICK_CALL_GUEST_WAIT_MS = 1500;
+let quickCallArmed = null;          // the host's call asked for, waiting for the guest to be ready
+
+function quickCallPerson(p, video) {
+  meetPerson(p);
+  if (!meeting || meeting.room !== p.room) return;     // busy: nothing was started
+  quickCall = { room: p.room, video };
+  drawPeople();
+}
+
+/** The chat with them is up (e2eActivate): place the call asked for — the
+    guest a moment later, the host once the guest is ready (quickCallPeerReady). */
+function placeQuickCall() {
+  const asked = quickCall;
+  quickCall = null;
+  if (!asked || roomKind !== "saved" || !meeting || meeting.room !== asked.room) return;
+  if (isHost) { quickCallArmed = asked; return; }
+  setTimeout(() => ringQuickCall(asked), QUICK_CALL_GUEST_WAIT_MS);
+}
+
+/** The guest has introduced itself (peer-info): it is ready, and the host's call can ring there. */
+function quickCallPeerReady() {
+  const asked = quickCallArmed;
+  quickCallArmed = null;
+  if (asked && meeting && meeting.room === asked.room) ringQuickCall(asked);
+}
+
+function ringQuickCall(asked) {
+  if (inCall || !e2eReady || !callRequestModal.classList.contains("hidden")) return;   // theirs rings here: answer that
+  requestCall(asked.video);
 }
 
 /* ── Rename and forget, on request ──────────
@@ -2230,6 +2301,8 @@ function endMeeting() {
   meeting = null;
   pendingMeet = null;
   knockSent = false;
+  quickCall = null;                // a call asked for goes with the meeting
+  quickCallArmed = null;
   lobbyStatus.replaceChildren();
   drawPeople();
 }
@@ -4179,6 +4252,8 @@ leaveBtn.onclick = (e) => {
   meeting = null;
   pendingMeet = null;
   knockSent = false;
+  quickCall = null;                 // a call asked for from their row goes too
+  quickCallArmed = null;
   savedInChat = null;
   drawPeople();
   chatScreen.classList.add("hidden");
@@ -4507,6 +4582,7 @@ function handleTextMessage(data, sealed = false) {
       renderShieldFacts();
       sendPeerInfo();   // the host's answer; a no-op for the guest, who went first
       if (isHost) shareKnockAddress();   // likewise: the guest is listening now
+      if (isHost) quickCallPeerReady();  // and a call asked for from their row can ring there
       break;
 
     case "knock-address":

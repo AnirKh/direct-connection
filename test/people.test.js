@@ -271,15 +271,20 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
   els.knockBtn.classList.add("hidden");
   els.installOverlay.classList.add("hidden");
   if (!inChat) els.chatScreen.classList.add("hidden");
-  const env = { kind, connected, checked, onLeave: null, knockSupported: knock.supported !== false,
+  const env = { kind, connected, checked, onLeave: null, knockSupported: knock.supported !== false, calls: [],
+                callRequestModal: element("div"),
                 knockKey: knock.serverKey === false || knock.keyLater ? null : SERVER_KNOCK_KEY };
+  env.callRequestModal.classList.add("hidden");              // no call ringing here
   const location = { hash: knock.hash || hash || "", pathname: "/direct-connection/", search: "" };
   const history = { replaceState: (s, title, url) => log.replaced.push(url) };
   els.leaveBtn.click = () => { log.left++; if (env.onLeave) env.onLeave(); };
   const ws = { readyState: wsOpen ? 1 : 3 };
   const tablerIcon = name => { const i = element("i"); i.className = `ti ti-${name}`; return i; };
   const api = new Function(...NAMES, `
-    let people = [], meeting = null, pendingMeet = null, saveOffer = null, saveAsked = null, saveDialog = null, forgetting = null, waitingForUs = new Set(), personMenuFor = null, heldOpen = false;
+    let people = [], meeting = null, pendingMeet = null, saveOffer = null, saveAsked = null, saveDialog = null, forgetting = null, waitingForUs = new Set(), personMenuFor = null, heldOpen = false, quickCall = null, inCall = false;
+    /* The chat's call: what the row's call buttons end in, stood in for. */
+    const callRequestModal = env.callRequestModal;
+    function requestCall(video) { env.calls.push(video); }
     let currentSession = null, isConnecting = false, listJoinId = null, pinJoinInFlight = false, isHost = false;
     let hostKey = null, reclaimPending = false, roomSecret = null, pendingRoomSecret = null, pakeCode = null;
     let roomKind = env.kind, guestKey = null, seatPending = false, dataChannel = null;
@@ -294,8 +299,9 @@ function page({ saved = [], storage = "works", connected = true, checked = true,
       renamePerson, askForget, forgetPerson, confirmSaveDialog, cancelSaveDialog,
       knockStateNow, knockKeyArrived, knocksOn, knocksOff, shareKnockAddress, sendKnockAddress, receiveKnockAddress,
       knockAnswered, answerKnock, savedInChatNow, theyWait, mailAtConnect, openPersonMenu, closePersonMenu,
+      quickCallPerson, placeQuickCall, quickCallPeerReady,
       openThread, closeThread, sendMail, receiveMail, mailAnswered, mailAtConnect, fetchMail, answerMail, sendFromThread,
-      get: () => ({ people, meeting, waitingForUs, personMenuFor, heldOpen, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
+      get: () => ({ people, meeting, waitingForUs, personMenuFor, heldOpen, quickCall, pendingMeet, saveOffer, saveAsked, saveDialog, forgetting, currentSession,
                     isConnecting, isHost, hostKey, roomSecret, pendingRoomSecret, roomKind, guestKey,
                     knockKey, knockSub, knockSent, knockShared, savedInChat, knockEarly, mailStore, mailOpenFor }),
       set: o => { for (const [k, v] of Object.entries(o)) switch (k) {
@@ -359,8 +365,9 @@ test("everyone saved is a name to tap — with nothing of their secret or room o
   assert.ok(all.includes(I18N.mn.personTap));
   for (const x of [anu.secret, anu.room, bat.secret, bat.room]) assert.ok(!all.includes(x));
   const tools = p.rows()[0].children.filter(c => c.classList.contains("person-tool"));
-  assert.deepEqual(tools.map(c => c.attrs["aria-label"]), [`${I18N.mn.personMail}: Anu`],
-    "only the envelope on the row: rename and forget are out of sight until asked for");
+  assert.deepEqual(tools.map(c => c.attrs["aria-label"]),
+    [`${I18N.mn.voiceCall}: Anu`, `${I18N.mn.videoCall}: Anu`, `${I18N.mn.personMail}: Anu`],
+    "a call either way and the envelope — rename and forget are out of sight until asked for");
   assert.equal(p.rows()[0].querySelector(".person-open").title, I18N.mn.personMenuHint, "and how to ask for them is said on the name");
 });
 
@@ -837,6 +844,86 @@ test("forget asks first, in the row; Keep keeps; Forget takes them off this devi
   assert.equal(p.rows().length, 1);
 });
 
+/* ── A call straight from the row ──
+   Asked for: a voice or video call from a saved person's row, beside the
+   envelope. */
+
+const callTool = (p, i, video) => p.rows()[i].children.find(c => c.classList.contains("call") &&
+  String(c.attrs["aria-label"]).startsWith(I18N.mn[video ? "videoCall" : "voiceCall"]));
+
+test("the row's call buttons meet them as a tap on the name does — and the row says the call starts when they connect", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu] });
+  callTool(p, 0, true).click();
+  assert.deepEqual(p.log.ws.at(-1), { type: "meet-session", sessionId: anu.room, side: anu.side }, "the same tap as on the name");
+  assert.deepEqual(p.api.get().quickCall, { room: anu.room, video: true });
+  p.api.set({ currentSession: { sessionId: anu.room } });   // in their room, waiting
+  p.api.drawPeople();
+  assert.ok(p.rows()[0].textContent.includes(I18N.mn.personCallWaiting));
+  assert.equal(callTool(p, 0, false), undefined, "no call buttons on the row being met — Cancel is there");
+});
+
+test("the host places the call once the guest has said who it is — as the chat's own button would", async () => {
+  /* Found trying it: called the moment its own key was agreed, the host's
+     request overtook the confirmation that makes the guest ready, and was
+     dropped there — the host rang, the guest never heard it. */
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], kind: "saved", timers: [] });
+  callTool(p, 0, false).click();
+  p.api.set({ isHost: true });
+  p.api.placeQuickCall();
+  assert.deepEqual(p.env.calls, [], "not yet: the guest may not be ready");
+  p.api.quickCallPeerReady();
+  assert.deepEqual(p.env.calls, [false], "the guest introduced itself: a voice call");
+  assert.equal(p.api.get().quickCall, null, "once");
+  p.api.quickCallPeerReady();
+  p.api.placeQuickCall();
+  assert.deepEqual(p.env.calls, [false]);
+});
+
+test("the guest's introduction is what lets the host's call ring", () => {
+  assert.match(between('    case "peer-info":', "      break;"), /if \(isHost\) quickCallPeerReady\(\);/);
+});
+
+test("the guest calls a moment later — and not at all if the host's call already rings there", async () => {
+  const anu = await person("Anu");
+  const p = page({ saved: [anu], kind: "saved", timers: [] });
+  callTool(p, 0, true).click();
+  p.api.placeQuickCall();
+  assert.deepEqual(p.env.calls, [], "not at once: both may have pressed call");
+  p.timers.filter(Boolean).forEach(f => f());
+  assert.deepEqual(p.env.calls, [true], "a moment later, a video call");
+
+  const both = page({ saved: [anu], kind: "saved", timers: [] });
+  callTool(both, 0, true).click();
+  both.api.placeQuickCall();
+  both.env.callRequestModal.classList.remove("hidden");     // the host's call came in meanwhile
+  both.timers.filter(Boolean).forEach(f => f());
+  assert.deepEqual(both.env.calls, [], "two requests would turn each other away: theirs is answered instead");
+});
+
+test("cancelled, or the chat is someone else's: no call", async () => {
+  const anu = await person("Anu"), bat = await person("Bat");
+  const p = page({ saved: [anu, bat], kind: "saved", timers: [] });
+  callTool(p, 0, true).click();
+  p.api.set({ isHost: true });
+  p.api.placeQuickCall();                                   // armed, waiting for the guest
+  p.api.endMeeting();
+  assert.equal(p.api.get().quickCall, null, "the call asked for goes with the meeting");
+  p.api.quickCallPeerReady();
+  assert.deepEqual(p.env.calls, [], "and an armed one with it");
+
+  const busy = page({ saved: [anu, bat] });
+  busy.api.meetPerson(anu);
+  assert.equal(callTool(busy, 1, true).disabled, true, "not while someone else is being met");
+  callTool(busy, 1, true).onclick();
+  assert.equal(busy.api.get().quickCall, null);
+});
+
+test("the chat being up places the call asked for — right after it says Connected", () => {
+  assert.match(fn("e2eActivate"), /maybeOfferSave\(\);\s*\n\s*placeQuickCall\(\);/);
+});
+
 /* ── Rename and forget, on request ──
    Asked for: the pencil and the bin on every row were more than needed. A
    right click — or a long press on a phone — opens them instead. */
@@ -1010,9 +1097,9 @@ test("a tap while a PIN is being tried does nothing", () => {
   assert.match(fn("meetPerson"), /if \(meeting \|\| listJoinId \|\| pinJoinInFlight \|\| \(isConnecting && !currentSession\)\) return;/);
 });
 
-test("leaving lets go of the person being met, and the lobby shows them as a name again", () => {
+test("leaving lets go of the person being met — and any call asked for from their row — and the lobby shows them as a name again", () => {
   assert.match(between("leaveBtn.onclick = (e) => {", "\n};"),
-    /meeting = null;\s*\n\s*pendingMeet = null;\s*\n\s*knockSent = false;\s*\n\s*savedInChat = null;\s*\n\s*drawPeople\(\);/);
+    /meeting = null;\s*\n\s*pendingMeet = null;\s*\n\s*knockSent = false;\s*\n\s*quickCall = null;[^\n]*\n\s*quickCallArmed = null;\s*\n\s*savedInChat = null;\s*\n\s*drawPeople\(\);/);
 });
 
 test("after a chat joined from a link, the whole lobby works again — the name field and Refresh too", () => {
